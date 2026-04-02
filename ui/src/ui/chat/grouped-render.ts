@@ -15,7 +15,7 @@ import {
   formatReasoningMarkdown,
 } from "./message-extract.ts";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
-import { isTtsSupported, speakText, stopTts, isTtsSpeaking } from "./speech.ts";
+import { speakText, stopTts, isTtsSpeaking, type SpeechGatewayClient } from "./speech.ts";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
 
 type ImageBlock = {
@@ -121,6 +121,8 @@ export function renderMessageGroup(
     basePath?: string;
     contextWindow?: number | null;
     onDelete?: () => void;
+    client?: SpeechGatewayClient | null;
+    onTtsError?: (message: string | null) => void;
   },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
@@ -176,7 +178,9 @@ export function renderMessageGroup(
           <span class="chat-sender-name">${who}</span>
           <span class="chat-group-timestamp">${timestamp}</span>
           ${renderMessageMeta(meta)}
-          ${normalizedRole === "assistant" && isTtsSupported() ? renderTtsButton(group) : nothing}
+          ${normalizedRole === "assistant" && opts.client
+            ? renderTtsButton(group, opts.client, opts.onTtsError)
+            : nothing}
           ${opts.onDelete
             ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
             : nothing}
@@ -425,17 +429,22 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
   `;
 }
 
-function renderTtsButton(group: MessageGroup) {
+function renderTtsButton(
+  group: MessageGroup,
+  client: SpeechGatewayClient,
+  onTtsError?: (message: string | null) => void,
+) {
   return html`
     <button
       class="btn btn--xs chat-tts-btn"
       type="button"
       title=${isTtsSpeaking() ? "Stop speaking" : "Read aloud"}
       aria-label=${isTtsSpeaking() ? "Stop speaking" : "Read aloud"}
-      @click=${(e: Event) => {
+      @click=${async (e: Event) => {
         const btn = e.currentTarget as HTMLButtonElement;
         if (isTtsSpeaking()) {
           stopTts();
+          onTtsError?.(null);
           btn.classList.remove("chat-tts-btn--active");
           btn.title = "Read aloud";
           return;
@@ -444,22 +453,28 @@ function renderTtsButton(group: MessageGroup) {
         if (!text) {
           return;
         }
+        onTtsError?.(null);
         btn.classList.add("chat-tts-btn--active");
         btn.title = "Stop speaking";
-        speakText(text, {
+        const started = await speakText(text, client, {
           onEnd: () => {
             if (btn.isConnected) {
               btn.classList.remove("chat-tts-btn--active");
               btn.title = "Read aloud";
             }
           },
-          onError: () => {
+          onError: (error) => {
+            onTtsError?.(`Read aloud failed: ${error}`);
             if (btn.isConnected) {
               btn.classList.remove("chat-tts-btn--active");
               btn.title = "Read aloud";
             }
           },
         });
+        if (!started && btn.isConnected) {
+          btn.classList.remove("chat-tts-btn--active");
+          btn.title = "Read aloud";
+        }
       }}
     >
       ${icons.volume2}
