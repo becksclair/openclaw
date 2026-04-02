@@ -1,9 +1,10 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { __testing as pluginLoaderTesting } from "../../plugins/loader.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SpeechProviderPlugin } from "../../plugins/types.js";
 import { withEnv } from "../../test-utils/env.js";
 import * as tts from "../../tts/tts.js";
@@ -1074,6 +1075,96 @@ describe("tts", () => {
         expectedFetchCalls: testCase.expectedFetchCalls,
         expectSamePayload: testCase.expectSamePayload,
       });
+    });
+
+    it.each([
+      {
+        name: "discord requests voice-note synthesis and marks payload as voice-compatible",
+        channel: "discord",
+        expectedTarget: "voice-note",
+        expectedOutputFormat: "opus",
+        expectedVoiceCompatible: true,
+        expectedAudioAsVoice: true,
+      },
+      {
+        name: "slack keeps regular audio-file synthesis",
+        channel: "slack",
+        expectedTarget: "audio-file",
+        expectedOutputFormat: "mp3",
+        expectedVoiceCompatible: false,
+        expectedAudioAsVoice: undefined,
+      },
+    ] as const)("uses channel-specific auto-TTS voice output rules: $name", async (testCase) => {
+      const seenTargets: string[] = [];
+      const capturingProvider: SpeechProviderPlugin = {
+        id: "capture-target",
+        label: "CaptureTarget",
+        autoSelectOrder: 10,
+        resolveConfig: () => ({}),
+        isConfigured: () => true,
+        synthesize: async ({ target }) => {
+          seenTargets.push(target);
+          return target === "voice-note"
+            ? {
+                audioBuffer: createAudioBuffer(2),
+                outputFormat: "opus",
+                fileExtension: ".opus",
+                voiceCompatible: true,
+              }
+            : {
+                audioBuffer: createAudioBuffer(2),
+                outputFormat: "mp3",
+                fileExtension: ".mp3",
+                voiceCompatible: false,
+              };
+        },
+      };
+      setDefaultChannelPluginRegistryForTests();
+      const activeRegistry = createEmptyPluginRegistry();
+      activeRegistry.channels = [...(getActivePluginRegistry()?.channels ?? [])];
+      activeRegistry.speechProviders = [
+        { pluginId: "capture-target", provider: capturingProvider, source: "test" },
+      ];
+      const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
+      setActivePluginRegistry(activeRegistry, cacheKey);
+
+      const result = await maybeApplyTtsToPayload({
+        payload: { text: "Hello from auto TTS" },
+        cfg: {
+          messages: {
+            tts: {
+              auto: "inbound",
+              provider: "capture-target",
+            },
+          },
+        },
+        channel: testCase.channel,
+        kind: "final",
+        inboundAudio: true,
+      });
+
+      expect(seenTargets).toEqual([testCase.expectedTarget]);
+      expect(result.mediaUrl).toBeDefined();
+      expect(result.audioAsVoice).toBe(testCase.expectedAudioAsVoice);
+
+      const synthResult = await tts.synthesizeSpeech({
+        text: "hello direct synthesis",
+        channel: testCase.channel,
+        cfg: {
+          messages: {
+            tts: {
+              provider: "capture-target",
+            },
+          },
+        },
+      });
+
+      expect(synthResult.success).toBe(true);
+      if (!synthResult.success) {
+        throw new Error("expected direct synthesis success");
+      }
+      expect(synthResult.outputFormat).toBe(testCase.expectedOutputFormat);
+      expect(synthResult.voiceCompatible).toBe(testCase.expectedVoiceCompatible);
     });
   });
 });

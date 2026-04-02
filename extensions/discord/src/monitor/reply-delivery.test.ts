@@ -180,6 +180,31 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("routes auto-TTS Opus payloads through the native Discord voice bubble path", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          mediaUrl: "https://example.com/voice.opus",
+          audioAsVoice: true,
+        },
+      ],
+      target: "channel:456",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendVoiceMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendVoiceMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:456",
+      "https://example.com/voice.opus",
+      expect.objectContaining({ token: "token", replyTo: undefined }),
+    );
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(sendWebhookMessageDiscordMock).not.toHaveBeenCalled();
+  });
+
   it("skips follow-up text when the voice payload text is blank", async () => {
     await deliverDiscordReply({
       replies: [
