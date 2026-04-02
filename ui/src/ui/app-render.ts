@@ -1573,6 +1573,7 @@ export function renderApp(state: AppViewState) {
               compactionStatus: state.compactionStatus,
               fallbackStatus: state.fallbackStatus,
               assistantAvatarUrl: chatAvatarUrl,
+              client: state.client,
               messages: state.chatMessages,
               toolMessages: state.chatToolMessages,
               streamSegments: state.chatStreamSegments,
@@ -1600,6 +1601,9 @@ export function renderApp(state: AppViewState) {
                 });
               },
               onChatScroll: (event) => state.handleChatScroll(event),
+              onTtsError: (message) => {
+                state.lastError = message;
+              },
               getDraft: () => state.chatMessage,
               onDraftChange: (next) => (state.chatMessage = next),
               onRequestUpdate: requestHostUpdate,

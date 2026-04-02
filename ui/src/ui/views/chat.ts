@@ -29,7 +29,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../chat/slash-commands.ts";
-import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
+import { isSttSupported, startStt, stopStt, type SpeechGatewayClient } from "../chat/speech.ts";
 import { icons } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { detectTextDirection } from "../text-direction.ts";
@@ -57,6 +57,7 @@ export type ChatProps = {
   stream: string | null;
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
+  client?: SpeechGatewayClient | null;
   draft: string;
   queue: ChatQueueItem[];
   connected: boolean;
@@ -97,6 +98,7 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  onTtsError?: (message: string | null) => void;
   basePath?: string;
 };
 
@@ -1025,6 +1027,8 @@ export function renderChat(props: ChatProps) {
                 basePath: props.basePath,
                 contextWindow:
                   activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
+                client: props.client,
+                onTtsError: props.onTtsError,
                 onDelete: () => {
                   deleted.delete(item.key);
                   requestUpdate();

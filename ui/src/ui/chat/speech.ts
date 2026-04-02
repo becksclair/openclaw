@@ -1,6 +1,6 @@
 /**
- * Browser-native speech services: STT via SpeechRecognition, TTS via SpeechSynthesis.
- * Falls back gracefully when APIs are unavailable.
+ * Browser-native speech services: STT via SpeechRecognition.
+ * Chat read-aloud uses gateway Talk TTS and browser audio playback.
  */
 
 // ─── STT (Speech-to-Text) ───
@@ -127,22 +127,117 @@ export function isSttActive(): boolean {
 
 // ─── TTS (Text-to-Speech) ───
 
-export function isTtsSupported(): boolean {
-  return "speechSynthesis" in globalThis;
+export type SpeechGatewayClient = {
+  request<T = unknown>(method: string, params?: unknown): Promise<T>;
+};
+
+type TalkSpeakResult = {
+  audioBase64: string;
+  mimeType?: string;
+  fileExtension?: string;
+  outputFormat?: string;
+};
+
+type BrowserAudioContext = AudioContext;
+type BrowserAudioContextCtor = typeof AudioContext;
+
+function getAudioContextCtor(): BrowserAudioContextCtor | null {
+  const w = globalThis as Record<string, unknown>;
+  return (w.AudioContext ?? w.webkitAudioContext ?? null) as BrowserAudioContextCtor | null;
 }
 
-let currentUtterance: SpeechSynthesisUtterance | null = null;
+export function isTtsSupported(): boolean {
+  return (
+    getAudioContextCtor() !== null ||
+    (typeof Audio !== "undefined" && typeof URL?.createObjectURL === "function")
+  );
+}
 
-export function speakText(
+let currentAudio: HTMLAudioElement | null = null;
+let currentAudioUrl: string | null = null;
+let currentAudioContext: BrowserAudioContext | null = null;
+let currentSource: AudioBufferSourceNode | null = null;
+
+function clearCurrentAudio() {
+  if (currentSource) {
+    try {
+      currentSource.stop();
+    } catch {}
+    currentSource.disconnect();
+    currentSource = null;
+  }
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio.src = "";
+    currentAudio.load();
+    currentAudio = null;
+  }
+  if (currentAudioUrl) {
+    URL.revokeObjectURL(currentAudioUrl);
+    currentAudioUrl = null;
+  }
+}
+
+function decodeBase64Audio(base64: string): ArrayBuffer {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  const arrayBuffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(arrayBuffer).set(bytes);
+  return arrayBuffer;
+}
+
+async function prepareAudioContext(): Promise<BrowserAudioContext | null> {
+  const Ctor = getAudioContextCtor();
+  if (!Ctor) {
+    return null;
+  }
+  const context = currentAudioContext ?? new Ctor();
+  currentAudioContext = context;
+  if (context.state === "suspended") {
+    await context.resume();
+  }
+  return context;
+}
+
+function inferAudioMimeType(result: TalkSpeakResult): string {
+  const mimeType = result.mimeType?.trim();
+  if (mimeType) {
+    return mimeType;
+  }
+  const extension = result.fileExtension?.trim().toLowerCase();
+  if (extension === ".wav") {
+    return "audio/wav";
+  }
+  if (extension === ".webm") {
+    return "audio/webm";
+  }
+  if (extension === ".ogg" || extension === ".opus") {
+    return "audio/ogg";
+  }
+  const outputFormat = result.outputFormat?.trim().toLowerCase() ?? "";
+  if (outputFormat === "mp3" || outputFormat.startsWith("mp3_")) {
+    return "audio/mpeg";
+  }
+  if (outputFormat === "opus" || outputFormat.startsWith("opus_")) {
+    return "audio/ogg";
+  }
+  return "audio/mpeg";
+}
+
+export async function speakText(
   text: string,
+  client: SpeechGatewayClient,
   opts?: {
     onStart?: () => void;
     onEnd?: () => void;
     onError?: (error: string) => void;
   },
-): boolean {
+): Promise<boolean> {
   if (!isTtsSupported()) {
-    opts?.onError?.("Speech synthesis is not supported in this browser");
+    opts?.onError?.("Audio playback is not supported in this browser");
     return false;
   }
 
@@ -153,43 +248,85 @@ export function speakText(
     return false;
   }
 
-  const utterance = new SpeechSynthesisUtterance(cleaned);
-  utterance.rate = 1.0;
-  utterance.pitch = 1.0;
+  let preparedContext: BrowserAudioContext | null = null;
+  try {
+    preparedContext = await prepareAudioContext();
+  } catch {
+    preparedContext = null;
+  }
 
-  utterance.addEventListener("start", () => opts?.onStart?.());
-  utterance.addEventListener("end", () => {
-    if (currentUtterance === utterance) {
-      currentUtterance = null;
-    }
-    opts?.onEnd?.();
-  });
-  utterance.addEventListener("error", (e) => {
-    if (currentUtterance === utterance) {
-      currentUtterance = null;
-    }
-    if (e.error === "canceled" || e.error === "interrupted") {
-      return;
-    }
-    opts?.onError?.(e.error);
-  });
+  let result: TalkSpeakResult;
+  try {
+    result = await client.request<TalkSpeakResult>("talk.speak", { text: cleaned });
+  } catch (error) {
+    opts?.onError?.(error instanceof Error ? error.message : String(error));
+    return false;
+  }
 
-  currentUtterance = utterance;
-  speechSynthesis.speak(utterance);
-  return true;
+  if (!result.audioBase64?.trim()) {
+    opts?.onError?.("Talk returned no audio");
+    return false;
+  }
+
+  try {
+    const arrayBuffer = decodeBase64Audio(result.audioBase64);
+
+    if (preparedContext) {
+      const decoded = await preparedContext.decodeAudioData(arrayBuffer.slice(0));
+      const source = preparedContext.createBufferSource();
+      source.buffer = decoded;
+      source.connect(preparedContext.destination);
+      currentSource = source;
+      source.addEventListener("ended", () => {
+        if (currentSource === source) {
+          clearCurrentAudio();
+        }
+        opts?.onEnd?.();
+      });
+      source.start();
+      opts?.onStart?.();
+      return true;
+    }
+
+    const blob = new Blob([arrayBuffer], {
+      type: inferAudioMimeType(result),
+    });
+    const audioUrl = URL.createObjectURL(blob);
+    const audio = new Audio(audioUrl);
+    currentAudio = audio;
+    currentAudioUrl = audioUrl;
+
+    audio.addEventListener("ended", () => {
+      if (currentAudio === audio) {
+        clearCurrentAudio();
+      }
+      opts?.onEnd?.();
+    });
+    audio.addEventListener("error", () => {
+      if (currentAudio === audio) {
+        clearCurrentAudio();
+      }
+      opts?.onError?.("Audio playback failed");
+    });
+
+    await audio.play();
+    opts?.onStart?.();
+    return true;
+  } catch (error) {
+    clearCurrentAudio();
+    opts?.onError?.(error instanceof Error ? error.message : String(error));
+    return false;
+  }
 }
 
 export function stopTts(): void {
-  if (currentUtterance) {
-    currentUtterance = null;
-  }
-  if (isTtsSupported()) {
-    speechSynthesis.cancel();
-  }
+  clearCurrentAudio();
 }
 
 export function isTtsSpeaking(): boolean {
-  return isTtsSupported() && speechSynthesis.speaking;
+  return (
+    currentSource !== null || (currentAudio !== null && !currentAudio.paused && !currentAudio.ended)
+  );
 }
 
 /** Strip common markdown syntax for cleaner speech output. */
