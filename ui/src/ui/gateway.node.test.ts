@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  loadDeviceAuthToken,
+  storeDeviceAuthToken,
+} from "../../../packages/desktop-core/src/device-auth.ts";
+import type { DeviceIdentity } from "../../../packages/desktop-core/src/device-identity.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import { loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
-import type { DeviceIdentity } from "./device-identity.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
@@ -75,13 +78,13 @@ class MockWebSocket {
   }
 }
 
-vi.mock("./device-identity.ts", () => ({
+vi.mock("../../../packages/desktop-core/src/device-identity.ts", () => ({
   loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
   signDevicePayload: signDevicePayloadMock,
 }));
 
 const { CONTROL_UI_OPERATOR_SCOPES, GatewayBrowserClient, shouldRetryWithDeviceToken } =
-  await import("./gateway.ts");
+  await import("../../../packages/desktop-core/src/gateway.ts");
 
 type ConnectFrame = {
   id?: string;

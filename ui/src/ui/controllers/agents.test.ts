@@ -30,8 +30,6 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> 
       sessions: [
         {
           key: "main",
-          kind: "direct",
-          updatedAt: 0,
           model: "gpt-5-mini",
           modelProvider: "openai",
         },
