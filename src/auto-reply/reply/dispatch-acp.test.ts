@@ -522,7 +522,7 @@ describe("tryDispatchAcpReply", () => {
           },
         }),
     );
-    globalThis.fetch = withFetchPreconnect(fetchSpy as typeof fetch);
+    globalThis.fetch = withFetchPreconnect(fetchSpy);
     try {
       await fs.writeFile(imagePath, "image-bytes");
       managerMocks.runTurn.mockResolvedValue(undefined);

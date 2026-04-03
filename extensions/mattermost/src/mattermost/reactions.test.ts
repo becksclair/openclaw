@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { MattermostFetch } from "./client.js";
 import {
   addMattermostReaction,
   removeMattermostReaction,
@@ -14,7 +15,7 @@ describe("mattermost reactions", () => {
     resetMattermostReactionBotUserCacheForTests();
   });
 
-  async function addReactionWithFetch(fetchMock: typeof fetch) {
+  async function addReactionWithFetch(fetchMock: MattermostFetch) {
     return addMattermostReaction({
       cfg: createMattermostTestConfig(),
       postId: "POST1",
@@ -23,7 +24,7 @@ describe("mattermost reactions", () => {
     });
   }
 
-  async function removeReactionWithFetch(fetchMock: typeof fetch) {
+  async function removeReactionWithFetch(fetchMock: MattermostFetch) {
     return removeMattermostReaction({
       cfg: createMattermostTestConfig(),
       postId: "POST1",

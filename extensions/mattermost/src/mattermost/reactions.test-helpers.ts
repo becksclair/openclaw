@@ -1,4 +1,5 @@
 import { expect, vi } from "vitest";
+import { withFetchPreconnect } from "../../../../src/test-utils/fetch-mock.ts";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import type { MattermostFetch } from "./client.js";
 
@@ -30,7 +31,7 @@ export function createMattermostReactionFetchMock(params: {
   const removeStatus = params.status ?? 204;
   const removePath = `/api/v4/users/${userId}/posts/${params.postId}/reactions/${encodeURIComponent(params.emojiName)}`;
 
-  return vi.fn<typeof fetch>(async (url, init) => {
+  return vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     if (String(url).endsWith("/api/v4/users/me")) {
       return new Response(JSON.stringify({ id: userId }), {
         status: 200,
@@ -79,7 +80,7 @@ export async function withMockedGlobalFetch<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   const prevFetch = globalThis.fetch;
-  globalThis.fetch = fetchImpl;
+  globalThis.fetch = withFetchPreconnect(fetchImpl) as typeof globalThis.fetch;
   try {
     return await run();
   } finally {

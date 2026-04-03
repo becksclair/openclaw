@@ -114,7 +114,9 @@ describe("brave web search provider", () => {
         json: async () => ({ web: { results: [] } }),
       } as Response;
     });
-    global.fetch = mockFetch as typeof global.fetch;
+    global.fetch = Object.assign(mockFetch, {
+      preconnect: (_url: string | URL, _options?: unknown) => {},
+    }) as typeof global.fetch;
 
     const provider = createBraveWebSearchProvider();
     const tool = provider.createTool({
