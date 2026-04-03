@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/desktop-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./gateway": "./src/gateway.ts",
+    "./device-auth": "./src/device-auth.ts",
+    "./device-identity": "./src/device-identity.ts",
+    "./controllers/agents": "./src/controllers/agents.ts",
+    "./controllers/chat": "./src/controllers/chat.ts",
+    "./controllers/nodes": "./src/controllers/nodes.ts",
+    "./controllers/scope-errors": "./src/controllers/scope-errors.ts",
+    "./controllers/talk": "./src/controllers/talk.ts",
+    "./types": "./src/types.ts"
+  }
+}

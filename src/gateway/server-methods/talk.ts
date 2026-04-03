@@ -1,8 +1,12 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { buildTalkConfigResponse, resolveActiveTalkProviderConfig } from "../../config/talk.js";
 import type { TalkProviderConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
+import { estimateBase64DecodedBytes } from "../../media/base64.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "../../tts/provider-registry.js";
 import { synthesizeSpeech, type TtsDirectiveOverrides } from "../../tts/tts.js";
 import {
@@ -12,12 +16,14 @@ import {
   validateTalkConfigParams,
   validateTalkModeParams,
   validateTalkSpeakParams,
+  validateTalkTranscribeParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
 const TALK_SECRETS_SCOPE = "operator.talk.secrets";
+const MAX_TALK_TRANSCRIBE_BYTES = 20 * 1024 * 1024;
 
 function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
@@ -173,6 +179,82 @@ function inferMimeType(
   return undefined;
 }
 
+function isValidBase64(value: string): boolean {
+  return value.length > 0 && value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+}
+
+function inferAudioExtension(fileName: string | undefined, mimeType: string | undefined): string {
+  const fromFileName = fileName ? path.extname(fileName).trim().toLowerCase() : "";
+  if (fromFileName) {
+    return fromFileName;
+  }
+  switch (mimeType?.trim().toLowerCase()) {
+    case "audio/mpeg":
+    case "audio/mp3":
+      return ".mp3";
+    case "audio/mp4":
+    case "audio/m4a":
+    case "audio/x-m4a":
+      return ".m4a";
+    case "audio/ogg":
+    case "audio/opus":
+      return ".ogg";
+    case "audio/webm":
+      return ".webm";
+    default:
+      return ".wav";
+  }
+}
+
+async function transcribeTalkAudio(params: {
+  audioBase64: string;
+  fileName?: string;
+  mimeType?: string;
+}) {
+  if (!isValidBase64(params.audioBase64)) {
+    throw new Error("invalid base64 audio payload");
+  }
+  const estimatedBytes = estimateBase64DecodedBytes(params.audioBase64);
+  if (estimatedBytes <= 0 || estimatedBytes > MAX_TALK_TRANSCRIBE_BYTES) {
+    throw new Error(
+      `audio payload exceeds size limit (${estimatedBytes} > ${MAX_TALK_TRANSCRIBE_BYTES} bytes)`,
+    );
+  }
+
+  const buffer = Buffer.from(params.audioBase64, "base64");
+  if (Math.abs(buffer.byteLength - estimatedBytes) > 3) {
+    throw new Error("base64 audio payload is corrupted");
+  }
+
+  const snapshot = await readConfigFileSnapshot();
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-talk-transcribe-"));
+  const fallbackExtension = inferAudioExtension(undefined, params.mimeType);
+  const fileName = params.fileName?.trim() || `desktop-audio${fallbackExtension}`;
+  const safeName = path.basename(fileName);
+  const filePath = path.join(tempDir, safeName || `desktop-audio${fallbackExtension}`);
+
+  try {
+    await fs.writeFile(filePath, buffer);
+    const { runMediaUnderstandingFile } = await import("../../media-understanding/runtime.js");
+    const result = await runMediaUnderstandingFile({
+      capability: "audio",
+      filePath,
+      mime: params.mimeType,
+      cfg: snapshot.config,
+    });
+    if (!result.text) {
+      throw new Error("audio transcription produced no text");
+    }
+    return {
+      text: result.text,
+      provider: result.provider,
+      model: result.model,
+    };
+  } finally {
+    await fs.rm(tempDir, { force: true, recursive: true }).catch(() => undefined);
+  }
+}
+
 export const talkHandlers: GatewayRequestHandlers = {
   "talk.config": async ({ params, respond, client }) => {
     if (!validateTalkConfigParams(params)) {
@@ -282,6 +364,37 @@ export const talkHandlers: GatewayRequestHandlers = {
       );
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  "talk.transcribe": async ({ params, respond }) => {
+    if (!validateTalkTranscribeParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid talk.transcribe params: ${formatValidationErrors(validateTalkTranscribeParams.errors)}`,
+        ),
+      );
+      return;
+    }
+
+    try {
+      const result = await transcribeTalkAudio({
+        audioBase64: (params as { audioBase64: string }).audioBase64,
+        fileName: trimString((params as { fileName?: unknown }).fileName),
+        mimeType: trimString((params as { mimeType?: unknown }).mimeType),
+      });
+      respond(true, result, undefined);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : formatForLog(err);
+      const code =
+        message.includes("invalid base64") ||
+        message.includes("size limit") ||
+        message.includes("corrupted")
+          ? ErrorCodes.INVALID_REQUEST
+          : ErrorCodes.UNAVAILABLE;
+      respond(false, undefined, errorShape(code, message));
     }
   },
   "talk.mode": ({ params, respond, context, client, isWebchatConnect }) => {
