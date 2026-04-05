@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 type SessionHeaderEntry = { type: "session"; id?: string; cwd?: string };
 type SessionMessageEntry = { type: "message"; message?: { role?: string } };
 
+type SessionEntryLike = SessionHeaderEntry | SessionMessageEntry | { type: string };
+
 /**
  * pi-coding-agent SessionManager persistence quirk:
  * - If the file exists but has no assistant message, SessionManager marks itself `flushed=true`
@@ -10,8 +12,8 @@ type SessionMessageEntry = { type: "message"; message?: { role?: string } };
  * - If the file doesn't exist yet, SessionManager builds a new session in memory and flushes
  *   header+user+assistant once the first assistant arrives (good).
  *
- * This normalizes the file/session state so the first user prompt is persisted before the first
- * assistant entry, even for pre-created session files.
+ * This normalizes the file/session state so pre-created header-only files do not duplicate their
+ * header row on the first assistant flush, while existing user-only history stays intact.
  */
 export async function prepareSessionManagerForRun(params: {
   sessionManager: unknown;
@@ -23,16 +25,19 @@ export async function prepareSessionManagerForRun(params: {
   const sm = params.sessionManager as {
     sessionId: string;
     flushed: boolean;
-    fileEntries: Array<SessionHeaderEntry | SessionMessageEntry | { type: string }>;
+    fileEntries: SessionEntryLike[];
     byId?: Map<string, unknown>;
     labelsById?: Map<string, unknown>;
     leafId?: string | null;
   };
 
-  const header = sm.fileEntries.find((e): e is SessionHeaderEntry => e.type === "session");
-  const hasAssistant = sm.fileEntries.some(
-    (e) => e.type === "message" && (e as SessionMessageEntry).message?.role === "assistant",
+  const header = sm.fileEntries.find(
+    (entry): entry is SessionHeaderEntry => entry.type === "session",
   );
+  const messageEntries = sm.fileEntries.filter(
+    (entry): entry is SessionMessageEntry => entry.type === "message",
+  );
+  const hasAssistant = messageEntries.some((entry) => entry.message?.role === "assistant");
 
   if (!params.hadSessionFile && header) {
     header.id = params.sessionId;
@@ -41,8 +46,8 @@ export async function prepareSessionManagerForRun(params: {
     return;
   }
 
-  if (params.hadSessionFile && header && !hasAssistant) {
-    // Reset file so the first assistant flush includes header+user+assistant in order.
+  if (params.hadSessionFile && header && !hasAssistant && sm.fileEntries.length === 1) {
+    // Reset header-only files so the first assistant flush does not duplicate the header row.
     await fs.writeFile(params.sessionFile, "", "utf-8");
     sm.fileEntries = [header];
     sm.byId?.clear?.();

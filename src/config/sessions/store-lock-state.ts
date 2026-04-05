@@ -4,7 +4,7 @@ export type SessionStoreLockTask = {
   fn: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
-  timeoutMs?: number;
+  deadlineMs?: number;
   staleMs: number;
 };
 

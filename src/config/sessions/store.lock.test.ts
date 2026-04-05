@@ -27,12 +27,28 @@ describe("withSessionStoreLock", () => {
       timeoutMs: 10_000,
     });
 
-    expect(acquireSessionWriteLockMock).toHaveBeenCalledWith({
+    expect(acquireSessionWriteLockMock).toHaveBeenCalledTimes(1);
+    const calls = acquireSessionWriteLockMock.mock.calls as unknown as Array<
+      [
+        {
+          sessionFile: string;
+          staleMs: number;
+          timeoutMs?: number;
+          maxHoldMs?: number;
+        },
+      ]
+    >;
+    const call = calls[0]?.[0];
+    expect(call).toMatchObject({
       sessionFile: "/tmp/openclaw-store.json",
-      timeoutMs: 10_000,
       staleMs: 30_000,
-      maxHoldMs: 15_000,
     });
+    expect(typeof call?.timeoutMs).toBe("number");
+    expect(call?.timeoutMs).toBeGreaterThan(9_900);
+    expect(call?.timeoutMs).toBeLessThanOrEqual(10_000);
+    expect(typeof call?.maxHoldMs).toBe("number");
+    expect(call?.maxHoldMs).toBeGreaterThanOrEqual(14_900);
+    expect(call?.maxHoldMs).toBeLessThanOrEqual(15_000);
   });
 
   it("leaves the session lock hold time unset when store locking has no timeout", async () => {
@@ -46,5 +62,19 @@ describe("withSessionStoreLock", () => {
       staleMs: 30_000,
       maxHoldMs: undefined,
     });
+  });
+
+  it("counts queue wait against the store lock timeout", async () => {
+    const first = withSessionStoreLockForTest("/tmp/openclaw-store.json", async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    });
+
+    const second = withSessionStoreLockForTest("/tmp/openclaw-store.json", async () => "second", {
+      timeoutMs: 20,
+    });
+
+    await expect(second).rejects.toThrow("timeout waiting for session store lock");
+    await first;
+    expect(acquireSessionWriteLockMock).toHaveBeenCalledTimes(1);
   });
 });

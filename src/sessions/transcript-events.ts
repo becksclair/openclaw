@@ -5,6 +5,7 @@ export type SessionTranscriptUpdate = {
   sessionKey?: string;
   message?: unknown;
   messageId?: string;
+  messageSeq?: number;
 };
 
 type SessionTranscriptListener = (update: SessionTranscriptUpdate) => void;
@@ -27,6 +28,7 @@ export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUp
           sessionKey: update.sessionKey,
           message: update.message,
           messageId: update.messageId,
+          messageSeq: update.messageSeq,
         };
   const trimmed = normalizeOptionalString(normalized.sessionFile);
   if (!trimmed) {
@@ -40,6 +42,9 @@ export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUp
     ...(normalized.message !== undefined ? { message: normalized.message } : {}),
     ...(normalizeOptionalString(normalized.messageId)
       ? { messageId: normalizeOptionalString(normalized.messageId) }
+      : {}),
+    ...(typeof normalized.messageSeq === "number" && Number.isFinite(normalized.messageSeq)
+      ? { messageSeq: normalized.messageSeq }
       : {}),
   };
   for (const listener of SESSION_TRANSCRIPT_LISTENERS) {

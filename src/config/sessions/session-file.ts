@@ -1,5 +1,5 @@
 import { resolveSessionFilePath } from "./paths.js";
-import { updateSessionStore } from "./store.js";
+import { resolveSessionStoreEntry, updateSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 export async function resolveAndPersistSessionFile(params: {
@@ -14,8 +14,9 @@ export async function resolveAndPersistSessionFile(params: {
   activeSessionKey?: string;
 }): Promise<{ sessionFile: string; sessionEntry: SessionEntry }> {
   const { sessionId, sessionKey, sessionStore, storePath } = params;
+  const resolved = resolveSessionStoreEntry({ store: sessionStore, sessionKey });
   const baseEntry = params.sessionEntry ??
-    sessionStore[sessionKey] ?? { sessionId, updatedAt: Date.now() };
+    resolved.existing ?? { sessionId, updatedAt: Date.now() };
   const fallbackSessionFile = params.fallbackSessionFile?.trim();
   const entryForResolve =
     !baseEntry.sessionFile && fallbackSessionFile
@@ -31,20 +32,33 @@ export async function resolveAndPersistSessionFile(params: {
     updatedAt: Date.now(),
     sessionFile,
   };
-  if (baseEntry.sessionId !== sessionId || baseEntry.sessionFile !== sessionFile) {
-    sessionStore[sessionKey] = persistedEntry;
+  const shouldPersistStoreUpdate =
+    resolved.existing?.sessionId !== sessionId ||
+    resolved.existing?.sessionFile !== sessionFile ||
+    resolved.legacyKeys.length > 0 ||
+    !Object.prototype.hasOwnProperty.call(sessionStore, resolved.normalizedKey);
+
+  sessionStore[resolved.normalizedKey] = persistedEntry;
+  for (const legacyKey of resolved.legacyKeys) {
+    delete sessionStore[legacyKey];
+  }
+
+  if (shouldPersistStoreUpdate) {
     await updateSessionStore(
       storePath,
       (store) => {
-        store[sessionKey] = {
-          ...store[sessionKey],
+        const current = resolveSessionStoreEntry({ store, sessionKey });
+        store[current.normalizedKey] = {
+          ...store[current.normalizedKey],
           ...persistedEntry,
         };
+        for (const legacyKey of current.legacyKeys) {
+          delete store[legacyKey];
+        }
       },
       params.activeSessionKey ? { activeSessionKey: params.activeSessionKey } : undefined,
     );
-    return { sessionFile, sessionEntry: persistedEntry };
   }
-  sessionStore[sessionKey] = persistedEntry;
+
   return { sessionFile, sessionEntry: persistedEntry };
 }

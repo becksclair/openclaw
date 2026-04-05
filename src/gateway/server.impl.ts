@@ -75,6 +75,7 @@ import {
 } from "../secrets/runtime.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { resolveTranscriptUpdateMessageSeq } from "../sessions/transcript-message-seq.js";
 import {
   getInspectableTaskRegistrySummary,
   startTaskRegistryMaintenance,
@@ -1082,9 +1083,12 @@ export async function startGatewayServer(
             return;
           }
           const { entry, storePath } = loadSessionEntry(sessionKey);
-          const messageSeq = entry?.sessionId
-            ? readSessionMessages(entry.sessionId, storePath, entry.sessionFile).length
-            : undefined;
+          const messageSeq = resolveTranscriptUpdateMessageSeq({
+            update,
+            readPersistedCount: entry?.sessionId
+              ? () => readSessionMessages(entry.sessionId, storePath, entry.sessionFile).length
+              : undefined,
+          });
           const sessionRow = loadGatewaySessionRow(sessionKey);
           const sessionSnapshot = sessionRow
             ? {

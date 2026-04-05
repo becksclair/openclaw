@@ -597,8 +597,9 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
           continue;
         }
 
-        const remainingTimeoutMs = task.timeoutMs ?? Number.POSITIVE_INFINITY;
-        if (task.timeoutMs != null && remainingTimeoutMs <= 0) {
+        const remainingTimeoutMs =
+          task.deadlineMs == null ? Number.POSITIVE_INFINITY : task.deadlineMs - Date.now();
+        if (task.deadlineMs != null && remainingTimeoutMs <= 0) {
           task.reject(lockTimeoutError(storePath));
           continue;
         }
@@ -612,7 +613,9 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
             sessionFile: storePath,
             timeoutMs: remainingTimeoutMs,
             staleMs: task.staleMs,
-            maxHoldMs: resolveSessionStoreLockMaxHoldMs(task.timeoutMs),
+            maxHoldMs: resolveSessionStoreLockMaxHoldMs(
+              Number.isFinite(remainingTimeoutMs) ? remainingTimeoutMs : undefined,
+            ),
           });
           result = await task.fn();
         } catch (err) {
@@ -665,7 +668,7 @@ async function withSessionStoreLock<T>(
       fn: async () => await fn(),
       resolve: (value) => resolve(value as T),
       reject,
-      timeoutMs: hasTimeout ? timeoutMs : undefined,
+      deadlineMs: hasTimeout ? Date.now() + timeoutMs : undefined,
       staleMs,
     };
 
