@@ -1060,6 +1060,7 @@ Auto-join example:
     discord: {
       voice: {
         enabled: true,
+        backend: "stt-agent-tts",
         autoJoin: [
           {
             guildId: "123456789012345678",
@@ -1068,6 +1069,10 @@ Auto-join example:
         ],
         daveEncryption: true,
         decryptionFailureTolerance: 24,
+        realtime: {
+          vadEagerness: "low",
+          interruptResponse: false,
+        },
         tts: {
           provider: "openai",
           openai: { voice: "alloy" },
@@ -1078,14 +1083,25 @@ Auto-join example:
 }
 ```
 
+Backend modes:
+
+- `stt-agent-tts` is the default. It uses a separate speech-to-text → agent → text-to-speech pipeline.
+- `realtime` uses the shared realtime conversation backend for low-latency speech-to-speech turns and direct tool execution.
+
 Notes:
 
-- `voice.tts` overrides `messages.tts` for voice playback only.
+- `voice.backend` defaults to `stt-agent-tts`.
+- `guilds.*.voiceBackend` overrides the default for every configured voice channel in that guild.
+- `guilds.*.channels.*.voiceBackend` overrides both the guild setting and `voice.backend` for the matched voice channel.
+- `voice.realtime.vadEagerness` tunes provider-side semantic VAD for the `realtime` backend (`auto`, `low`, `medium`, `high`).
+- `voice.realtime.interruptResponse` controls whether provider-side VAD can interrupt assistant speech. Discord defaults to `false` because channel capture already segments turns locally.
+- `voice.tts` overrides `messages.tts` for voice playback when using `stt-agent-tts`.
 - Voice transcript turns derive owner status from Discord `allowFrom` (or `dm.allowFrom`); non-owner speakers cannot access owner-only tools (for example `gateway` and `cron`).
 - Voice is enabled by default; set `channels.discord.voice.enabled=false` to disable it.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
 - `@discordjs/voice` defaults are `daveEncryption=true` and `decryptionFailureTolerance=24` if unset.
 - OpenClaw also watches receive decrypt failures and auto-recovers by leaving/rejoining the voice channel after repeated failures in a short window.
+- When a realtime provider session has to be rebuilt after a glitch, OpenClaw replays the recent completed Discord voice turns so the conversation does not restart from scratch on the next turn.
 - If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)`, this may be the upstream `@discordjs/voice` receive bug tracked in [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419).
 
 ## Voice messages

@@ -35,8 +35,9 @@ describe("config discord", () => {
                 slug: "friends-of-openclaw",
                 requireMention: false,
                 users: ["steipete"],
+                voiceBackend: "stt-agent-tts",
                 channels: {
-                  general: { enabled: true, autoThread: true },
+                  general: { enabled: true, autoThread: true, voiceBackend: "realtime" },
                 },
               },
             },
@@ -54,7 +55,36 @@ describe("config discord", () => {
         expect(cfg.channels?.discord?.actions?.channels).toBe(true);
         expect(cfg.channels?.discord?.guilds?.["123"]?.slug).toBe("friends-of-openclaw");
         expect(cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.enabled).toBe(true);
+        expect(cfg.channels?.discord?.guilds?.["123"]?.voiceBackend).toBe("stt-agent-tts");
         expect(cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.autoThread).toBe(true);
+        expect(cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.voiceBackend).toBe(
+          "realtime",
+        );
+      },
+    );
+  });
+
+  it("loads discord realtime voice tuning", async () => {
+    await withTempHomeConfig(
+      {
+        channels: {
+          discord: {
+            voice: {
+              backend: "realtime",
+              realtime: {
+                vadEagerness: "medium",
+                interruptResponse: false,
+              },
+            },
+          },
+        },
+      },
+      async () => {
+        const cfg = loadConfig();
+
+        expect(cfg.channels?.discord?.voice?.backend).toBe("realtime");
+        expect(cfg.channels?.discord?.voice?.realtime?.vadEagerness).toBe("medium");
+        expect(cfg.channels?.discord?.voice?.realtime?.interruptResponse).toBe(false);
       },
     );
   });

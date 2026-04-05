@@ -6,6 +6,7 @@ import {
   resolveChannelMatchConfig,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
+import type { DiscordVoiceBackend } from "openclaw/plugin-sdk/config-runtime";
 import { evaluateGroupRouteAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -31,6 +32,7 @@ type DiscordChannelOverrideConfig = {
   users?: string[];
   roles?: string[];
   systemPrompt?: string;
+  voiceBackend?: DiscordVoiceBackend;
   includeThreadStarter?: boolean;
   autoThread?: boolean;
   autoThreadName?: "message" | "generated";
@@ -45,7 +47,8 @@ export type DiscordGuildEntryResolved = {
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: string[];
   roles?: string[];
-  channels?: Record<string, DiscordChannelOverrideConfig>;
+  voiceBackend?: DiscordVoiceBackend;
+  channels?: Record<string, { allow?: boolean } & DiscordChannelOverrideConfig>;
 };
 
 export type DiscordChannelConfigResolved = DiscordChannelOverrideConfig & {
@@ -404,6 +407,7 @@ function resolveDiscordChannelConfigEntry(
     users: entry.users,
     roles: entry.roles,
     systemPrompt: entry.systemPrompt,
+    voiceBackend: entry.voiceBackend,
     includeThreadStarter: entry.includeThreadStarter,
     autoThread: entry.autoThread,
     autoThreadName: entry.autoThreadName,

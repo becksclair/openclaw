@@ -56,6 +56,8 @@ export type DiscordGuildChannelConfig = {
   roles?: string[];
   /** Optional system prompt snippet for this channel. */
   systemPrompt?: string;
+  /** Optional Discord voice backend override for this channel. */
+  voiceBackend?: DiscordVoiceBackend;
   /** If false, omit thread starter context for this channel (default: true). */
   includeThreadStarter?: boolean;
   /** If true, automatically create a thread for each new message in this channel. */
@@ -85,6 +87,8 @@ export type DiscordGuildEntry = {
   users?: string[];
   /** Optional allowlist for guild senders by role ID. */
   roles?: string[];
+  /** Optional Discord voice backend override for this guild. */
+  voiceBackend?: DiscordVoiceBackend;
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
@@ -125,15 +129,28 @@ export type DiscordVoiceAutoJoinConfig = {
   channelId: string;
 };
 
+export type DiscordVoiceBackend = "realtime" | "stt-agent-tts";
+
+export type DiscordVoiceRealtimeConfig = {
+  /** Semantic VAD eagerness for Discord realtime voice turns. Default: low. */
+  vadEagerness?: "auto" | "low" | "medium" | "high";
+  /** Whether provider-side VAD should interrupt assistant output. Default: false for Discord realtime. */
+  interruptResponse?: boolean;
+};
+
 export type DiscordVoiceConfig = {
   /** Enable Discord voice channel conversations (default: true). */
   enabled?: boolean;
+  /** Voice backend to use for Discord voice channels. */
+  backend?: DiscordVoiceBackend;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
   /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
   daveEncryption?: boolean;
   /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
   decryptionFailureTolerance?: number;
+  /** Realtime voice tuning overrides for Discord voice sessions. */
+  realtime?: DiscordVoiceRealtimeConfig;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };

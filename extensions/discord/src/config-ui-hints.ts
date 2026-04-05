@@ -133,6 +133,14 @@ export const discordChannelConfigUiHints = {
     label: "Discord Voice Enabled",
     help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
   },
+  "voice.backend": {
+    label: "Discord Voice Backend",
+    help: 'Default voice conversation backend for Discord voice channels: "stt-agent-tts" (default, separate transcription + agent + TTS pipeline) or "realtime" (low-latency speech-to-speech realtime session with tool support). Channel or guild `voiceBackend` overrides win when set.',
+  },
+  voiceBackend: {
+    label: "Discord Voice Backend Override",
+    help: "Per-guild or per-channel Discord voice backend override. Channel override wins over guild, then channels.discord.voice.backend.",
+  },
   "voice.autoJoin": {
     label: "Discord Voice Auto-Join",
     help: "Voice channels to auto-join on startup (list of guildId/channelId entries).",
@@ -145,9 +153,17 @@ export const discordChannelConfigUiHints = {
     label: "Discord Voice Decrypt Failure Tolerance",
     help: "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
   },
+  "voice.realtime.vadEagerness": {
+    label: "Discord Realtime VAD Eagerness",
+    help: 'Semantic VAD sensitivity for Discord realtime voice turns (auto, low, medium, high). Lower values are calmer; Discord defaults to "low".',
+  },
+  "voice.realtime.interruptResponse": {
+    label: "Discord Realtime Interrupt Response",
+    help: "Allow provider-side VAD to interrupt assistant speech during Discord realtime turns. Defaults to false because Discord voice capture already segments turns locally.",
+  },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",
-    help: "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
+    help: 'Optional TTS overrides for Discord voice playback when using the "stt-agent-tts" backend (merged with messages.tts).',
   },
   "pluralkit.enabled": {
     label: "Discord PluralKit Enabled",

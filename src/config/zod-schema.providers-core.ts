@@ -441,6 +441,7 @@ export const DiscordGuildChannelSchema = z
     users: DiscordIdListSchema.optional(),
     roles: DiscordIdListSchema.optional(),
     systemPrompt: z.string().optional(),
+    voiceBackend: z.enum(["realtime", "stt-agent-tts"]).optional(),
     includeThreadStarter: z.boolean().optional(),
     autoThread: z.boolean().optional(),
     /** Naming strategy for auto-created threads. "message" uses message text; "generated" creates an LLM title after thread creation. */
@@ -468,6 +469,7 @@ export const DiscordGuildSchema = z
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     users: DiscordIdListSchema.optional(),
     roles: DiscordIdListSchema.optional(),
+    voiceBackend: z.enum(["realtime", "stt-agent-tts"]).optional(),
     channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
   })
   .strict();
@@ -494,9 +496,17 @@ const DiscordVoiceAutoJoinSchema = z
 const DiscordVoiceSchema = z
   .object({
     enabled: z.boolean().optional(),
+    backend: z.enum(["realtime", "stt-agent-tts"]).optional(),
     autoJoin: z.array(DiscordVoiceAutoJoinSchema).optional(),
     daveEncryption: z.boolean().optional(),
     decryptionFailureTolerance: z.number().int().min(0).optional(),
+    realtime: z
+      .object({
+        vadEagerness: z.enum(["auto", "low", "medium", "high"]).optional(),
+        interruptResponse: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     tts: TtsConfigSchema.optional(),
   })
   .strict()

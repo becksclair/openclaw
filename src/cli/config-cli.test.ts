@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import { formatCliCommand } from "./command-format.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
 /**
@@ -620,24 +621,35 @@ describe("config cli", () => {
       const configCommand = program.commands.find((command) => command.name() === "config");
       const setCommand = configCommand?.commands.find((command) => command.name() === "set");
       const helpText = setCommand?.helpInformation() ?? "";
+      const normalizedHelpText = helpText.replace(/\s+/g, " ");
+      const optionsByFlags = new Map(
+        (setCommand?.options ?? []).map((option) => [option.flags, option.description]),
+      );
 
-      expect(helpText).toContain("--strict-json");
-      expect(helpText).toContain("--json");
-      expect(helpText).toContain("Legacy alias for --strict-json");
+      expect(optionsByFlags.get("--strict-json")).toBe(
+        "Strict JSON parsing (error instead of raw string fallback)",
+      );
+      expect(optionsByFlags.get("--json")).toBe("Legacy alias for --strict-json");
+      expect(optionsByFlags.get("--batch-json <json>")).toBe(
+        "Batch mode: JSON array of set operations",
+      );
+      expect(optionsByFlags.get("--allow-exec")).toBe(
+        "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
+      );
       expect(helpText).toContain("Value (JSON/JSON5 or raw string)");
-      expect(helpText).toContain("Strict JSON parsing (error instead of");
       expect(helpText).toContain("--ref-provider");
       expect(helpText).toContain("--provider-source");
-      expect(helpText).toContain("--batch-json");
       expect(helpText).toContain("--dry-run");
-      expect(helpText).toContain("--allow-exec");
-      expect(helpText).toContain("openclaw config set gateway.port 19001 --strict-json");
-      expect(helpText).toContain(
-        "openclaw config set channels.discord.token --ref-provider default --ref-source",
+      expect(normalizedHelpText).toContain(
+        formatCliCommand("openclaw config set gateway.port 19001 --strict-json"),
       );
-      expect(helpText).toContain("--ref-id DISCORD_BOT_TOKEN");
-      expect(helpText).toContain(
-        "openclaw config set --batch-file ./config-set.batch.json --dry-run",
+      expect(normalizedHelpText).toContain(
+        formatCliCommand(
+          "openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN",
+        ),
+      );
+      expect(normalizedHelpText).toContain(
+        formatCliCommand("openclaw config set --batch-file ./config-set.batch.json --dry-run"),
       );
     });
   });
