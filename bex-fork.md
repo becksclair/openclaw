@@ -179,7 +179,7 @@ Files touched by this seam:
 - `src/gateway/server-methods/realtime-audio.ts`
   - Gateway method boundary for realtime session control.
 - `src/gateway/realtime-audio/**`
-  - Shared session core, provider adapters, tool runtime, history handling, and registry.
+  - Shared session core, tool runtime, history handling, and upstream-aware provider selection via the realtime provider registry.
 - `src/plugin-sdk/gateway-runtime.ts`
   - Public facade exposing the managed realtime runtime to plugin code.
 - `src/agents/realtime-session-bootstrap.ts`
@@ -238,15 +238,13 @@ Behavior added by this fork:
 
 Primary seam file:
 
-- `src/config/sessions/transcript-persistence-seam.ts`
+- `src/config/sessions/transcript-append-seam.ts`
 
 Files touched by this seam:
 
-- `src/config/sessions/transcript-persistence-seam.ts`
-  - Fork-only helper module for forced user-only flushes, persisted message-id verification, and persisted event emission.
 - `src/config/sessions/transcript-append-seam.ts`
-  - Shared append orchestration seam for resolving the transcript target and opening/preparing a locked `SessionManager`.
-  - Exists to keep fork append logic from being duplicated across multiple append call sites.
+  - Fork-only append seam for resolving the transcript target, opening/preparing a locked `SessionManager`, forcing user-only flushes, verifying persisted message ids, and emitting persisted transcript updates.
+  - Exists to keep fork append logic and persistence guarantees in one boundary instead of splitting policy across multiple seam files.
 - `src/config/sessions/transcript.ts`
   - Uses the seam for both `appendTextMessagesToSessionTranscript` and `appendAssistantMessageToSessionTranscript`.
   - This is the main upstream conflict surface for transcript writes.

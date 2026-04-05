@@ -6,7 +6,10 @@ import {
   resolveChannelMatchConfig,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
-import type { DiscordVoiceBackend } from "openclaw/plugin-sdk/config-runtime";
+import type {
+  DiscordGuildChannelConfig,
+  DiscordGuildEntry,
+} from "openclaw/plugin-sdk/config-runtime";
 import { evaluateGroupRouteAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -24,34 +27,16 @@ export type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | 
 
 const DISCORD_OWNER_ALLOWLIST_PREFIXES = ["discord:", "user:", "pk:"];
 
-type DiscordChannelOverrideConfig = {
-  requireMention?: boolean;
-  ignoreOtherMentions?: boolean;
-  skills?: string[];
-  enabled?: boolean;
-  users?: string[];
-  roles?: string[];
-  systemPrompt?: string;
-  voiceBackend?: DiscordVoiceBackend;
-  includeThreadStarter?: boolean;
-  autoThread?: boolean;
-  autoThreadName?: "message" | "generated";
-  autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
+type DiscordChannelEntryResolved = DiscordGuildChannelConfig & {
+  allow?: boolean;
 };
 
-export type DiscordGuildEntryResolved = {
+export type DiscordGuildEntryResolved = Omit<DiscordGuildEntry, "channels"> & {
   id?: string;
-  slug?: string;
-  requireMention?: boolean;
-  ignoreOtherMentions?: boolean;
-  reactionNotifications?: "off" | "own" | "all" | "allowlist";
-  users?: string[];
-  roles?: string[];
-  voiceBackend?: DiscordVoiceBackend;
-  channels?: Record<string, { allow?: boolean } & DiscordChannelOverrideConfig>;
+  channels?: Record<string, DiscordChannelEntryResolved>;
 };
 
-export type DiscordChannelConfigResolved = DiscordChannelOverrideConfig & {
+export type DiscordChannelConfigResolved = DiscordGuildChannelConfig & {
   allowed: boolean;
   matchKey?: string;
   matchSource?: ChannelMatchSource;

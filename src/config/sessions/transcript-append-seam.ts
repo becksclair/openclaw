@@ -3,6 +3,10 @@ import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { prepareSessionManagerForRun } from "../../agents/pi-embedded-runner/session-manager-init.js";
 import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
+import {
+  emitSessionTranscriptUpdate,
+  type SessionTranscriptUpdate,
+} from "../../sessions/transcript-events.js";
 import { resolveDefaultSessionStorePath } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
@@ -49,6 +53,62 @@ export async function resolveTranscriptAppendTarget(params: {
       ok: false,
       reason: err instanceof Error ? err.message : String(err),
     };
+  }
+}
+
+export type PersistedTranscriptUpdate = SessionTranscriptUpdate & {
+  messageId: string;
+};
+
+export function persistPreparedTranscriptWithoutAssistant(sessionManager: unknown): void {
+  const sm = sessionManager as {
+    fileEntries: Array<{ type: string; message?: { role?: string } }>;
+    flushed: boolean;
+    _rewriteFile?: () => void;
+  };
+  const hasAssistant = sm.fileEntries.some(
+    (entry) => entry.type === "message" && entry.message?.role === "assistant",
+  );
+  if (hasAssistant || typeof sm._rewriteFile !== "function") {
+    return;
+  }
+  sm._rewriteFile();
+  sm.flushed = true;
+}
+
+export async function resolvePersistedTranscriptUpdates(params: {
+  sessionFile: string;
+  updates: PersistedTranscriptUpdate[];
+}): Promise<PersistedTranscriptUpdate[]> {
+  if (params.updates.length === 0) {
+    return [];
+  }
+  const candidateIds = new Set(params.updates.map((update) => update.messageId));
+  const persistedIds = new Set<string>();
+  try {
+    const raw = await fs.promises.readFile(params.sessionFile, "utf-8");
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as { id?: unknown };
+        if (typeof parsed.id === "string" && candidateIds.has(parsed.id)) {
+          persistedIds.add(parsed.id);
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    return [];
+  }
+  return params.updates.filter((update) => persistedIds.has(update.messageId));
+}
+
+export function emitPersistedTranscriptUpdates(updates: PersistedTranscriptUpdate[]): void {
+  for (const update of updates) {
+    emitSessionTranscriptUpdate(update);
   }
 }
 

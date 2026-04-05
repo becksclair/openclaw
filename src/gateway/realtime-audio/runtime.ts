@@ -1,6 +1,10 @@
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { resolveRealtimeSessionBootstrap } from "../../agents/realtime-session-bootstrap.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  canonicalizeRealtimeVoiceProviderId,
+  getRealtimeVoiceProvider,
+} from "../../realtime-voice/provider-registry.js";
 import { createRealtimeProviderAdapter } from "./providers/index.js";
 import { DEFAULT_OPENAI_REALTIME_MODEL } from "./providers/openai.js";
 import { InMemoryRealtimeConversationSession } from "./session.js";
@@ -23,7 +27,7 @@ export type ManagedRealtimeConversationRuntimeOptions = {
   agentId: string;
   sessionKey: string;
   senderIsOwner?: boolean;
-  provider?: "openai" | "google-live";
+  provider?: string;
   model?: string;
   transport?: RealtimeConversationTransport;
   historyOverlay?: RealtimeSessionBootstrap["history"];
@@ -34,23 +38,36 @@ export type ManagedRealtimeConversationRuntime = RealtimeTransportRuntime & {
   listTools(): RealtimeToolDefinition[];
 };
 
-function resolveRealtimeModel(provider: "openai" | "google-live", model?: string): string {
+function resolveRealtimeProviderId(provider: string | undefined, cfg: OpenClawConfig): string {
+  if (provider === "google-live") {
+    return provider;
+  }
+  return canonicalizeRealtimeVoiceProviderId(provider ?? "openai", cfg) ?? provider ?? "openai";
+}
+
+function resolveRealtimeModel(
+  provider: string,
+  model: string | undefined,
+  cfg: OpenClawConfig,
+): string {
   if (model?.trim()) {
     return model.trim();
   }
   if (provider === "openai") {
     return DEFAULT_OPENAI_REALTIME_MODEL;
   }
-  return "google-live";
+  const providerEntry =
+    provider === "google-live" ? undefined : getRealtimeVoiceProvider(provider, cfg);
+  return providerEntry?.id ?? provider;
 }
 
 export function createManagedRealtimeConversationRuntime(
   options: ManagedRealtimeConversationRuntimeOptions,
 ): ManagedRealtimeConversationRuntime {
-  const providerId = options.provider ?? "openai";
+  const providerId = resolveRealtimeProviderId(options.provider, options.cfg);
   const transport = options.transport ?? "discord";
   const agentDir = resolveAgentDir(options.cfg, options.agentId);
-  const model = resolveRealtimeModel(providerId, options.model);
+  const model = resolveRealtimeModel(providerId, options.model, options.cfg);
   const listeners = new Set<(event: RealtimeSessionEvent) => void>();
   const listenerUnsubscribes = new Map<(event: RealtimeSessionEvent) => void, () => void>();
   let session: InMemoryRealtimeConversationSession | undefined;

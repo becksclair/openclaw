@@ -11,16 +11,14 @@ import { resolveAndPersistSessionFile } from "./session-file.js";
 import { updateSessionStore } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import {
-  resolveTranscriptAppendTarget,
-  withPreparedSessionTranscriptLock,
-} from "./transcript-append-seam.js";
-import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
-import {
   emitPersistedTranscriptUpdates,
   persistPreparedTranscriptWithoutAssistant,
   resolvePersistedTranscriptUpdates,
+  resolveTranscriptAppendTarget,
+  withPreparedSessionTranscriptLock,
   type PersistedTranscriptUpdate,
-} from "./transcript-persistence-seam.js";
+} from "./transcript-append-seam.js";
+import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import type { SessionEntry } from "./types.js";
 
 const log = createSubsystemLogger("sessions/transcript");

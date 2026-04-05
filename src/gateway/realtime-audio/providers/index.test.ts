@@ -12,4 +12,16 @@ describe("createRealtimeProviderAdapter", () => {
       GoogleLiveRealtimeProviderAdapter,
     );
   });
+
+  it("canonicalizes upstream realtime voice provider aliases before selecting an adapter", () => {
+    expect(createRealtimeProviderAdapter({ provider: "OpenAI" })).toBeInstanceOf(
+      OpenAIRealtimeProviderAdapter,
+    );
+  });
+
+  it("fails loudly for unsupported realtime providers", () => {
+    expect(() => createRealtimeProviderAdapter({ provider: "mystery-box" })).toThrow(
+      /Unsupported realtime voice provider: mystery-box/u,
+    );
+  });
 });
