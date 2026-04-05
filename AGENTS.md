@@ -2,6 +2,7 @@
 
 - Repo: https://github.com/openclaw/openclaw
 - In chat replies, file references must be repo-root relative only (example: `src/telegram/index.ts:80`); never absolute paths or `~/...`.
+- On the `bex-fork` branch, read `bex-fork.md` immediately before touching fork-covered files or planning refactors. Treat it as required onboarding for the fork's seam inventory, rebase rules, and local policy.
 - Do not edit files covered by security-focused `CODEOWNERS` rules unless a listed owner explicitly asked for the change or is already reviewing it with you. Treat those paths as restricted surfaces, not drive-by cleanup.
 
 ## Project Structure & Module Organization
@@ -112,6 +113,7 @@
 - SSH flaky: use exe.dev web terminal or Shelley (web agent); keep a tmux session for long ops.
 - Update: `sudo npm i -g openclaw@latest` (global install needs root on `/usr/lib/node_modules`).
 - Config: use `openclaw config set ...`; ensure `gateway.mode=local` is set.
+- Bex local policy: a LAN-bound gateway is intentional on this setup. Do not change gateway bind mode/address (for example from `lan` / `0.0.0.0` to loopback) unless Bex explicitly asks.
 - Discord: store raw token only (no `DISCORD_BOT_TOKEN=` prefix).
 - Restart: stop old gateway and run:
   `pkill -9 -f openclaw-gateway || true; nohup openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &`
