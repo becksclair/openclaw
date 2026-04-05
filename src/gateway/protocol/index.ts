@@ -186,6 +186,26 @@ import {
   PushTestResultSchema,
   type PresenceEntry,
   PresenceEntrySchema,
+  type RealtimeSessionCloseParams,
+  RealtimeSessionCloseParamsSchema,
+  type RealtimeSessionCreateParams,
+  RealtimeSessionCreateParamsSchema,
+  type RealtimeSessionCreateResult,
+  RealtimeSessionCreateResultSchema,
+  type RealtimeSessionEvent,
+  RealtimeSessionEventSchema,
+  type RealtimeSessionInputAudioParams,
+  RealtimeSessionInputAudioParamsSchema,
+  type RealtimeSessionInputTextParams,
+  RealtimeSessionInputTextParamsSchema,
+  type RealtimeSessionInterruptParams,
+  RealtimeSessionInterruptParamsSchema,
+  type RealtimeSessionToolCallParams,
+  RealtimeSessionToolCallParamsSchema,
+  type RealtimeSessionToolResultParams,
+  RealtimeSessionToolResultParamsSchema,
+  type RealtimeSessionTransportSignalParams,
+  RealtimeSessionTransportSignalParamsSchema,
   ProtocolSchemas,
   type RequestFrame,
   RequestFrameSchema,
@@ -350,6 +370,35 @@ export const validateNodePendingEnqueueParams = ajv.compile<NodePendingEnqueuePa
   NodePendingEnqueueParamsSchema,
 );
 export const validatePushTestParams = ajv.compile<PushTestParams>(PushTestParamsSchema);
+export const validateRealtimeSessionCreateParams = ajv.compile<RealtimeSessionCreateParams>(
+  RealtimeSessionCreateParamsSchema,
+);
+export const validateRealtimeSessionCreateResult = ajv.compile<RealtimeSessionCreateResult>(
+  RealtimeSessionCreateResultSchema,
+);
+export const validateRealtimeSessionInterruptParams = ajv.compile<RealtimeSessionInterruptParams>(
+  RealtimeSessionInterruptParamsSchema,
+);
+export const validateRealtimeSessionCloseParams = ajv.compile<RealtimeSessionCloseParams>(
+  RealtimeSessionCloseParamsSchema,
+);
+export const validateRealtimeSessionInputTextParams = ajv.compile<RealtimeSessionInputTextParams>(
+  RealtimeSessionInputTextParamsSchema,
+);
+export const validateRealtimeSessionInputAudioParams = ajv.compile<RealtimeSessionInputAudioParams>(
+  RealtimeSessionInputAudioParamsSchema,
+);
+export const validateRealtimeSessionToolCallParams = ajv.compile<RealtimeSessionToolCallParams>(
+  RealtimeSessionToolCallParamsSchema,
+);
+export const validateRealtimeSessionToolResultParams = ajv.compile<RealtimeSessionToolResultParams>(
+  RealtimeSessionToolResultParamsSchema,
+);
+export const validateRealtimeSessionTransportSignalParams =
+  ajv.compile<RealtimeSessionTransportSignalParams>(RealtimeSessionTransportSignalParamsSchema);
+export const validateRealtimeSessionEvent = ajv.compile<RealtimeSessionEvent>(
+  RealtimeSessionEventSchema,
+);
 export const validateSecretsResolveParams = ajv.compile<SecretsResolveParams>(
   SecretsResolveParamsSchema,
 );
@@ -556,6 +605,12 @@ export {
   WakeParamsSchema,
   PushTestParamsSchema,
   PushTestResultSchema,
+  RealtimeSessionCreateParamsSchema,
+  RealtimeSessionCreateResultSchema,
+  RealtimeSessionInterruptParamsSchema,
+  RealtimeSessionCloseParamsSchema,
+  RealtimeSessionToolCallParamsSchema,
+  RealtimeSessionEventSchema,
   NodePairRequestParamsSchema,
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
@@ -677,6 +732,12 @@ export type {
   AgentIdentityResult,
   AgentWaitParams,
   ChatEvent,
+  RealtimeSessionCreateParams,
+  RealtimeSessionCreateResult,
+  RealtimeSessionInterruptParams,
+  RealtimeSessionCloseParams,
+  RealtimeSessionToolCallParams,
+  RealtimeSessionEvent,
   TickEvent,
   ShutdownEvent,
   WakeParams,

@@ -147,6 +147,18 @@ import {
 } from "./plugin-approvals.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
+  RealtimeSessionCloseParamsSchema,
+  RealtimeSessionCreateParamsSchema,
+  RealtimeSessionCreateResultSchema,
+  RealtimeSessionEventSchema,
+  RealtimeSessionInputAudioParamsSchema,
+  RealtimeSessionInputTextParamsSchema,
+  RealtimeSessionInterruptParamsSchema,
+  RealtimeSessionToolCallParamsSchema,
+  RealtimeSessionToolResultParamsSchema,
+  RealtimeSessionTransportSignalParamsSchema,
+} from "./realtime-audio.js";
+import {
   SecretsReloadParamsSchema,
   SecretsResolveAssignmentSchema,
   SecretsResolveParamsSchema,
@@ -226,6 +238,16 @@ export const ProtocolSchemas = {
   NodeInvokeRequestEvent: NodeInvokeRequestEventSchema,
   PushTestParams: PushTestParamsSchema,
   PushTestResult: PushTestResultSchema,
+  RealtimeSessionCreateParams: RealtimeSessionCreateParamsSchema,
+  RealtimeSessionCreateResult: RealtimeSessionCreateResultSchema,
+  RealtimeSessionInterruptParams: RealtimeSessionInterruptParamsSchema,
+  RealtimeSessionCloseParams: RealtimeSessionCloseParamsSchema,
+  RealtimeSessionInputTextParams: RealtimeSessionInputTextParamsSchema,
+  RealtimeSessionInputAudioParams: RealtimeSessionInputAudioParamsSchema,
+  RealtimeSessionToolCallParams: RealtimeSessionToolCallParamsSchema,
+  RealtimeSessionToolResultParams: RealtimeSessionToolResultParamsSchema,
+  RealtimeSessionTransportSignalParams: RealtimeSessionTransportSignalParamsSchema,
+  RealtimeSessionEvent: RealtimeSessionEventSchema,
   SecretsReloadParams: SecretsReloadParamsSchema,
   SecretsResolveParams: SecretsResolveParamsSchema,
   SecretsResolveAssignment: SecretsResolveAssignmentSchema,

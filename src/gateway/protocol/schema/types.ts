@@ -38,6 +38,17 @@ export type NodePendingEnqueueParams = SchemaType<"NodePendingEnqueueParams">;
 export type NodePendingEnqueueResult = SchemaType<"NodePendingEnqueueResult">;
 export type PushTestParams = SchemaType<"PushTestParams">;
 export type PushTestResult = SchemaType<"PushTestResult">;
+export type RealtimeSessionCreateParams = SchemaType<"RealtimeSessionCreateParams">;
+export type RealtimeSessionCreateResult = SchemaType<"RealtimeSessionCreateResult">;
+export type RealtimeSessionInterruptParams = SchemaType<"RealtimeSessionInterruptParams">;
+export type RealtimeSessionCloseParams = SchemaType<"RealtimeSessionCloseParams">;
+export type RealtimeSessionInputTextParams = SchemaType<"RealtimeSessionInputTextParams">;
+export type RealtimeSessionInputAudioParams = SchemaType<"RealtimeSessionInputAudioParams">;
+export type RealtimeSessionToolCallParams = SchemaType<"RealtimeSessionToolCallParams">;
+export type RealtimeSessionToolResultParams = SchemaType<"RealtimeSessionToolResultParams">;
+export type RealtimeSessionTransportSignalParams =
+  SchemaType<"RealtimeSessionTransportSignalParams">;
+export type RealtimeSessionEvent = SchemaType<"RealtimeSessionEvent">;
 export type SessionsListParams = SchemaType<"SessionsListParams">;
 export type SessionsPreviewParams = SchemaType<"SessionsPreviewParams">;
 export type SessionsResolveParams = SchemaType<"SessionsResolveParams">;
