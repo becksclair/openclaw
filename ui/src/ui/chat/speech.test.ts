@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isTtsSpeaking, speakText, stopTts } from "./speech.ts";
+import { isTtsSpeaking, speakText, stopTts } from "./talk-tts.ts";
 
 const audioInstances: MockAudio[] = [];
 const createObjectURL = vi.fn(() => "blob:test-audio");

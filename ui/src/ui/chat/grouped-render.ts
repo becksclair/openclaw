@@ -16,7 +16,7 @@ import {
   formatReasoningMarkdown,
 } from "./message-extract.ts";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
-import { speakText, stopTts, isTtsSpeaking, type SpeechGatewayClient } from "./speech.ts";
+import { isTtsSpeaking, speakText, stopTts, type SpeechGatewayClient } from "./talk-tts.ts";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
 
 type ImageBlock = {
