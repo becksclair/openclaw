@@ -57,6 +57,7 @@ Worktree seams currently include:
 - session initialization protection
 - canonical session-store key normalization
 - store lock timeout accounting
+- repeatable Android APK build and packaging helpers
 
 Rebase rule:
 
@@ -417,6 +418,48 @@ Required invariants after rebase:
 
 - A waiter can time out before acquiring the store lock if the queue already consumed its timeout budget.
 - Lock timeout tests remain range-based, not exact-time brittle.
+
+### 9. Android repeatable APK build seam
+
+Status: implemented
+
+Why this exists:
+
+- The fork needs a boring, repeatable way to build Android debug APKs and signed sideload release APKs without remembering flavor-specific Gradle incantations.
+- The existing repo scripts covered direct assemble/install tasks and signed AAB release bundles, but not a stable APK-oriented workflow for local device install and distribution.
+
+Behavior added by this fork:
+
+- A dedicated Android APK build script auto-detects the Android SDK path, runs the right Gradle assemble task for debug or release, copies the resulting APK into a stable output directory, prints SHA-256 hashes, and verifies release signatures with `apksigner`.
+- Root package scripts now expose the common APK flows directly.
+- Android docs now point operators at the APK scripts and stable output paths instead of only the raw Gradle tasks.
+- Current local operator config for Android remote pairing is `gateway.bind=loopback` with `gateway.tailscale.mode=serve`, using the MagicDNS Serve endpoint for Android setup-code/manual remote pairing.
+
+Primary seam files:
+
+- `apps/android/scripts/build-apk.ts`
+- `apps/android/README.md`
+
+Files touched by this seam:
+
+- `apps/android/scripts/build-apk.ts`
+  - Fork-local APK build helper for debug/release + play/third-party flows, SDK autodetection, stable artifact copy paths, hashing, and release signature verification.
+- `package.json`
+  - Adds root scripts for repeatable APK workflows.
+- `apps/android/README.md`
+  - Documents the APK-oriented build path and stable artifact locations.
+
+Rebase notes:
+
+- If upstream adds first-class APK build scripts with stable output contracts, delete this seam and collapse to the upstream workflow.
+- Keep the script focused on operator ergonomics and artifact determinism; do not let release-version bump logic leak in from the AAB bundling script.
+- Treat the Tailscale Serve Android remote-pairing setup as an operator runbook choice, not a repo-wide product default unless upstream adopts the same guidance.
+
+Required invariants after rebase:
+
+- `bun run android:apk:debug` still emits a stable debug APK artifact path.
+- `bun run android:apk:release` still emits a signed sideloadable third-party release APK artifact path.
+- Release APK verification still uses the installed Android build-tools `apksigner` rather than assuming trust.
 
 ## Plugin boundary note
 

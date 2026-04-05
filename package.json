@@ -1061,6 +1061,10 @@
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
+    "android:apk:debug": "bun apps/android/scripts/build-apk.ts --build-type debug --flavor play",
+    "android:apk:debug:third-party": "bun apps/android/scripts/build-apk.ts --build-type debug --flavor third-party",
+    "android:apk:release": "bun apps/android/scripts/build-apk.ts --build-type release --flavor third-party",
+    "android:apk:release:play": "bun apps/android/scripts/build-apk.ts --build-type release --flavor play",
     "android:assemble": "cd apps/android && ./gradlew :app:assemblePlayDebug",
     "android:assemble:third-party": "cd apps/android && ./gradlew :app:assembleThirdPartyDebug",
     "android:bundle:release": "bun apps/android/scripts/build-release-aab.ts",

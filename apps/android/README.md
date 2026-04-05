@@ -25,20 +25,45 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 
 ## Build / Run
 
+Recommended repeatable APK scripts from the repo root:
+
+```bash
+bun run android:apk:debug
+bun run android:apk:debug:third-party
+bun run android:apk:release
+bun run android:apk:release:play
+```
+
+Artifact output paths:
+
+- Debug Play APK: `apps/android/build/apks/debug/openclaw-play-debug.apk`
+- Debug third-party APK: `apps/android/build/apks/debug/openclaw-third-party-debug.apk`
+- Release Play APK: `apps/android/build/apks/release/openclaw-play-release.apk`
+- Release third-party APK: `apps/android/build/apks/release/openclaw-third-party-release.apk`
+
+Default behavior:
+
+- `bun run android:apk:debug` builds the Play debug APK.
+- `bun run android:apk:release` builds the signed third-party release APK for sideloading.
+- The APK script auto-detects `ANDROID_SDK_ROOT` / `ANDROID_HOME`, then falls back to `~/Android/Sdk` and `~/Library/Android/sdk`.
+- Release APK builds still require local signing properties in `~/.gradle/gradle.properties` (`OPENCLAW_ANDROID_STORE_FILE`, `OPENCLAW_ANDROID_STORE_PASSWORD`, `OPENCLAW_ANDROID_KEY_ALIAS`, `OPENCLAW_ANDROID_KEY_PASSWORD`).
+
+Direct Gradle equivalents:
+
 ```bash
 cd apps/android
 ./gradlew :app:assemblePlayDebug
-./gradlew :app:installPlayDebug
-./gradlew :app:testPlayDebugUnitTest
-cd ../..
-bun run android:bundle:release
+./gradlew :app:assembleThirdPartyDebug
+./gradlew :app:assembleThirdPartyRelease
+./gradlew :app:assemblePlayRelease
 ```
 
-Third-party debug flavor:
+Install + test examples:
 
 ```bash
 cd apps/android
-./gradlew :app:assembleThirdPartyDebug
+./gradlew :app:installPlayDebug
+./gradlew :app:testPlayDebugUnitTest
 ./gradlew :app:installThirdPartyDebug
 ./gradlew :app:testThirdPartyDebugUnitTest
 ```
