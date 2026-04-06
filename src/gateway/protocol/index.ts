@@ -291,6 +291,10 @@ import {
   WebLoginStartParamsSchema,
   type WebLoginWaitParams,
   WebLoginWaitParamsSchema,
+  type VoiceTranscribeParams,
+  VoiceTranscribeParamsSchema,
+  type VoiceTranscribeResult,
+  VoiceTranscribeResultSchema,
   type WizardCancelParams,
   WizardCancelParamsSchema,
   type WizardNextParams,
@@ -398,6 +402,12 @@ export const validateRealtimeSessionTransportSignalParams =
   ajv.compile<RealtimeSessionTransportSignalParams>(RealtimeSessionTransportSignalParamsSchema);
 export const validateRealtimeSessionEvent = ajv.compile<RealtimeSessionEvent>(
   RealtimeSessionEventSchema,
+);
+export const validateVoiceTranscribeParams = ajv.compile<VoiceTranscribeParams>(
+  VoiceTranscribeParamsSchema,
+);
+export const validateVoiceTranscribeResult = ajv.compile<VoiceTranscribeResult>(
+  VoiceTranscribeResultSchema,
 );
 export const validateSecretsResolveParams = ajv.compile<SecretsResolveParams>(
   SecretsResolveParamsSchema,
@@ -611,6 +621,8 @@ export {
   RealtimeSessionCloseParamsSchema,
   RealtimeSessionToolCallParamsSchema,
   RealtimeSessionEventSchema,
+  VoiceTranscribeParamsSchema,
+  VoiceTranscribeResultSchema,
   NodePairRequestParamsSchema,
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
@@ -738,6 +750,8 @@ export type {
   RealtimeSessionCloseParams,
   RealtimeSessionToolCallParams,
   RealtimeSessionEvent,
+  VoiceTranscribeParams,
+  VoiceTranscribeResult,
   TickEvent,
   ShutdownEvent,
   WakeParams,

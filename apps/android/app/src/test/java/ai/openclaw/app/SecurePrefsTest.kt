@@ -56,4 +56,21 @@ class SecurePrefsTest {
     assertNull(prefs.loadGatewayBootstrapToken())
     assertNull(prefs.loadGatewayPassword())
   }
+
+  @Test
+  fun voiceEngineMode_defaultsToClassicAndPersistsChanges() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+
+    val prefs = SecurePrefs(context)
+
+    assertEquals(VoiceEngineMode.Classic, prefs.voiceEngineMode.value)
+    assertEquals("classic", plainPrefs.getString("voice.engineMode", null))
+
+    prefs.setVoiceEngineMode(VoiceEngineMode.Realtime)
+
+    assertEquals(VoiceEngineMode.Realtime, prefs.voiceEngineMode.value)
+    assertEquals("realtime", plainPrefs.getString("voice.engineMode", null))
+  }
 }

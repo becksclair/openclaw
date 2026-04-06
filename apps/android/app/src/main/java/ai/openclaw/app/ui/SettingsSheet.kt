@@ -69,6 +69,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.VoiceEngineMode
 import ai.openclaw.app.normalizeLocalHourMinute
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.node.DeviceNotificationListenerService
@@ -92,6 +93,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val notificationForwardingQuietEnd by viewModel.notificationForwardingQuietEnd.collectAsState()
   val notificationForwardingMaxEventsPerMinute by viewModel.notificationForwardingMaxEventsPerMinute.collectAsState()
   val notificationForwardingSessionKey by viewModel.notificationForwardingSessionKey.collectAsState()
+  val voiceEngineMode by viewModel.voiceEngineMode.collectAsState()
 
   var notificationQuietStartDraft by remember(notificationForwardingQuietStart) {
     mutableStateOf(notificationForwardingQuietStart)
@@ -1171,6 +1173,48 @@ fun SettingsSheet(viewModel: MainViewModel) {
       }
       item {
         Column(modifier = Modifier.settingsRowModifier()) {
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Voice Engine", style = mobileHeadline) },
+            supportingContent = {
+              Text(
+                "Classic keeps the conservative turn-based flow. Realtime opts into the lower-latency session backend.",
+                style = mobileCallout,
+              )
+            },
+          )
+          HorizontalDivider(color = mobileBorder)
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Classic voice", style = mobileHeadline) },
+            supportingContent = {
+              Text("Recommended default: backend transcription for each turn, then provider-backed spoken replies.", style = mobileCallout)
+            },
+            trailingContent = {
+              RadioButton(
+                selected = voiceEngineMode == VoiceEngineMode.Classic,
+                onClick = { viewModel.setVoiceEngineMode(VoiceEngineMode.Classic) },
+              )
+            },
+          )
+          HorizontalDivider(color = mobileBorder)
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Realtime voice", style = mobileHeadline) },
+            supportingContent = {
+              Text("Lower latency live sessions with streamed transcripts and streamed reply audio.", style = mobileCallout)
+            },
+            trailingContent = {
+              RadioButton(
+                selected = voiceEngineMode == VoiceEngineMode.Realtime,
+                onClick = { viewModel.setVoiceEngineMode(VoiceEngineMode.Realtime) },
+              )
+            },
+          )
+          HorizontalDivider(color = mobileBorder)
           ListItem(
             modifier = Modifier.fillMaxWidth(),
             colors = listItemColors,

@@ -43,6 +43,7 @@ const BASE_METHODS = [
   "talk.config",
   "talk.speak",
   "talk.mode",
+  "voice.transcribe",
   "realtime.session.create",
   "realtime.session.interrupt",
   "realtime.session.close",

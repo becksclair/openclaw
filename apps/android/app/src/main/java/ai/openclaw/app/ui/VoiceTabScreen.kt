@@ -10,6 +10,15 @@ import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -69,6 +78,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.VoiceEngineMode
 import ai.openclaw.app.voice.VoiceConversationEntry
 import ai.openclaw.app.voice.VoiceConversationRole
 import kotlin.math.max
@@ -83,6 +93,7 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
   val gatewayStatus by viewModel.statusText.collectAsState()
   val micEnabled by viewModel.micEnabled.collectAsState()
   val micCooldown by viewModel.micCooldown.collectAsState()
+  val voiceEngineMode by viewModel.voiceEngineMode.collectAsState()
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
   val micStatusText by viewModel.micStatusText.collectAsState()
   val micLiveTranscript by viewModel.micLiveTranscript.collectAsState()
@@ -93,6 +104,19 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
 
   val hasStreamingAssistant = micConversation.any { it.role == VoiceConversationRole.Assistant && it.isStreaming }
   val showThinkingBubble = micIsSending && !hasStreamingAssistant
+  val isRealtimeMode = voiceEngineMode == VoiceEngineMode.Realtime
+  val liveTransition = rememberInfiniteTransition(label = "voice-live")
+  val livePulse by
+    liveTransition.animateFloat(
+      initialValue = 0f,
+      targetValue = 1f,
+      animationSpec =
+        infiniteRepeatable(
+          animation = tween(durationMillis = 1600, easing = LinearEasing),
+          repeatMode = RepeatMode.Restart,
+        ),
+      label = "live-pulse",
+    )
 
   var hasMicPermission by remember { mutableStateOf(context.hasRecordAudioPermission()) }
   var pendingMicEnable by remember { mutableStateOf(false) }
@@ -145,6 +169,7 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
       verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       if (micConversation.isEmpty() && !showThinkingBubble) {
+        val emptyState = voiceEmptyState(voiceEngineMode)
         item {
           Box(
             modifier = Modifier.fillParentMaxHeight().fillMaxWidth(),
@@ -161,14 +186,15 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
                 tint = mobileTextTertiary,
               )
               Text(
-                "Tap the mic to start",
+                emptyState.title,
                 style = mobileHeadline,
                 color = mobileTextSecondary,
               )
               Text(
-                "Each pause sends a turn automatically.",
+                emptyState.subtitle,
                 style = mobileCallout,
                 color = mobileTextTertiary,
+                textAlign = TextAlign.Center,
               )
             }
           }
@@ -191,6 +217,36 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+      VoiceEngineQuickSwitch(
+        mode = voiceEngineMode,
+        onModeSelected = viewModel::setVoiceEngineMode,
+      )
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        if (isRealtimeMode) {
+          Surface(
+            shape = RoundedCornerShape(999.dp),
+            color = mobileAccent.copy(alpha = 0.14f + (0.10f * (1f - livePulse))),
+            border = BorderStroke(1.dp, mobileAccent.copy(alpha = 0.28f + (0.18f * (1f - livePulse)))),
+          ) {
+            Text(
+              "LIVE",
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+              style = mobileCaption2.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
+              color = mobileAccent,
+            )
+          }
+        }
+        Text(
+          voiceModeSummary(voiceEngineMode),
+          style = mobileCaption1,
+          color = mobileTextTertiary,
+          textAlign = TextAlign.Center,
+        )
+      }
+
       if (!micLiveTranscript.isNullOrBlank()) {
         Surface(
           modifier = Modifier.fillMaxWidth(),
@@ -246,6 +302,15 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
           if (micEnabled) {
             val ringLevel = micInputLevel.coerceIn(0f, 1f)
             val ringSize = 68.dp + (22.dp * max(ringLevel, 0.05f))
+            if (isRealtimeMode) {
+              val liveRingSize = 72.dp + (18.dp * livePulse)
+              Box(
+                modifier =
+                  Modifier
+                    .size(liveRingSize)
+                    .background(mobileAccent.copy(alpha = 0.08f * (1f - livePulse)), CircleShape),
+              )
+            }
             Box(
               modifier =
                 Modifier
@@ -295,33 +360,58 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
         }
       }
 
-      // Status + labels
-      val queueCount = micQueuedMessages.size
-      val stateText =
-        when {
-          queueCount > 0 -> "$queueCount queued"
-          micIsSending -> "Sending"
-          micCooldown -> "Cooldown"
-          micEnabled -> "Listening"
-          else -> "Mic off"
-        }
-      val stateColor =
-        when {
-          micEnabled -> mobileSuccess
-          micIsSending -> mobileAccent
-          else -> mobileTextSecondary
+      val statusTone = voiceStatusTone(
+        gatewayStatus = gatewayStatus,
+        micStatusText = micStatusText,
+        micEnabled = micEnabled,
+        micIsSending = micIsSending,
+      )
+      val animatedStatusBackground =
+        if (isRealtimeMode && micEnabled) {
+          statusTone.background.copy(alpha = 0.82f + (0.18f * (1f - livePulse)))
+        } else {
+          statusTone.background
         }
       Surface(
         shape = RoundedCornerShape(999.dp),
-        color = if (micEnabled) mobileSuccessSoft else mobileSurface,
-        border = BorderStroke(1.dp, if (micEnabled) mobileSuccess.copy(alpha = 0.3f) else mobileBorder),
+        color = animatedStatusBackground,
+        border = BorderStroke(1.dp, statusTone.border),
       ) {
         Text(
-          "$gatewayStatus · $stateText",
+          micStatusText,
           style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
-          color = stateColor,
+          color = statusTone.foreground,
           modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
         )
+      }
+      Text(
+        gatewayStatus,
+        style = mobileCaption2,
+        color = mobileTextTertiary,
+        textAlign = TextAlign.Center,
+      )
+
+      val transitionCue = voiceTransitionCue(micStatusText, isRealtimeMode)
+      AnimatedVisibility(
+        visible = transitionCue != null,
+        enter = fadeIn(),
+        exit = fadeOut(),
+      ) {
+        transitionCue?.let { cue ->
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = cue.background,
+            border = BorderStroke(1.dp, cue.border),
+          ) {
+            Text(
+              cue.text,
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+              style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+              color = cue.foreground,
+              textAlign = TextAlign.Center,
+            )
+          }
+        }
       }
 
       if (!hasMicPermission) {
@@ -382,6 +472,148 @@ private fun VoiceTurnBubble(entry: VoiceConversationEntry) {
         )
       }
     }
+  }
+}
+
+@Composable
+private fun VoiceEngineQuickSwitch(
+  mode: VoiceEngineMode,
+  onModeSelected: (VoiceEngineMode) -> Unit,
+) {
+  Surface(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(16.dp),
+    color = mobileCardSurface,
+    border = BorderStroke(1.dp, mobileBorder),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(6.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      VoiceEngineChip(
+        label = "Classic voice",
+        selected = mode == VoiceEngineMode.Classic,
+        onClick = { onModeSelected(VoiceEngineMode.Classic) },
+        modifier = Modifier.weight(1f),
+      )
+      VoiceEngineChip(
+        label = "Realtime voice",
+        selected = mode == VoiceEngineMode.Realtime,
+        onClick = { onModeSelected(VoiceEngineMode.Realtime) },
+        modifier = Modifier.weight(1f),
+      )
+    }
+  }
+}
+
+@Composable
+private fun VoiceEngineChip(
+  label: String,
+  selected: Boolean,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Button(
+    onClick = onClick,
+    modifier = modifier,
+    shape = RoundedCornerShape(12.dp),
+    colors =
+      ButtonDefaults.buttonColors(
+        containerColor = if (selected) mobileAccent else mobileSurface,
+        contentColor = if (selected) Color.White else mobileTextSecondary,
+      ),
+  ) {
+    Text(label, style = mobileCallout.copy(fontWeight = FontWeight.SemiBold))
+  }
+}
+
+private data class VoiceEmptyState(
+  val title: String,
+  val subtitle: String,
+)
+
+private data class VoiceStatusTone(
+  val background: Color,
+  val border: Color,
+  val foreground: Color,
+)
+
+private data class VoiceTransitionCue(
+  val text: String,
+  val background: Color,
+  val border: Color,
+  val foreground: Color,
+)
+
+private fun voiceEmptyState(mode: VoiceEngineMode): VoiceEmptyState {
+  return when (mode) {
+    VoiceEngineMode.Classic -> VoiceEmptyState(
+      title = "Tap the mic to start",
+      subtitle = "Classic mode sends each finished turn for backend transcription, then reads the reply aloud.",
+    )
+    VoiceEngineMode.Realtime -> VoiceEmptyState(
+      title = "Start a live voice session",
+      subtitle = "Realtime mode streams speech both ways for faster back-and-forth replies.",
+    )
+  }
+}
+
+private fun voiceModeSummary(mode: VoiceEngineMode): String {
+  return when (mode) {
+    VoiceEngineMode.Classic -> "Classic is the steady default: backend transcription plus provider-backed speech replies."
+    VoiceEngineMode.Realtime -> "Realtime is faster and more conversational: streamed transcripts, streamed audio, lower latency."
+  }
+}
+
+@Composable
+private fun voiceStatusTone(
+  gatewayStatus: String,
+  micStatusText: String,
+  micEnabled: Boolean,
+  micIsSending: Boolean,
+): VoiceStatusTone {
+  val normalized = "${gatewayStatus.lowercase()} ${micStatusText.lowercase()}"
+  return when {
+    "failed" in normalized || "error" in normalized || "blocked" in normalized ->
+      VoiceStatusTone(mobileDangerSoft, mobileDanger.copy(alpha = 0.35f), mobileDanger)
+    "offline" in normalized || "closed" in normalized ->
+      VoiceStatusTone(mobileWarningSoft, mobileWarning.copy(alpha = 0.35f), mobileWarning)
+    "thinking" in normalized || "connecting" in normalized || micIsSending ->
+      VoiceStatusTone(mobileAccentSoft, mobileAccent.copy(alpha = 0.30f), mobileAccent)
+    micEnabled || "listening" in normalized || "live" in normalized || "speaking" in normalized ->
+      VoiceStatusTone(mobileSuccessSoft, mobileSuccess.copy(alpha = 0.30f), mobileSuccess)
+    else ->
+      VoiceStatusTone(mobileSurface, mobileBorder, mobileTextSecondary)
+  }
+}
+
+@Composable
+private fun voiceTransitionCue(statusText: String, isRealtimeMode: Boolean): VoiceTransitionCue? {
+  if (!isRealtimeMode) return null
+  val normalized = statusText.lowercase()
+  return when {
+    "fell back" in normalized ->
+      VoiceTransitionCue(
+        text = "Live mode is continuing in a safer fallback path.",
+        background = mobileWarningSoft,
+        border = mobileWarning.copy(alpha = 0.35f),
+        foreground = mobileWarning,
+      )
+    "ended" in normalized || "closed" in normalized || "interrupted" in normalized ->
+      VoiceTransitionCue(
+        text = "Live session paused cleanly. Tap the mic to jump back in.",
+        background = mobileSurfaceStrong,
+        border = mobileBorderStrong,
+        foreground = mobileTextSecondary,
+      )
+    "failed" in normalized || "unavailable" in normalized || "error" in normalized ->
+      VoiceTransitionCue(
+        text = "Live mode hit a snag. Classic voice is still the steady fallback.",
+        background = mobileDangerSoft,
+        border = mobileDanger.copy(alpha = 0.35f),
+        foreground = mobileDanger,
+      )
+    else -> null
   }
 }
 

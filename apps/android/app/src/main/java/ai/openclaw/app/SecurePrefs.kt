@@ -24,6 +24,7 @@ class SecurePrefs(
     private const val displayNameKey = "node.displayName"
     private const val locationModeKey = "location.enabledMode"
     private const val voiceWakeModeKey = "voiceWake.mode"
+    private const val voiceEngineModeKey = "voice.engineMode"
     private const val plainPrefsName = "openclaw.node"
     private const val securePrefsName = "openclaw.node.secure"
     private const val notificationsForwardingEnabledKey = "notifications.forwarding.enabled"
@@ -161,6 +162,9 @@ class SecurePrefs(
 
   private val _voiceWakeMode = MutableStateFlow(loadVoiceWakeMode())
   val voiceWakeMode: StateFlow<VoiceWakeMode> = _voiceWakeMode
+
+  private val _voiceEngineMode = MutableStateFlow(loadVoiceEngineMode())
+  val voiceEngineMode: StateFlow<VoiceEngineMode> = _voiceEngineMode
 
   private val _talkEnabled = MutableStateFlow(plainPrefs.getBoolean("talk.enabled", false))
   val talkEnabled: StateFlow<Boolean> = _talkEnabled
@@ -478,6 +482,11 @@ class SecurePrefs(
     _voiceWakeMode.value = mode
   }
 
+  fun setVoiceEngineMode(mode: VoiceEngineMode) {
+    plainPrefs.edit { putString(voiceEngineModeKey, mode.rawValue) }
+    _voiceEngineMode.value = mode
+  }
+
   fun setTalkEnabled(value: Boolean) {
     plainPrefs.edit { putBoolean("talk.enabled", value) }
     _talkEnabled.value = value
@@ -527,6 +536,15 @@ class SecurePrefs(
     val resolved = LocationMode.fromRawValue(raw)
     if (raw?.trim()?.lowercase() == "always") {
       plainPrefs.edit { putString(locationModeKey, resolved.rawValue) }
+    }
+    return resolved
+  }
+
+  private fun loadVoiceEngineMode(): VoiceEngineMode {
+    val raw = plainPrefs.getString(voiceEngineModeKey, null)
+    val resolved = VoiceEngineMode.fromRawValue(raw)
+    if (raw.isNullOrBlank()) {
+      plainPrefs.edit { putString(voiceEngineModeKey, resolved.rawValue) }
     }
     return resolved
   }

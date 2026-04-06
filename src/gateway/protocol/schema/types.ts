@@ -49,6 +49,8 @@ export type RealtimeSessionToolResultParams = SchemaType<"RealtimeSessionToolRes
 export type RealtimeSessionTransportSignalParams =
   SchemaType<"RealtimeSessionTransportSignalParams">;
 export type RealtimeSessionEvent = SchemaType<"RealtimeSessionEvent">;
+export type VoiceTranscribeParams = SchemaType<"VoiceTranscribeParams">;
+export type VoiceTranscribeResult = SchemaType<"VoiceTranscribeResult">;
 export type SessionsListParams = SchemaType<"SessionsListParams">;
 export type SessionsPreviewParams = SchemaType<"SessionsPreviewParams">;
 export type SessionsResolveParams = SchemaType<"SessionsResolveParams">;

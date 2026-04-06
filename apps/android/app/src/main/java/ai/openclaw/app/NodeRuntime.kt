@@ -22,17 +22,24 @@ import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.node.*
 import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
 import ai.openclaw.app.voice.MicCaptureManager
+import ai.openclaw.app.voice.RealtimeVoiceManager
 import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.VoiceConversationEntry
+import ai.openclaw.app.voice.VoiceEngineController
+import ai.openclaw.app.voice.VoiceTranscribeClient
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -40,9 +47,11 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class NodeRuntime(
   context: Context,
   val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
@@ -263,6 +272,7 @@ class NodeRuntime(
         syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainSessionKey))
         updateStatus()
         micCapture.onGatewayConnectionChanged(true)
+        realtimeVoice.onGatewayConnectionChanged(true)
         scope.launch {
           refreshHomeCanvasOverviewIfConnected()
           if (voiceReplySpeakerLazy.isInitialized()) {
@@ -280,6 +290,7 @@ class NodeRuntime(
         chat.onDisconnected(message)
         updateStatus()
         micCapture.onGatewayConnectionChanged(false)
+        realtimeVoice.onGatewayConnectionChanged(false)
       },
       onEvent = { event, payloadJson ->
         handleGatewayEvent(event, payloadJson)
@@ -342,32 +353,13 @@ class NodeRuntime(
     ).also {
       it.applyMainSessionKey(_mainSessionKey.value)
     }
-  private val voiceReplySpeakerLazy: Lazy<TalkModeManager> = lazy {
-    // Reuse the existing TalkMode speech engine for native Android TTS playback
-    // without enabling the legacy talk capture loop.
-    TalkModeManager(
-      context = appContext,
-      scope = scope,
-      session = operatorSession,
-      supportsChatSubscribe = false,
-      isConnected = { operatorConnected },
-      onBeforeSpeak = { micCapture.pauseForTts() },
-      onAfterSpeak = { micCapture.resumeAfterTts() },
-    ).also { speaker ->
-      speaker.setPlaybackEnabled(prefs.speakerEnabled.value)
-    }
-  }
-  private val voiceReplySpeaker: TalkModeManager
-    get() = voiceReplySpeakerLazy.value
-
   private val micCapture: MicCaptureManager by lazy {
+    val transcribeClient = VoiceTranscribeClient(session = operatorSession, json = json)
     MicCaptureManager(
       context = appContext,
       scope = scope,
       sendToGateway = { message, onRunIdKnown ->
         val idempotencyKey = UUID.randomUUID().toString()
-        // Notify MicCaptureManager of the idempotency key *before* the network
-        // call so pendingRunId is set before any chat events can arrive.
         onRunIdKnown(idempotencyKey)
         val params =
           buildJsonObject {
@@ -380,41 +372,129 @@ class NodeRuntime(
         val response = operatorSession.request("chat.send", params.toString())
         parseChatSendRunId(response) ?: idempotencyKey
       },
+      transcribeTurn = { audio, sampleRate, channels ->
+        transcribeClient.transcribePcm16(audio = audio, sampleRate = sampleRate, channels = channels)
+      },
       speakAssistantReply = { text ->
-        // Voice-tab replies should speak through the dedicated reply speaker.
-        // Relying on talkMode.ttsOnAllResponses here can drop playback if the
-        // chat-event path misses the terminal event for this turn.
         voiceReplySpeaker.speakAssistantReply(text)
       },
     )
   }
 
-  val micStatusText: StateFlow<String>
-    get() = micCapture.statusText
+  private val realtimeVoice: RealtimeVoiceManager by lazy {
+    RealtimeVoiceManager(
+      context = appContext,
+      scope = scope,
+      session = operatorSession,
+      resolveMainSessionKey = ::resolveMainSessionKey,
+      json = json,
+    ).also {
+      it.setPlaybackEnabled(prefs.speakerEnabled.value)
+    }
+  }
 
-  val micLiveTranscript: StateFlow<String?>
-    get() = micCapture.liveTranscript
+  private fun voiceEngineFor(mode: VoiceEngineMode): VoiceEngineController {
+    return when (mode) {
+      VoiceEngineMode.Classic -> micCapture
+      VoiceEngineMode.Realtime -> realtimeVoice
+    }
+  }
 
-  val micIsListening: StateFlow<Boolean>
-    get() = micCapture.isListening
+  private fun activeVoiceEngine(): VoiceEngineController = voiceEngineFor(prefs.voiceEngineMode.value)
 
-  val micEnabled: StateFlow<Boolean>
-    get() = micCapture.micEnabled
+  private val ttsPauseLock = Any()
+  private val ttsPausedEngines = ArrayDeque<VoiceEngineController>()
+  private var voiceEngineTtsPauseDepth = 0
 
-  val micCooldown: StateFlow<Boolean>
-    get() = micCapture.micCooldown
+  private fun voiceEngineTtsPaused(): Boolean {
+    return synchronized(ttsPauseLock) {
+      voiceEngineTtsPauseDepth > 0
+    }
+  }
 
-  val micQueuedMessages: StateFlow<List<String>>
-    get() = micCapture.queuedMessages
+  private fun syncVoiceEngines(enabled: Boolean, mode: VoiceEngineMode) {
+    val allowActiveEngine = enabled && !voiceEngineTtsPaused()
+    micCapture.setMicEnabled(allowActiveEngine && mode == VoiceEngineMode.Classic)
+    realtimeVoice.setMicEnabled(allowActiveEngine && mode == VoiceEngineMode.Realtime)
+  }
 
-  val micConversation: StateFlow<List<VoiceConversationEntry>>
-    get() = micCapture.conversation
+  private suspend fun pauseActiveVoiceEngineForTts() {
+    val engine = activeVoiceEngine()
+    synchronized(ttsPauseLock) {
+      voiceEngineTtsPauseDepth += 1
+    }
+    try {
+      engine.pauseForTts()
+      synchronized(ttsPauseLock) {
+        ttsPausedEngines.addLast(engine)
+      }
+    } catch (err: Throwable) {
+      synchronized(ttsPauseLock) {
+        if (voiceEngineTtsPauseDepth > 0) {
+          voiceEngineTtsPauseDepth -= 1
+        }
+      }
+      throw err
+    }
+  }
 
-  val micInputLevel: StateFlow<Float>
-    get() = micCapture.inputLevel
+  private suspend fun resumePausedVoiceEngineForTts() {
+    val engine =
+      synchronized(ttsPauseLock) {
+        if (ttsPausedEngines.isEmpty()) null else ttsPausedEngines.removeLast()
+      } ?: return
+    try {
+      engine.resumeAfterTts()
+    } finally {
+      synchronized(ttsPauseLock) {
+        if (voiceEngineTtsPauseDepth > 0) {
+          voiceEngineTtsPauseDepth -= 1
+        }
+      }
+      syncVoiceEngines(prefs.talkEnabled.value, prefs.voiceEngineMode.value)
+    }
+  }
 
-  val micIsSending: StateFlow<Boolean>
-    get() = micCapture.isSending
+  private fun <T> voiceEngineState(selector: (VoiceEngineController) -> StateFlow<T>): StateFlow<T> {
+    val initial = selector(activeVoiceEngine()).value
+    return prefs.voiceEngineMode
+      .flatMapLatest { selector(voiceEngineFor(it)) }
+      .stateIn(scope, SharingStarted.Eagerly, initial)
+  }
+
+  private val voiceReplySpeakerLazy: Lazy<TalkModeManager> = lazy {
+    TalkModeManager(
+      context = appContext,
+      scope = scope,
+      session = operatorSession,
+      supportsChatSubscribe = false,
+      isConnected = { operatorConnected },
+      onBeforeSpeak = { pauseActiveVoiceEngineForTts() },
+      onAfterSpeak = { resumePausedVoiceEngineForTts() },
+    ).also { speaker ->
+      speaker.setPlaybackEnabled(prefs.speakerEnabled.value)
+    }
+  }
+  private val voiceReplySpeaker: TalkModeManager
+    get() = voiceReplySpeakerLazy.value
+
+  val micStatusText: StateFlow<String> = voiceEngineState { it.statusText }
+
+  val micLiveTranscript: StateFlow<String?> = voiceEngineState { it.liveTranscript }
+
+  val micIsListening: StateFlow<Boolean> = voiceEngineState { it.isListening }
+
+  val micEnabled: StateFlow<Boolean> = voiceEngineState { it.micEnabled }
+
+  val micCooldown: StateFlow<Boolean> = voiceEngineState { it.micCooldown }
+
+  val micQueuedMessages: StateFlow<List<String>> = voiceEngineState { it.queuedMessages }
+
+  val micConversation: StateFlow<List<VoiceConversationEntry>> = voiceEngineState { it.conversation }
+
+  val micInputLevel: StateFlow<Float> = voiceEngineState { it.inputLevel }
+
+  val micIsSending: StateFlow<Boolean> = voiceEngineState { it.isSending }
 
   private val talkMode: TalkModeManager by lazy {
     TalkModeManager(
@@ -423,8 +503,8 @@ class NodeRuntime(
       session = operatorSession,
       supportsChatSubscribe = true,
       isConnected = { operatorConnected },
-      onBeforeSpeak = { micCapture.pauseForTts() },
-      onAfterSpeak = { micCapture.resumeAfterTts() },
+      onBeforeSpeak = { pauseActiveVoiceEngineForTts() },
+      onAfterSpeak = { resumePausedVoiceEngineForTts() },
     )
   }
 
@@ -600,16 +680,16 @@ class NodeRuntime(
     }
 
     scope.launch {
-      prefs.talkEnabled.collect { enabled ->
-        // MicCaptureManager handles STT + send to gateway, while the dedicated
-        // reply speaker handles TTS for assistant replies in the voice tab.
-        micCapture.setMicEnabled(enabled)
-        if (enabled) {
-          talkMode.ttsOnAllResponses = false
-          scope.launch { talkMode.ensureChatSubscribed() }
+      combine(prefs.talkEnabled, prefs.voiceEngineMode) { enabled, mode -> enabled to mode }
+        .distinctUntilChanged()
+        .collect { (enabled, mode) ->
+          syncVoiceEngines(enabled, mode)
+          if (enabled) {
+            talkMode.ttsOnAllResponses = false
+            scope.launch { talkMode.ensureChatSubscribed() }
+          }
+          externalAudioCaptureActive.value = enabled
         }
-        externalAudioCaptureActive.value = enabled
-      }
     }
 
     scope.launch(Dispatchers.Default) {
@@ -765,31 +845,33 @@ class NodeRuntime(
   fun setMicEnabled(value: Boolean) {
     prefs.setTalkEnabled(value)
     if (value) {
-      // Tapping mic on interrupts any active TTS (barge-in)
       stopVoicePlayback()
       talkMode.ttsOnAllResponses = false
       scope.launch { talkMode.ensureChatSubscribed() }
     }
-    micCapture.setMicEnabled(value)
     externalAudioCaptureActive.value = value
   }
 
   val speakerEnabled: StateFlow<Boolean>
     get() = prefs.speakerEnabled
 
+  val voiceEngineMode: StateFlow<VoiceEngineMode>
+    get() = prefs.voiceEngineMode
+
   fun setSpeakerEnabled(value: Boolean) {
     prefs.setSpeakerEnabled(value)
     if (voiceReplySpeakerLazy.isInitialized()) {
       voiceReplySpeaker.setPlaybackEnabled(value)
     }
-    // Keep TalkMode in sync so any active Talk playback also respects speaker mute.
     talkMode.setPlaybackEnabled(value)
+    realtimeVoice.setPlaybackEnabled(value)
   }
 
   private fun stopActiveVoiceSession() {
     talkMode.ttsOnAllResponses = false
     stopVoicePlayback()
     micCapture.setMicEnabled(false)
+    realtimeVoice.setMicEnabled(false)
     prefs.setTalkEnabled(false)
     externalAudioCaptureActive.value = false
   }
@@ -799,6 +881,7 @@ class NodeRuntime(
     if (voiceReplySpeakerLazy.isInitialized()) {
       voiceReplySpeaker.stopTts()
     }
+    realtimeVoice.stopPlayback()
   }
 
   fun refreshGatewayConnection() {
@@ -1092,6 +1175,7 @@ class NodeRuntime(
 
   private fun handleGatewayEvent(event: String, payloadJson: String?) {
     micCapture.handleGatewayEvent(event, payloadJson)
+    realtimeVoice.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
   }

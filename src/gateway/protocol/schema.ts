@@ -13,6 +13,7 @@ export * from "./schema/protocol-schemas.js";
 export * from "./schema/push.js";
 export * from "./schema/realtime-audio.js";
 export * from "./schema/secrets.js";
+export * from "./schema/voice.js";
 export * from "./schema/sessions.js";
 export * from "./schema/snapshot.js";
 export * from "./schema/types.js";

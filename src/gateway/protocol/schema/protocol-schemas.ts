@@ -189,6 +189,7 @@ import {
   SessionsUsageParamsSchema,
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
+import { VoiceTranscribeParamsSchema, VoiceTranscribeResultSchema } from "./voice.js";
 import {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
@@ -248,6 +249,8 @@ export const ProtocolSchemas = {
   RealtimeSessionToolResultParams: RealtimeSessionToolResultParamsSchema,
   RealtimeSessionTransportSignalParams: RealtimeSessionTransportSignalParamsSchema,
   RealtimeSessionEvent: RealtimeSessionEventSchema,
+  VoiceTranscribeParams: VoiceTranscribeParamsSchema,
+  VoiceTranscribeResult: VoiceTranscribeResultSchema,
   SecretsReloadParams: SecretsReloadParamsSchema,
   SecretsResolveParams: SecretsResolveParamsSchema,
   SecretsResolveAssignment: SecretsResolveAssignmentSchema,

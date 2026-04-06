@@ -121,6 +121,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "wake",
     "talk.mode",
     "talk.speak",
+    "voice.transcribe",
     "realtime.session.create",
     "realtime.session.interrupt",
     "realtime.session.close",
