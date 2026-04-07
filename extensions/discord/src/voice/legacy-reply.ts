@@ -8,14 +8,8 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseTtsDirectives } from "openclaw/plugin-sdk/speech";
 import { textToSpeech } from "openclaw/plugin-sdk/tts-runtime";
 import { transcribeDiscordVoiceAudio } from "./audio-processing.js";
-
-export function formatVoicePromptText(text: string, senderLabel: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return senderLabel ? `${senderLabel}: ${trimmed}` : trimmed;
-}
+import { formatVoiceIngressPrompt } from "./prompt.js";
+import { sanitizeVoiceReplyTextForSpeech } from "./sanitize.js";
 
 function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
   if (!override) {
@@ -74,6 +68,7 @@ export async function synthesizeDiscordVoiceReplyAudio(params: {
   ttsOverride?: TtsConfig;
   entry: { guildId: string; channelId: string };
   replyText: string;
+  speakerLabel?: string;
   logVerbose: (message: string) => void;
   logger: { warn(message: string): void };
 }): Promise<string | undefined> {
@@ -89,7 +84,8 @@ export async function synthesizeDiscordVoiceReplyAudio(params: {
     cfg: ttsCfg,
     providerConfigs: ttsConfig.providerConfigs,
   });
-  const speakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
+  const rawSpeakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
+  const speakText = sanitizeVoiceReplyTextForSpeech(rawSpeakText, params.speakerLabel);
   if (!speakText) {
     params.logVerbose(
       `tts skipped (empty): guild ${params.entry.guildId} channel ${params.entry.channelId}`,
@@ -137,7 +133,7 @@ export async function generateDiscordLegacyReply(params: {
     `transcription ok (${transcript.length} chars): guild ${params.entry.guildId} channel ${params.entry.channelId}`,
   );
 
-  const prompt = formatVoicePromptText(transcript, params.senderLabel);
+  const prompt = formatVoiceIngressPrompt(transcript, params.senderLabel);
   const result = await agentCommandFromIngress(
     {
       message: prompt,

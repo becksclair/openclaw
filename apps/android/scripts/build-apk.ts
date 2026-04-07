@@ -17,7 +17,6 @@ type Variant = {
   flavor: Flavor;
   gradleName: "Play" | "ThirdParty";
   outputDirName: "play" | "third-party";
-  artifactFileName: string;
 };
 
 const variants: Variant[] = [
@@ -25,13 +24,11 @@ const variants: Variant[] = [
     flavor: "play",
     gradleName: "Play",
     outputDirName: "play",
-    artifactFileName: "app-play-release.apk",
   },
   {
     flavor: "third-party",
     gradleName: "ThirdParty",
     outputDirName: "third-party",
-    artifactFileName: "app-thirdParty-release.apk",
   },
 ];
 

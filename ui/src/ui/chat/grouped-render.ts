@@ -16,7 +16,13 @@ import {
   formatReasoningMarkdown,
 } from "./message-extract.ts";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
-import { isTtsSpeaking, speakText, stopTts, type SpeechGatewayClient } from "./talk-tts.ts";
+import {
+  isTtsSpeaking,
+  isTtsSupported,
+  speakText,
+  stopTts,
+  type SpeechGatewayClient,
+} from "./speech.ts";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
 
 type ImageBlock = {
@@ -209,7 +215,7 @@ export function renderMessageGroup(
           <span class="chat-sender-name">${who}</span>
           <span class="chat-group-timestamp">${timestamp}</span>
           ${renderMessageMeta(meta)}
-          ${normalizedRole === "assistant" && opts.client
+          ${normalizedRole === "assistant" && opts.client && isTtsSupported()
             ? renderTtsButton(group, opts.client, opts.onTtsError)
             : nothing}
           ${opts.onDelete

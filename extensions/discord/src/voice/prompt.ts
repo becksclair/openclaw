@@ -1,5 +1,8 @@
 export function formatVoiceIngressPrompt(transcript: string, speakerLabel?: string): string {
   const cleanedTranscript = transcript.trim();
+  if (!cleanedTranscript) {
+    return "";
+  }
   const cleanedLabel = speakerLabel?.trim();
   if (!cleanedLabel) {
     return cleanedTranscript;

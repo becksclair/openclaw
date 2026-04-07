@@ -55,11 +55,7 @@ vi.mock("./audio-processing.js", async (importOriginal) => {
   };
 });
 
-import {
-  formatVoicePromptText,
-  generateDiscordLegacyReply,
-  synthesizeDiscordVoiceReplyAudio,
-} from "./legacy-reply.js";
+import { generateDiscordLegacyReply, synthesizeDiscordVoiceReplyAudio } from "./legacy-reply.js";
 
 describe("legacy-reply seam", () => {
   beforeEach(() => {
@@ -75,12 +71,6 @@ describe("legacy-reply seam", () => {
     textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/reply.wav" });
     transcribeDiscordVoiceAudioMock.mockResolvedValue("hello from voice");
     agentCommandFromIngressMock.mockResolvedValue({ payloads: [] });
-  });
-
-  it("formats legacy voice prompts with trimmed speaker prefixes", () => {
-    expect(formatVoicePromptText("  hello there  ", "Sky")).toBe("Sky: hello there");
-    expect(formatVoicePromptText("   ", "Sky")).toBe("");
-    expect(formatVoicePromptText("  hello there  ", "")).toBe("hello there");
   });
 
   it("returns an empty reply when transcription yields no user text", async () => {
@@ -127,7 +117,7 @@ describe("legacy-reply seam", () => {
 
     expect(agentCommandFromIngressMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Owner Nick: hello from voice",
+        message: 'Voice transcript from speaker "Owner Nick":\nhello from voice',
         sessionKey: "discord:g1:c1",
         agentId: "agent-1",
         messageChannel: "discord",
@@ -140,7 +130,11 @@ describe("legacy-reply seam", () => {
     expect(reply).toEqual({ text: "First line\nSecond line" });
   });
 
-  it("merges voice-specific TTS overrides before synthesis", async () => {
+  it("merges voice-specific TTS overrides before synthesis and sanitizes speech text", async () => {
+    parseTtsDirectivesMock.mockReturnValueOnce({
+      cleanedText: "[[reply_to_current]] Owner Nick: 😀 Spoken reply 🎉",
+      overrides: {},
+    });
     const cfg = {
       messages: {
         tts: {
@@ -170,7 +164,8 @@ describe("legacy-reply seam", () => {
         },
       },
       entry: { guildId: "g1", channelId: "c1" },
-      replyText: "Speak this",
+      replyText: "[[reply_to_current]] Owner Nick: 😀 Spoken reply 🎉",
+      speakerLabel: "Owner Nick",
       logVerbose: vi.fn(),
       logger: { warn: vi.fn() },
     });

@@ -11,4 +11,8 @@ describe("formatVoiceIngressPrompt", () => {
   it("returns the bare transcript when no speaker label exists", () => {
     expect(formatVoiceIngressPrompt("hello there")).toBe("hello there");
   });
+
+  it("returns empty text when the transcript is blank", () => {
+    expect(formatVoiceIngressPrompt("   ", "speaker-1")).toBe("");
+  });
 });

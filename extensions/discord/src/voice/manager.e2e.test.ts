@@ -32,6 +32,19 @@ const {
       };
       subscribe: ReturnType<typeof vi.fn>;
     };
+    state: {
+      status: string;
+      networking: {
+        state: {
+          code: string;
+          dave: {
+            session: {
+              setPassthroughMode: ReturnType<typeof vi.fn>;
+            };
+          };
+        };
+      };
+    };
     handlers: Map<string, EventHandler>;
   };
 
@@ -61,8 +74,22 @@ const {
         },
         subscribe: vi.fn(() => ({
           on: vi.fn(),
+          destroy: vi.fn(),
           [Symbol.asyncIterator]: async function* () {},
         })),
+      },
+      state: {
+        status: "ready",
+        networking: {
+          state: {
+            code: "networking-ready",
+            dave: {
+              session: {
+                setPassthroughMode: vi.fn(),
+              },
+            },
+          },
+        },
       },
       handlers,
     };
@@ -95,13 +122,17 @@ const {
 vi.mock("./sdk-runtime.js", () => ({
   loadDiscordVoiceSdk: () => ({
     AudioPlayerStatus: { Playing: "playing", Idle: "idle" },
-    EndBehaviorType: { AfterSilence: "AfterSilence" },
+    EndBehaviorType: { AfterSilence: "AfterSilence", Manual: "Manual" },
     VoiceConnectionStatus: {
       Ready: "ready",
       Disconnected: "disconnected",
       Destroyed: "destroyed",
       Signalling: "signalling",
       Connecting: "connecting",
+    },
+    NetworkingStatusCode: {
+      Ready: "networking-ready",
+      Resuming: "networking-resuming",
     },
     createAudioPlayer: createAudioPlayerMock,
     createAudioResource: vi.fn(),
@@ -478,6 +509,7 @@ describe("DiscordVoiceManager", () => {
 
     const player = createAudioPlayerMock.mock.results[0]?.value;
     expect(connection.receiver.speaking.off).toHaveBeenCalledWith("start", expect.any(Function));
+    expect(connection.receiver.speaking.off).toHaveBeenCalledWith("end", expect.any(Function));
     expect(connection.off).toHaveBeenCalledWith("disconnected", expect.any(Function));
     expect(connection.off).toHaveBeenCalledWith("destroyed", expect.any(Function));
     expect(player.off).toHaveBeenCalledWith("error", expect.any(Function));
@@ -545,6 +577,42 @@ describe("DiscordVoiceManager", () => {
       | { guildName?: string }
       | undefined;
     expect(entry?.guildName).toBe("Guild One");
+  });
+
+  it("arms DAVE receive passthrough on decrypt failures that request it", async () => {
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const entry = (
+      manager as unknown as {
+        sessions: Map<
+          string,
+          {
+            connection: {
+              state: {
+                networking: {
+                  state: {
+                    dave: {
+                      session: {
+                        setPassthroughMode: ReturnType<typeof vi.fn>;
+                      };
+                    };
+                  };
+                };
+              };
+            };
+          }
+        >;
+      }
+    ).sessions.get("g1");
+    expect(entry).toBeDefined();
+
+    emitDecryptFailure(manager);
+
+    expect(
+      entry?.connection.state.networking.state.dave.session.setPassthroughMode,
+    ).toHaveBeenCalledWith(true, 15);
   });
 
   it("attempts rejoin after repeated decrypt failures", async () => {
@@ -734,7 +802,7 @@ describe("DiscordVoiceManager", () => {
       messages: [
         {
           role: "user",
-          text: "u-guest: hello there",
+          text: 'Voice transcript from speaker "u-guest":\nhello there',
           idempotencyKey: buildRealtimeTranscriptIdempotencyKey("resp-1", "user"),
         },
         {
@@ -785,7 +853,7 @@ describe("DiscordVoiceManager", () => {
     expect(entry.realtimeReplayHistory).toEqual([
       {
         role: "user",
-        text: "u-guest: hello there",
+        text: 'Voice transcript from speaker "u-guest":\nhello there',
         idempotencyKey: buildRealtimeTranscriptIdempotencyKey("resp-1", "user"),
       },
       {
@@ -831,7 +899,7 @@ describe("DiscordVoiceManager", () => {
     expect(entry.realtimeReplayHistory).toEqual([
       {
         role: "user",
-        text: "u-guest: hello there",
+        text: 'Voice transcript from speaker "u-guest":\nhello there',
         idempotencyKey: buildRealtimeTranscriptIdempotencyKey("resp-1", "user"),
       },
       {
@@ -882,7 +950,7 @@ describe("DiscordVoiceManager", () => {
     }>;
     expect(userItem).toMatchObject({
       role: "user",
-      text: "u-guest: hello there",
+      text: 'Voice transcript from speaker "u-guest":\nhello there',
     });
     expect(assistantItem).toMatchObject({
       role: "assistant",

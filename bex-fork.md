@@ -75,7 +75,8 @@ Why this exists:
 Behavior added by this fork:
 
 - Discord is treated as a channel that can consume Opus-compatible native voice payloads.
-- Contract coverage asserts that Discord auto-TTS replies route through the native voice-message path instead of text-plus-attachment fallback when appropriate.
+- Delivery regression coverage asserts that Discord auto-TTS replies route through the native voice-message path instead of text-plus-attachment fallback when appropriate.
+- After audit, this seam remains intentionally tiny: one channel-capability constant plus one Discord delivery regression test.
 
 Primary seam files:
 
@@ -88,8 +89,6 @@ Files touched by this seam:
   - Adds Discord to the set of channels eligible for Opus/native voice delivery.
 - `extensions/discord/src/monitor/reply-delivery.test.ts`
   - Verifies Discord reply delivery uses the voice-bubble path for compatible auto-TTS payloads.
-- `src/plugins/contracts/tts.contract.test.ts`
-  - Keeps the TTS contract honest around telephony and provider/output behavior that this channel-specific routing depends on.
 
 Rebase notes:
 
@@ -114,12 +113,13 @@ Behavior added by this fork:
 
 - Chat read-aloud requests `talk.speak` from the gateway.
 - Returned audio is decoded and played in the browser via `AudioContext` or `Audio` fallback.
-- UI chat rendering exposes a read-aloud control for assistant groups using the gateway client.
+- UI chat rendering exposes a read-aloud control for assistant groups only when a gateway client and browser playback support are both available.
+- `grouped-render.ts` now consumes the upstream `speech.ts` surface again, while `talk-tts.ts` stays the hidden fork seam behind that compatibility layer.
 
 Primary seam files:
 
+- `ui/src/ui/chat/talk-tts.ts`
 - `ui/src/ui/chat/speech.ts`
-- `ui/src/ui/chat/grouped-render.ts`
 
 Files touched by this seam:
 
@@ -130,7 +130,9 @@ Files touched by this seam:
 - `ui/src/ui/chat/speech.test.ts`
   - Contract tests for Talk request, audio playback, and error handling.
 - `ui/src/ui/chat/grouped-render.ts`
-  - Wires read-aloud controls into assistant message-group rendering.
+  - Wires read-aloud controls into assistant message-group rendering while reusing the upstream `speech.ts` import surface.
+- `ui/src/ui/chat/grouped-render.test.ts`
+  - Regression coverage for read-aloud button visibility and gateway-client wiring at the message-group boundary.
 - `ui/src/ui/views/chat.ts`
   - Threads the speech gateway client through chat rendering.
 - `ui/src/ui/app-render.ts`
@@ -150,7 +152,7 @@ Required invariants after rebase:
 
 ### 3. Discord shared realtime voice backend seam
 
-Status: in progress, implemented enough to warrant ledger coverage
+Status: implemented, still a preserved fork seam but now partially shrunk onto upstream Discord transport helpers
 
 Why this exists:
 
@@ -164,6 +166,7 @@ Behavior added by this fork:
 - Discord voice can use a managed realtime conversation runtime instead of only the legacy `STT -> agent -> TTS` path.
 - Realtime transcript replay and runtime lifecycle state are kept separate from the raw Discord transport loop.
 - Session bootstrap for realtime voice can seed prompt/history/tool context from the existing OpenClaw session environment.
+- Discord transport now also reuses upstream-style transport helpers for capture lifecycle, DAVE receive recovery, and voice prompt/speech sanitization instead of keeping those policies fully inline or fork-shaped inside the manager and legacy reply path.
 
 Primary seam files:
 
@@ -172,6 +175,8 @@ Primary seam files:
 - `src/agents/realtime-session-prompt-seam.ts`
 - `extensions/discord/src/voice/realtime-runtime.ts`
 - `extensions/discord/src/voice/audio-processing.ts`
+- `extensions/discord/src/voice/legacy-reply.ts`
+- `extensions/discord/src/voice/speaker-context.ts`
 
 Files touched by this seam:
 
@@ -189,6 +194,7 @@ Files touched by this seam:
   - Fork-local seam for realtime prompt assembly so upstream system-prompt churn is isolated from transport/bootstrap code.
 - `extensions/discord/src/voice/manager.ts`
   - Discord voice transport adapter that now consumes the shared runtime instead of owning the whole conversation loop.
+  - Also adopts upstream-style capture-state and DAVE receive-recovery handling instead of keeping those transport helpers fully inline.
 - `extensions/discord/src/voice/realtime-runtime.ts`
   - Fork-local seam for Discord realtime runtime lifecycle and transcript replay glue.
 - `extensions/discord/src/voice/audio-processing.ts`
@@ -197,10 +203,26 @@ Files touched by this seam:
   - Fork-local seam for speaker identity resolution, owner classification, role-aware access checks, and cache behavior.
 - `extensions/discord/src/voice/legacy-reply.ts`
   - Fork-local seam for the legacy `STT -> agent -> TTS` reply path and Discord-specific TTS override handling.
+- `extensions/discord/src/voice/prompt.ts`
+  - Upstream-shaped helper adopted by the fork so legacy ingress prompts and realtime replay-history user entries share the same normalized speaker-labeled transcript format.
+- `extensions/discord/src/voice/sanitize.ts`
+  - Upstream-shaped helper adopted by the fork so Discord TTS strips directive tags, self-prefixes, and decorative emoji before speech output.
+- `extensions/discord/src/voice/capture-state.ts`
+  - Upstream-shaped transport helper adopted by the fork so speaker capture generations, finalize timers, and stream teardown stay out of the manager body.
+- `extensions/discord/src/voice/receive-recovery.ts`
+  - Upstream-shaped transport helper adopted by the fork so decrypt-failure accounting and DAVE passthrough logic stay out of the manager body.
 - `src/agents/realtime-session-bootstrap.test.ts`
   - Regression coverage for workspace and history bootstrap behavior.
 - `extensions/discord/src/voice/manager.e2e.test.ts`
-  - Discord-side smoke coverage for the shared runtime path.
+  - Discord-side smoke coverage for the shared runtime path and transport recovery wiring.
+- `extensions/discord/src/voice/prompt.test.ts`
+  - Focused regression coverage for normalized speaker-labeled ingress prompts.
+- `extensions/discord/src/voice/sanitize.test.ts`
+  - Focused regression coverage for directive-tag stripping, speaker-prefix stripping, and emoji cleanup before TTS.
+- `extensions/discord/src/voice/capture-state.test.ts`
+  - Focused regression coverage for generation tracking, finalize timing, and capture cleanup.
+- `extensions/discord/src/voice/receive-recovery.test.ts`
+  - Focused regression coverage for decrypt-failure gating and DAVE passthrough enablement.
 - `src/gateway/protocol/realtime-audio.test.ts`
   - Protocol and server-method coverage for the realtime wire contract.
 
@@ -212,6 +234,7 @@ Rebase notes:
 - Keep bootstrap, prompt, and history logic isolated from transport code so upstream voice-channel changes do not force prompt rebuild churn.
 - Keep Discord audio decode/transcription mechanics isolated from transport/session policy so upstream transport fixes do not reopen the fork seam unnecessarily.
 - Keep speaker resolution/cache and legacy reply generation outside the transport coordinator so upstream Discord transport changes do not force unrelated fork rebases.
+- Prefer adopting upstream Discord voice helpers like prompt, sanitize, capture-state, and receive-recovery when they can be used without weakening the shared realtime/runtime seam.
 
 Required invariants after rebase:
 
@@ -235,7 +258,7 @@ Behavior added by this fork:
 - User-only transcript batches are force-persisted even when no assistant message exists yet.
 - Transcript append functions fail closed with `transcript persistence incomplete` if an append appears to succeed in memory but the message id is not present on disk.
 - Live transcript events are emitted only for message ids that can be confirmed on disk.
-- Event emission still happens while the per-session write lock is held so consumers observe persisted order.
+- Transcript append prep resolves canonical store entries before opening the transcript target, so persistence and recency updates land on the normalized session key.
 
 Primary seam file:
 
@@ -244,13 +267,13 @@ Primary seam file:
 Files touched by this seam:
 
 - `src/config/sessions/transcript-append-seam.ts`
-  - Fork-only append seam for resolving the transcript target, opening/preparing a locked `SessionManager`, forcing user-only flushes, verifying persisted message ids, and emitting persisted transcript updates.
+  - Fork-only append seam for resolving the canonical transcript target, acquiring the per-session write lock, preparing `SessionManager`, forcing user-only flushes, verifying persisted message ids, and emitting persisted transcript updates.
   - Exists to keep fork append logic and persistence guarantees in one boundary instead of splitting policy across multiple seam files.
 - `src/config/sessions/transcript.ts`
   - Uses the seam for both `appendTextMessagesToSessionTranscript` and `appendAssistantMessageToSessionTranscript`.
-  - This is the main upstream conflict surface for transcript writes.
+  - This is still the main upstream conflict surface for transcript writes.
 - `src/config/sessions/sessions.test.ts`
-  - Contract tests for persisted ordering, dedupe, and fail-closed behavior.
+  - Contract tests for persisted ordering, dedupe, fail-closed behavior, and user-only persistence.
 
 Rebase notes:
 
@@ -277,6 +300,7 @@ Behavior added by this fork:
 
 - Transcript updates can carry `messageSeq` directly from the writer.
 - Gateway consumers prefer `messageSeq` from the event payload.
+- Session history HTTP now rides the upstream snapshot/SSE state model instead of a fork-local pagination path, while still preserving explicit `messageSeq` preference.
 - Legacy fallback logic is centralized in one helper instead of duplicated across consumers.
 
 Primary seam files:
@@ -287,15 +311,17 @@ Primary seam files:
 Files touched by this seam:
 
 - `src/sessions/transcript-events.ts`
-  - Event contract includes optional `messageSeq`.
+  - Event contract includes optional `messageSeq` and normalizes the event payload.
 - `src/sessions/transcript-message-seq.ts`
   - Central helper for sequence fallback policy.
 - `src/config/sessions/transcript.ts`
   - Writers populate explicit `messageSeq`.
 - `src/gateway/server.impl.ts`
   - Gateway session message broadcast uses the helper instead of inline fallback logic.
+- `src/gateway/session-history-state.ts`
+  - Upstream-shaped session-history snapshot/SSE state, adapted to consume explicit `messageSeq` through the shared helper.
 - `src/gateway/sessions-history-http.ts`
-  - SSE history/live stream uses the same helper.
+  - Delegates pagination and SSE state to `session-history-state.ts` instead of carrying a separate fork-local implementation.
 - `src/sessions/transcript-events.test.ts`
   - Contract tests for event normalization and sequence fallback.
 
@@ -334,8 +360,8 @@ Files touched by this seam:
   - Limits reset behavior to header-only files and preserves pre-existing user-only history.
 - `src/agents/pi-embedded-runner/session-manager-init.test.ts`
   - Regression tests for preservation and header-only reset behavior.
-- `src/config/sessions/transcript.ts`
-  - Relies on this behavior when preparing append paths.
+- `src/config/sessions/transcript-append-seam.ts`
+  - Now always routes transcript append prep through `prepareSessionManagerForRun()`, so the header-only versus user-history protection applies consistently.
 
 Rebase notes:
 
@@ -368,9 +394,11 @@ Primary file:
 Files touched by this seam:
 
 - `src/config/sessions/session-file.ts`
-  - Persists session-file updates through normalized store entry resolution.
+  - Persists session-file updates through normalized store entry resolution and cleans legacy mixed-case aliases.
 - `src/config/sessions/store.ts`
   - Provides normalized key resolution primitives used by the seam.
+- `src/config/sessions/transcript-append-seam.ts`
+  - Resolves transcript append targets through the same canonical store-entry helper before persistence work begins.
 - `src/config/sessions/sessions.test.ts`
   - Contains coverage around normalized persistence behavior.
 
