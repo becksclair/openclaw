@@ -30,7 +30,7 @@ The proof is concrete. A contributor will be able to check out the rebased branc
 - [x] (2026-04-07 16:29Z) Audited the Discord native auto-TTS seam and confirmed it remains a deliberate two-file preserve seam; removed the stale ledger reference to the deleted `src/plugins/contracts/tts.contract.test.ts` file.
 - [x] (2026-04-07 16:34Z) Tightened the Control UI Talk seam by routing `ui/src/ui/chat/grouped-render.ts` back through the upstream `speech.ts` surface, keeping `talk-tts.ts` as the hidden gateway Talk seam, and adding a focused `grouped-render` regression test.
 - [x] (2026-04-07 16:36Z) Cleaned the Android APK helper seam by removing dead variant metadata from `apps/android/scripts/build-apk.ts` and re-verifying the operator-facing script usage output.
-- [ ] Re-run seam-specific validation and the repo landing gate, then update `bex-fork.md` so the seam inventory matches the rebased code rather than historical vibes.
+- [x] (2026-04-07 17:26Z) Re-ran seam-focused validation and landing gates, fixed the stale Control UI context-notice browser test drift in `ui/src/ui/views/chat.ts` plus `ui/src/ui/views/chat.browser.test.ts`, and updated `bex-fork.md` so the seam inventory matches the shrunken code instead of historical fanfic.
 
 ## Surprises & Discoveries
 
