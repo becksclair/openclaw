@@ -152,7 +152,7 @@ Required invariants after rebase:
 
 ### 3. Discord shared realtime voice backend seam
 
-Status: implemented, still a preserved fork seam but now progressively shrunk onto upstream-aligned Discord transport and runtime capability helpers
+Status: implemented, preserved only for shared realtime runtime and policy seams; Discord transport/access helpers are kept upstream-aligned where possible
 
 Why this exists:
 
@@ -206,7 +206,7 @@ Files touched by this seam:
 - `extensions/discord/src/voice/legacy-reply.ts`
   - Fork-local seam for the legacy `STT -> agent -> TTS` reply path with Discord runtime-routed TTS and Discord-specific override handling.
 - `extensions/discord/src/voice/prompt.ts`
-  - Upstream-shaped helper adopted by the fork so legacy ingress prompts and realtime replay-history user entries share the same normalized speaker-labeled transcript format.
+  - Upstream-shaped helper adopted by the fork so legacy ingress prompts and realtime replay-history user entries share the same normalized speaker-labeled transcript format while dropping blank transcripts.
 - `extensions/discord/src/voice/sanitize.ts`
   - Upstream-shaped helper adopted by the fork so Discord TTS strips directive tags, self-prefixes, and decorative emoji before speech output.
 - `extensions/discord/src/voice/capture-state.ts`
@@ -237,6 +237,7 @@ Rebase notes:
 - Keep Discord audio decode/transcription mechanics isolated from transport/session policy so upstream transport fixes do not reopen the fork seam unnecessarily.
 - Keep speaker resolution/cache and legacy reply generation outside the transport coordinator so upstream Discord transport changes do not force unrelated fork rebases.
 - Prefer adopting upstream Discord voice helpers like prompt, sanitize, capture-state, and receive-recovery when they can be used without weakening the shared realtime/runtime seam.
+- Keep `extensions/discord/src/voice/access.ts` aligned with upstream unless there is a demonstrated policy bug; do not carry speculative allowlist deltas there.
 
 Required invariants after rebase:
 
