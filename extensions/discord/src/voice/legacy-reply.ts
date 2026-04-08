@@ -6,7 +6,7 @@ import {
 import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseTtsDirectives } from "openclaw/plugin-sdk/speech";
-import { textToSpeech } from "openclaw/plugin-sdk/tts-runtime";
+import { getDiscordRuntime } from "../runtime.js";
 import { transcribeDiscordVoiceAudio } from "./audio-processing.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import { sanitizeVoiceReplyTextForSpeech } from "./sanitize.js";
@@ -93,7 +93,7 @@ export async function synthesizeDiscordVoiceReplyAudio(params: {
     return undefined;
   }
 
-  const ttsResult = await textToSpeech({
+  const ttsResult = await getDiscordRuntime().tts.textToSpeech({
     text: speakText,
     cfg: ttsCfg,
     channel: "discord",

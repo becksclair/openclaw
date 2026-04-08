@@ -4,23 +4,32 @@ const {
   agentCommandFromIngressMock,
   resolveTtsConfigMock,
   parseTtsDirectivesMock,
-  textToSpeechMock,
+  discordRuntimeMock,
+  discordTextToSpeechMock,
   transcribeDiscordVoiceAudioMock,
-} = vi.hoisted(() => ({
-  agentCommandFromIngressMock: vi.fn<() => Promise<{ payloads: Array<{ text?: string }> }>>(
-    async () => ({ payloads: [] }),
-  ),
-  resolveTtsConfigMock: vi.fn((cfg) => ({
-    modelOverrides: cfg.messages?.tts?.modelOverrides ?? {},
-    providerConfigs: cfg.messages?.tts?.providers ?? {},
-  })),
-  parseTtsDirectivesMock: vi.fn((_text, _modelOverrides, _context) => ({
-    cleanedText: "Spoken reply",
-    overrides: {},
-  })),
-  textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/reply.wav" })),
-  transcribeDiscordVoiceAudioMock: vi.fn(async () => "hello from voice"),
-}));
+} = vi.hoisted(() => {
+  const discordRuntimeMock = {
+    tts: {
+      textToSpeech: vi.fn(async () => ({ success: true, audioPath: "/tmp/reply.wav" })),
+    },
+  };
+  return {
+    agentCommandFromIngressMock: vi.fn<() => Promise<{ payloads: Array<{ text?: string }> }>>(
+      async () => ({ payloads: [] }),
+    ),
+    resolveTtsConfigMock: vi.fn((cfg) => ({
+      modelOverrides: cfg.messages?.tts?.modelOverrides ?? {},
+      providerConfigs: cfg.messages?.tts?.providers ?? {},
+    })),
+    parseTtsDirectivesMock: vi.fn((_text, _modelOverrides, _context) => ({
+      cleanedText: "Spoken reply",
+      overrides: {},
+    })),
+    discordRuntimeMock,
+    discordTextToSpeechMock: discordRuntimeMock.tts.textToSpeech,
+    transcribeDiscordVoiceAudioMock: vi.fn(async () => "hello from voice"),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
@@ -39,13 +48,9 @@ vi.mock("openclaw/plugin-sdk/speech", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/tts-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/tts-runtime")>();
-  return {
-    ...actual,
-    textToSpeech: textToSpeechMock,
-  };
-});
+vi.mock("../runtime.js", () => ({
+  getDiscordRuntime: () => discordRuntimeMock,
+}));
 
 vi.mock("./audio-processing.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./audio-processing.js")>();
@@ -62,13 +67,13 @@ describe("legacy-reply seam", () => {
     agentCommandFromIngressMock.mockClear();
     resolveTtsConfigMock.mockClear();
     parseTtsDirectivesMock.mockClear();
-    textToSpeechMock.mockClear();
+    discordTextToSpeechMock.mockClear();
     transcribeDiscordVoiceAudioMock.mockClear();
     parseTtsDirectivesMock.mockReturnValue({
       cleanedText: "Spoken reply",
       overrides: {},
     });
-    textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/reply.wav" });
+    discordTextToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/reply.wav" });
     transcribeDiscordVoiceAudioMock.mockResolvedValue("hello from voice");
     agentCommandFromIngressMock.mockResolvedValue({ payloads: [] });
   });
@@ -189,7 +194,7 @@ describe("legacy-reply seam", () => {
         }),
       }),
     );
-    expect(textToSpeechMock).toHaveBeenCalledWith(
+    expect(discordTextToSpeechMock).toHaveBeenCalledWith(
       expect.objectContaining({
         text: "Spoken reply",
         channel: "discord",
@@ -211,7 +216,7 @@ describe("legacy-reply seam", () => {
     });
 
     expect(audioPath).toBeUndefined();
-    expect(textToSpeechMock).not.toHaveBeenCalled();
+    expect(discordTextToSpeechMock).not.toHaveBeenCalled();
     expect(logVerbose).toHaveBeenCalledWith("tts skipped (empty): guild g1 channel c1");
   });
 });

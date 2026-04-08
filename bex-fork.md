@@ -152,7 +152,7 @@ Required invariants after rebase:
 
 ### 3. Discord shared realtime voice backend seam
 
-Status: implemented, still a preserved fork seam but now partially shrunk onto upstream Discord transport helpers
+Status: implemented, still a preserved fork seam but now progressively shrunk onto upstream-aligned Discord transport and runtime capability helpers
 
 Why this exists:
 
@@ -167,6 +167,8 @@ Behavior added by this fork:
 - Realtime transcript replay and runtime lifecycle state are kept separate from the raw Discord transport loop.
 - Session bootstrap for realtime voice can seed prompt/history/tool context from the existing OpenClaw session environment.
 - Discord transport now also reuses upstream-style transport helpers for capture lifecycle, DAVE receive recovery, and voice prompt/speech sanitization instead of keeping those policies fully inline or fork-shaped inside the manager and legacy reply path.
+- Discord voice transcription and TTS now route through `getDiscordRuntime()` capability surfaces (`mediaUnderstanding` and `tts`) instead of direct generic SDK entrypoints.
+- Discord realtime reply event/fallback/replay handling now lives in the `realtime-runtime` seam, leaving the manager focused on transport orchestration.
 
 Primary seam files:
 
@@ -193,16 +195,16 @@ Files touched by this seam:
 - `src/agents/realtime-session-prompt-seam.ts`
   - Fork-local seam for realtime prompt assembly so upstream system-prompt churn is isolated from transport/bootstrap code.
 - `extensions/discord/src/voice/manager.ts`
-  - Discord voice transport adapter that now consumes the shared runtime instead of owning the whole conversation loop.
-  - Also adopts upstream-style capture-state and DAVE receive-recovery handling instead of keeping those transport helpers fully inline.
+  - Discord voice transport adapter that now consumes the shared runtime while staying orchestration-focused (join/capture/process/playback).
+  - Uses upstream-style capture-state and DAVE receive-recovery helpers instead of keeping those transport policies inline.
 - `extensions/discord/src/voice/realtime-runtime.ts`
-  - Fork-local seam for Discord realtime runtime lifecycle and transcript replay glue.
+  - Fork-local seam for Discord realtime runtime lifecycle plus realtime reply event handling, fallback decisions, and transcript replay persistence.
 - `extensions/discord/src/voice/audio-processing.ts`
-  - Fork-local seam for Discord voice audio decode, WAV staging, and transcription plumbing so transport logic stays separate.
+  - Fork-local seam for Discord voice audio decode, WAV staging, and runtime-routed transcription plumbing so transport logic stays separate.
 - `extensions/discord/src/voice/speaker-context.ts`
   - Fork-local seam for speaker identity resolution, owner classification, role-aware access checks, and cache behavior.
 - `extensions/discord/src/voice/legacy-reply.ts`
-  - Fork-local seam for the legacy `STT -> agent -> TTS` reply path and Discord-specific TTS override handling.
+  - Fork-local seam for the legacy `STT -> agent -> TTS` reply path with Discord runtime-routed TTS and Discord-specific override handling.
 - `extensions/discord/src/voice/prompt.ts`
   - Upstream-shaped helper adopted by the fork so legacy ingress prompts and realtime replay-history user entries share the same normalized speaker-labeled transcript format.
 - `extensions/discord/src/voice/sanitize.ts`

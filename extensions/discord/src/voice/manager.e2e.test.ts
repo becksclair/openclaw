@@ -7,6 +7,7 @@ import type {
   RealtimeProviderEvent,
   RealtimeSessionEvent,
 } from "../../../../src/gateway/realtime-audio/types.js";
+import { createVoiceCaptureState } from "./capture-state.js";
 
 const {
   createConnectionMock,
@@ -16,8 +17,10 @@ const {
   resolveAgentRouteMock,
   agentCommandMock,
   transcribeAudioFileMock,
+  textToSpeechMock,
   createManagedRealtimeConversationRuntimeMock,
   appendTextMessagesToSessionTranscriptMock,
+  discordRuntimeMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -96,6 +99,17 @@ const {
     return connection;
   };
 
+  const transcribeAudioFileMock = vi.fn(async () => ({ text: "hello from voice" }));
+  const textToSpeechMock = vi.fn(async () => ({ success: true, audioPath: "/tmp/reply.wav" }));
+  const discordRuntimeMock = {
+    mediaUnderstanding: {
+      transcribeAudioFile: transcribeAudioFileMock,
+    },
+    tts: {
+      textToSpeech: textToSpeechMock,
+    },
+  };
+
   return {
     createConnectionMock,
     joinVoiceChannelMock: vi.fn(() => createConnectionMock()),
@@ -111,11 +125,13 @@ const {
     })),
     resolveAgentRouteMock: vi.fn(() => ({ agentId: "agent-1", sessionKey: "discord:g1:c1" })),
     agentCommandMock: vi.fn(async (_opts?: unknown, _runtime?: unknown) => ({ payloads: [] })),
-    transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
+    transcribeAudioFileMock,
+    textToSpeechMock,
     createManagedRealtimeConversationRuntimeMock: vi.fn(() => {
       throw new Error("realtime unavailable");
     }),
     appendTextMessagesToSessionTranscriptMock,
+    discordRuntimeMock,
   };
 });
 
@@ -169,8 +185,8 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => ({
-  transcribeAudioFile: transcribeAudioFileMock,
+vi.mock("../runtime.js", () => ({
+  getDiscordRuntime: () => discordRuntimeMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => {
@@ -259,6 +275,7 @@ function createSessionBackedRealtimeRuntime() {
 }
 
 let managerModule: typeof import("./manager.js");
+let realtimeRuntimeModule: typeof import("./realtime-runtime.js");
 
 function createClient() {
   return {
@@ -290,7 +307,10 @@ function createRuntime() {
 
 describe("DiscordVoiceManager", () => {
   beforeAll(async () => {
-    managerModule = await import("./manager.js");
+    [managerModule, realtimeRuntimeModule] = await Promise.all([
+      import("./manager.js"),
+      import("./realtime-runtime.js"),
+    ]);
   });
 
   beforeEach(() => {
@@ -304,6 +324,8 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock.mockResolvedValue({ payloads: [] });
     transcribeAudioFileMock.mockReset();
     transcribeAudioFileMock.mockResolvedValue({ text: "hello from voice" });
+    textToSpeechMock.mockReset();
+    textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/reply.wav" });
     createManagedRealtimeConversationRuntimeMock.mockReset();
     createManagedRealtimeConversationRuntimeMock.mockImplementation(() => {
       throw new Error("realtime unavailable");
@@ -635,26 +657,42 @@ describe("DiscordVoiceManager", () => {
       undefined,
       { commands: { useAccessGroups: false } },
     );
-    const generateRealtimeReply = vi.fn(async () => ({
-      text: "Realtime hello",
-      audioPath: "/tmp/realtime.wav",
-    }));
-    (
-      manager as unknown as { generateRealtimeReply: typeof generateRealtimeReply }
-    ).generateRealtimeReply = generateRealtimeReply;
+    let listener: ((event: { type: string; [key: string]: unknown }) => void) | undefined;
+    createManagedRealtimeConversationRuntimeMock.mockImplementation(
+      () =>
+        ({
+          start: vi.fn(async () => undefined),
+          close: vi.fn(async () => undefined),
+          interrupt: vi.fn(async () => undefined),
+          submitText: vi.fn(async () => undefined),
+          submitAudio: vi.fn(async () => {
+            listener?.({
+              type: "transcript.updated",
+              item: { role: "assistant", status: "final", text: "Realtime hello" },
+            });
+            listener?.({
+              type: "assistant.turn.updated",
+              turn: { state: "completed", turnId: "resp-1" },
+            });
+          }),
+          subscribe: vi.fn((next: (event: { type: string; [key: string]: unknown }) => void) => {
+            listener = next;
+            return () => {
+              listener = undefined;
+            };
+          }),
+          listTools: vi.fn(() => []),
+        }) as never,
+    );
 
     await processVoiceSegment(manager, "u-guest", { voiceBackend: "realtime" });
 
-    expect(generateRealtimeReply).toHaveBeenCalledWith({
-      entry: expect.objectContaining({
-        guildId: "g1",
-        channelId: "1001",
-        voiceBackend: "realtime",
+    expect(createManagedRealtimeConversationRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transport: "discord",
+        agentId: "agent-1",
       }),
-      pcm: expect.any(Buffer),
-      senderLabel: "u-guest",
-      senderIsOwner: false,
-    });
+    );
     expect(agentCommandMock).not.toHaveBeenCalled();
   });
 
@@ -1202,11 +1240,9 @@ describe("DiscordVoiceManager", () => {
   });
 
   it("replays completed realtime turns when a later glitch recreates the runtime", async () => {
-    const manager = createManager(
-      { groupPolicy: "open", voice: { backend: "realtime" } },
-      undefined,
-      { commands: { useAccessGroups: false } },
-    );
+    createManager({ groupPolicy: "open", voice: { backend: "realtime" } }, undefined, {
+      commands: { useAccessGroups: false },
+    });
     let recreatedOptions: Record<string, unknown> | undefined;
     let firstRuntimeListener:
       | ((event: { type: string; [key: string]: unknown }) => void)
@@ -1334,6 +1370,7 @@ describe("DiscordVoiceManager", () => {
       guildId: "g1",
       channelId: "1001",
       route: { sessionKey: "discord:g1:1001", agentId: "agent-1" },
+      voiceBackend: "realtime" as const,
       player: createAudioPlayerMock(),
       playbackQueue: Promise.resolve(),
       realtimeDisabled: false,
@@ -1342,16 +1379,25 @@ describe("DiscordVoiceManager", () => {
       realtimeReplayHistory: [],
     };
 
-    const generateRealtimeReply = (
-      manager as unknown as {
-        generateRealtimeReply: (params: {
-          entry: typeof entry;
-          pcm: Buffer;
-          senderLabel: string;
-          senderIsOwner: boolean;
-        }) => Promise<{ text: string; audioPath?: string; fallbackToLegacy?: boolean }>;
-      }
-    ).generateRealtimeReply.bind(manager);
+    const generateRealtimeReply = (params: {
+      entry: typeof entry;
+      pcm: Buffer;
+      senderLabel: string;
+      senderIsOwner: boolean;
+    }) =>
+      realtimeRuntimeModule.generateDiscordRealtimeReply({
+        ...params,
+        cfg: {
+          channels: { discord: { voice: { backend: "realtime" } } },
+        },
+        logger: {
+          info: () => undefined,
+          warn: () => undefined,
+        },
+        logVerbose: () => undefined,
+        replyTimeoutMs: 60_000,
+        firstOutputTimeoutMs: 12_000,
+      });
 
     appendTextMessagesToSessionTranscriptMock.mockResolvedValueOnce({
       ok: false,
@@ -1369,7 +1415,7 @@ describe("DiscordVoiceManager", () => {
     expect(entry.realtimeReplayHistory).toEqual([
       {
         role: "user",
-        text: "u-guest: First question",
+        text: 'Voice transcript from speaker "u-guest":\nFirst question',
         idempotencyKey: buildRealtimeTranscriptIdempotencyKey("resp-1", "user"),
       },
       {
@@ -1397,7 +1443,7 @@ describe("DiscordVoiceManager", () => {
     });
 
     expect(recreatedOptions?.historyOverlay).toEqual([
-      { role: "user", text: "u-guest: First question" },
+      { role: "user", text: 'Voice transcript from speaker "u-guest":\nFirst question' },
       { role: "assistant", text: "First answer" },
     ]);
     expect(thirdResult.text).toBe("Recovered answer");
@@ -1528,6 +1574,7 @@ describe("DiscordVoiceManager", () => {
         channelId: "1001",
         connection,
         player,
+        capture: createVoiceCaptureState(),
         activeSpeakers: new Set<string>(),
         realtime: { interrupt: interruptMock },
       },
@@ -1536,6 +1583,56 @@ describe("DiscordVoiceManager", () => {
 
     expect(interruptMock).not.toHaveBeenCalled();
     expect(player.stop).not.toHaveBeenCalled();
+  });
+
+  it("routes legacy transcription through the Discord runtime surface", async () => {
+    const manager = createManager();
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "Spoken reply" }] } as never);
+
+    await (
+      manager as unknown as {
+        generateVoiceReply: (params: {
+          entry: {
+            guildId: string;
+            channelId: string;
+            route: { sessionKey: string; agentId: string };
+            player: ReturnType<typeof createAudioPlayerMock>;
+            playbackQueue: Promise<void>;
+            voiceBackend: "stt-agent-tts";
+            realtimeDisabled: boolean;
+            realtimeConnectedOnce: boolean;
+            realtimeEpoch: number;
+          };
+          wavPath: string;
+          pcm: Buffer;
+          senderLabel: string;
+          senderIsOwner: boolean;
+        }) => Promise<{ text: string; audioPath?: string }>;
+      }
+    ).generateVoiceReply({
+      entry: {
+        guildId: "g1",
+        channelId: "1001",
+        route: { sessionKey: "discord:g1:1001", agentId: "agent-1" },
+        player: createAudioPlayerMock(),
+        playbackQueue: Promise.resolve(),
+        voiceBackend: "stt-agent-tts",
+        realtimeDisabled: false,
+        realtimeConnectedOnce: false,
+        realtimeEpoch: 0,
+      },
+      wavPath: "/tmp/test.wav",
+      pcm: Buffer.alloc(1920),
+      senderLabel: "u-guest",
+      senderIsOwner: false,
+    });
+
+    expect(transcribeAudioFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: "/tmp/test.wav",
+        mime: "audio/wav",
+      }),
+    );
   });
 
   it("passes senderIsOwner=true for allowlisted voice speakers", async () => {

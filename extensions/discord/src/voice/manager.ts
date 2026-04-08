@@ -1,15 +1,12 @@
-import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { ChannelType, type Client, ReadyListener } from "@buape/carbon";
 import type { VoicePlugin } from "@buape/carbon/voice";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, DiscordVoiceBackend } from "openclaw/plugin-sdk/config-runtime";
-import { type ManagedRealtimeConversationRuntime } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { appendTextMessagesToSessionTranscript } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { formatMention } from "../mentions.js";
 import {
@@ -18,13 +15,7 @@ import {
   resolveDiscordGuildEntry,
 } from "../monitor/allow-list.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
-import {
-  decodeDiscordOpusStream,
-  DISCORD_VOICE_CHANNELS,
-  DISCORD_VOICE_SAMPLE_RATE,
-  writeDiscordVoicePcmWavFile,
-  writeDiscordVoiceWavFile,
-} from "./audio-processing.js";
+import { decodeDiscordOpusStream, writeDiscordVoiceWavFile } from "./audio-processing.js";
 import {
   beginVoiceCapture,
   clearVoiceCaptureFinalizeTimer,
@@ -37,13 +28,9 @@ import {
   type VoiceCaptureState,
 } from "./capture-state.js";
 import { generateDiscordLegacyReply, synthesizeDiscordVoiceReplyAudio } from "./legacy-reply.js";
-import { formatVoiceIngressPrompt } from "./prompt.js";
 import {
-  buildRealtimeTranscriptIdempotencyKey,
-  ensureDiscordRealtimeRuntime,
-  mergePendingRealtimeTranscriptMessages,
-  resetDiscordRealtimeRuntime,
-  type PendingRealtimeTranscriptMessage,
+  generateDiscordRealtimeReply,
+  type DiscordRealtimeVoiceEntry,
 } from "./realtime-runtime.js";
 import {
   analyzeVoiceReceiveError,
@@ -80,27 +67,16 @@ type VoiceOperationResult = {
   guildId?: string;
 };
 
-type VoiceSessionEntry = {
-  guildId: string;
+type VoiceSessionEntry = DiscordRealtimeVoiceEntry & {
   guildName?: string;
-  channelId: string;
   channelName?: string;
   sessionChannelId: string;
-  route: ReturnType<typeof resolveAgentRoute>;
-  voiceBackend: DiscordVoiceBackend;
   connection: import("@discordjs/voice").VoiceConnection;
   player: import("@discordjs/voice").AudioPlayer;
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
   capture: VoiceCaptureState;
   receiveRecovery: VoiceReceiveRecoveryState;
-  realtime?: ManagedRealtimeConversationRuntime;
-  realtimeReady?: Promise<void>;
-  realtimeSenderIsOwner?: boolean;
-  realtimeDisabled?: boolean;
-  realtimeConnectedOnce: boolean;
-  realtimeEpoch: number;
-  realtimeReplayHistory: PendingRealtimeTranscriptMessage[];
   stop: () => void;
 };
 
@@ -627,24 +603,13 @@ export class DiscordVoiceManager {
     logger.info(
       `discord voice: dispatching segment for guild ${entry.guildId} channel ${entry.channelId} via ${voiceBackend}`,
     );
-    const reply =
-      voiceBackend === "realtime"
-        ? await this.generateVoiceReply({
-            entry,
-            wavPath,
-            pcm,
-            senderLabel: speaker.label,
-            senderIsOwner: speaker.senderIsOwner,
-          })
-        : await generateDiscordLegacyReply({
-            cfg: this.params.cfg,
-            runtime: this.params.runtime,
-            entry,
-            wavPath,
-            senderLabel: speaker.label,
-            senderIsOwner: speaker.senderIsOwner,
-            logVerbose: logVoiceVerbose,
-          });
+    const reply = await this.generateVoiceReply({
+      entry,
+      wavPath,
+      pcm,
+      senderLabel: speaker.label,
+      senderIsOwner: speaker.senderIsOwner,
+    });
 
     if (!reply.text && !reply.audioPath) {
       if (reply.superseded) {
@@ -716,11 +681,16 @@ export class DiscordVoiceManager {
       });
     }
 
-    const realtimeReply = await this.generateRealtimeReply({
+    const realtimeReply = await generateDiscordRealtimeReply({
       entry: params.entry,
+      cfg: this.params.cfg,
       pcm: params.pcm,
       senderLabel: params.senderLabel,
       senderIsOwner: params.senderIsOwner,
+      logger,
+      logVerbose: logVoiceVerbose,
+      replyTimeoutMs: SPEAKING_READY_TIMEOUT_MS,
+      firstOutputTimeoutMs: REALTIME_FIRST_OUTPUT_TIMEOUT_MS,
     });
     if (!realtimeReply.fallbackToLegacy) {
       return realtimeReply;
@@ -740,314 +710,6 @@ export class DiscordVoiceManager {
       senderIsOwner: params.senderIsOwner,
       logVerbose: logVoiceVerbose,
     });
-  }
-
-  private async generateRealtimeReply(params: {
-    entry: VoiceSessionEntry;
-    pcm: Buffer;
-    senderLabel: string;
-    senderIsOwner: boolean;
-  }): Promise<{
-    text: string;
-    audioPath?: string;
-    fallbackToLegacy?: boolean;
-    superseded?: boolean;
-  }> {
-    const runtime = await ensureDiscordRealtimeRuntime({
-      entry: params.entry,
-      cfg: this.params.cfg,
-      senderIsOwner: params.senderIsOwner,
-      logger,
-      logVerbose: logVoiceVerbose,
-    });
-    if (!runtime) {
-      return { text: "", fallbackToLegacy: !params.entry.realtimeConnectedOnce };
-    }
-
-    const replyEpoch = params.entry.realtimeEpoch;
-    let replyText = "";
-    let userTranscript = "";
-    const audioChunks: Buffer[] = [];
-    let settled = false;
-    let fallbackToLegacy = false;
-    let sawAssistantOutput = false;
-    let sawToolActivity = false;
-    let replayHistoryCommitted = false;
-    const localTurnId = `local-${randomUUID()}`;
-    let providerTurnId: string | undefined;
-    let resolveReply:
-      | ((value: { text: string; audioPath?: string; superseded?: boolean }) => void)
-      | undefined;
-    let firstOutputTimeout: NodeJS.Timeout | undefined;
-    const buildTurnHistory = (): PendingRealtimeTranscriptMessage[] => {
-      const assistantText = replyText.trim();
-      const normalizedUserText = formatVoiceIngressPrompt(userTranscript, params.senderLabel);
-      const stableTurnId = providerTurnId ?? localTurnId;
-      return [
-        ...(normalizedUserText
-          ? [
-              {
-                role: "user" as const,
-                text: normalizedUserText,
-                idempotencyKey: buildRealtimeTranscriptIdempotencyKey({
-                  sessionKey: params.entry.route.sessionKey,
-                  turnId: stableTurnId,
-                  role: "user",
-                }),
-              },
-            ]
-          : []),
-        ...(assistantText
-          ? [
-              {
-                role: "assistant" as const,
-                text: assistantText,
-                idempotencyKey: buildRealtimeTranscriptIdempotencyKey({
-                  sessionKey: params.entry.route.sessionKey,
-                  turnId: stableTurnId,
-                  role: "assistant",
-                }),
-              },
-            ]
-          : []),
-      ];
-    };
-    const commitReplayHistory = async () => {
-      if (replayHistoryCommitted || fallbackToLegacy) {
-        return;
-      }
-      const turnHistory = buildTurnHistory();
-      if (turnHistory.length === 0) {
-        return;
-      }
-      try {
-        const persisted = await appendTextMessagesToSessionTranscript({
-          agentId: params.entry.route.agentId,
-          sessionKey: params.entry.route.sessionKey,
-          messages: [...(params.entry.realtimeReplayHistory ?? []), ...turnHistory],
-          assistantModel: "realtime-voice",
-        });
-        if (persisted.ok) {
-          params.entry.realtimeReplayHistory = [];
-          replayHistoryCommitted = true;
-          return;
-        }
-        logger.warn(
-          `discord voice: failed to persist realtime transcript for guild ${params.entry.guildId} channel ${params.entry.channelId}: ${persisted.reason}`,
-        );
-      } catch (err) {
-        logger.warn(
-          `discord voice: realtime transcript persistence crashed for guild ${params.entry.guildId} channel ${params.entry.channelId}: ${formatErrorMessage(err)}`,
-        );
-      }
-      params.entry.realtimeReplayHistory = mergePendingRealtimeTranscriptMessages(
-        params.entry.realtimeReplayHistory,
-        turnHistory,
-      );
-      replayHistoryCommitted = true;
-    };
-    const finish = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      if (firstOutputTimeout) {
-        clearTimeout(firstOutputTimeout);
-      }
-      unsubscribe();
-      logger.info(
-        `discord voice: finishing realtime reply for guild ${params.entry.guildId} channel ${params.entry.channelId} fallback=${fallbackToLegacy} afterOutput=${sawAssistantOutput} audioChunks=${audioChunks.length} textChars=${replyText.length}`,
-      );
-      if (audioChunks.length > 0) {
-        void writeDiscordVoicePcmWavFile({
-          pcm: Buffer.concat(audioChunks),
-          sampleRate: 24_000,
-          channels: 1,
-        })
-          .then((written) => {
-            resolveReply?.({
-              text: replyText.trim(),
-              audioPath: written.path,
-              ...(fallbackToLegacy ? { fallbackToLegacy: true } : {}),
-            });
-          })
-          .catch((err) => {
-            logger.warn(
-              `discord voice: failed to write realtime audio reply for guild ${params.entry.guildId} channel ${params.entry.channelId}: ${formatErrorMessage(err)}`,
-            );
-            resolveReply?.({
-              text: replyText.trim(),
-              ...(fallbackToLegacy ? { fallbackToLegacy: true } : {}),
-            });
-          });
-        return;
-      }
-      resolveReply?.({
-        text: replyText.trim(),
-        ...(fallbackToLegacy ? { fallbackToLegacy: true } : {}),
-      });
-    };
-    const armFirstOutputTimeout = (reason: string) => {
-      if (firstOutputTimeout) {
-        clearTimeout(firstOutputTimeout);
-      }
-      firstOutputTimeout = setTimeout(() => {
-        if (sawAssistantOutput || settled) {
-          return;
-        }
-        logger.warn(
-          `discord voice: realtime produced no output within ${REALTIME_FIRST_OUTPUT_TIMEOUT_MS}ms for guild ${params.entry.guildId} channel ${params.entry.channelId} (${reason})`,
-        );
-        fallbackToLegacy = true;
-        void resetDiscordRealtimeRuntime({
-          entry: params.entry,
-          reason: "first output timeout",
-          logger,
-        });
-        finish();
-      }, REALTIME_FIRST_OUTPUT_TIMEOUT_MS);
-    };
-    const replyPromise = new Promise<{ text: string; audioPath?: string; superseded?: boolean }>(
-      (resolve) => {
-        resolveReply = resolve;
-      },
-    );
-    const timeout = setTimeout(() => {
-      logger.warn(
-        `discord voice: realtime reply timed out for guild ${params.entry.guildId} channel ${params.entry.channelId}`,
-      );
-      if (!sawAssistantOutput) {
-        fallbackToLegacy = true;
-        void resetDiscordRealtimeRuntime({ entry: params.entry, reason: "reply timeout", logger });
-      }
-      finish();
-    }, SPEAKING_READY_TIMEOUT_MS);
-    armFirstOutputTimeout("awaiting first output");
-    const unsubscribe = runtime.subscribe((event) => {
-      if (params.entry.realtimeEpoch !== replyEpoch || settled) {
-        return;
-      }
-      if (event.type === "transcript.updated" && event.item.role === "user") {
-        if (event.item.status === "final") {
-          userTranscript = event.item.text;
-        }
-        return;
-      }
-      if (event.type === "transcript.updated" && event.item.role === "assistant") {
-        sawAssistantOutput = true;
-        replyText = event.item.text;
-        return;
-      }
-      if (event.type === "audio.output") {
-        sawAssistantOutput = true;
-        audioChunks.push(event.audio.chunk);
-        return;
-      }
-      if (event.type === "tool.updated") {
-        sawToolActivity = true;
-        if (!sawAssistantOutput) {
-          armFirstOutputTimeout(`tool ${event.update.status}`);
-        }
-        return;
-      }
-      if (
-        event.type === "assistant.turn.updated" &&
-        (event.turn.state === "completed" || event.turn.state === "interrupted")
-      ) {
-        if (typeof event.turn.turnId === "string" && event.turn.turnId.trim()) {
-          providerTurnId = event.turn.turnId.trim();
-        }
-        logger.info(
-          `discord voice: realtime assistant turn ${event.turn.state} for guild ${params.entry.guildId} channel ${params.entry.channelId} afterOutput=${sawAssistantOutput} audioChunks=${audioChunks.length} textChars=${replyText.length} sawToolActivity=${sawToolActivity}`,
-        );
-        if (event.turn.state === "completed" && !sawAssistantOutput && sawToolActivity) {
-          logger.info(
-            `discord voice: realtime completed without output after tool activity for guild ${params.entry.guildId} channel ${params.entry.channelId}; waiting for continuation`,
-          );
-          armFirstOutputTimeout("awaiting post-tool continuation");
-          return;
-        }
-        if (event.turn.state === "interrupted" && !sawAssistantOutput) {
-          logger.info(
-            `discord voice: realtime turn superseded by newer speech for guild ${params.entry.guildId} channel ${params.entry.channelId}`,
-          );
-          settled = true;
-          clearTimeout(timeout);
-          if (firstOutputTimeout) {
-            clearTimeout(firstOutputTimeout);
-          }
-          unsubscribe();
-          resolveReply?.({ text: "", superseded: true });
-          return;
-        }
-        if (event.turn.state === "completed" && !sawAssistantOutput) {
-          logger.warn(
-            `discord voice: realtime completed with no output for guild ${params.entry.guildId} channel ${params.entry.channelId}; falling back to legacy`,
-          );
-          fallbackToLegacy = true;
-          void resetDiscordRealtimeRuntime({
-            entry: params.entry,
-            reason: "empty completion",
-            logger,
-          });
-        }
-        if (event.turn.state === "completed") {
-          void commitReplayHistory().finally(() => {
-            finish();
-          });
-          return;
-        }
-        finish();
-        return;
-      }
-      if (event.type === "fallback.changed") {
-        logger.warn(
-          `discord voice: realtime provider requested fallback for guild ${params.entry.guildId} channel ${params.entry.channelId} (${event.reason})`,
-        );
-        if (!sawAssistantOutput) {
-          fallbackToLegacy = true;
-        }
-        void resetDiscordRealtimeRuntime({ entry: params.entry, reason: "fallback", logger });
-        finish();
-        return;
-      }
-      if (event.type === "session.error") {
-        logger.warn(
-          `discord voice: realtime session error for guild ${params.entry.guildId} channel ${params.entry.channelId}: ${event.code} ${event.message}`,
-        );
-        if (!sawAssistantOutput) {
-          fallbackToLegacy = true;
-        }
-        void resetDiscordRealtimeRuntime({ entry: params.entry, reason: "session error", logger });
-        finish();
-      }
-    });
-
-    try {
-      logger.info(
-        `discord voice: submitting realtime audio for guild ${params.entry.guildId} channel ${params.entry.channelId} pcmBytes=${params.pcm.length}`,
-      );
-      await runtime.submitAudio(params.pcm, {
-        sampleRate: DISCORD_VOICE_SAMPLE_RATE,
-        channels: DISCORD_VOICE_CHANNELS,
-      });
-      return await replyPromise;
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      logger.warn(
-        `discord voice: realtime submit failed for guild ${params.entry.guildId} channel ${params.entry.channelId}: ${message}`,
-      );
-      logVoiceVerbose(
-        `realtime submit failed for guild ${params.entry.guildId} channel ${params.entry.channelId}: ${message}`,
-      );
-      await resetDiscordRealtimeRuntime({ entry: params.entry, reason: "submit failed", logger });
-      if (!sawAssistantOutput) {
-        fallbackToLegacy = true;
-      }
-      finish();
-      return await replyPromise;
-    }
   }
 
   private handleReceiveError(entry: VoiceSessionEntry, err: unknown) {

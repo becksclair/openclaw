@@ -5,10 +5,10 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { getDiscordRuntime } from "../runtime.js";
 
 const require = createRequire(import.meta.url);
 
@@ -138,7 +138,7 @@ export async function transcribeDiscordVoiceAudio(params: {
   agentId: string;
   filePath: string;
 }): Promise<string | undefined> {
-  const result = await transcribeAudioFile({
+  const result = await getDiscordRuntime().mediaUnderstanding.transcribeAudioFile({
     filePath: params.filePath,
     cfg: params.cfg,
     agentDir: resolveAgentDir(params.cfg, params.agentId),
