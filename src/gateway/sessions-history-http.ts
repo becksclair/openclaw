@@ -4,10 +4,6 @@ import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -33,8 +29,12 @@ import {
 
 const MAX_SESSION_HISTORY_LIMIT = 1000;
 
-function resolveSessionHistoryPath(req: IncomingMessage): string | null {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+function normalizeOptionalString(value: string | undefined | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function resolveSessionHistoryPath(url: URL): string | null {
   const match = url.pathname.match(/^\/sessions\/([^/]+)\/history$/);
   if (!match) {
     return null;
@@ -47,7 +47,7 @@ function resolveSessionHistoryPath(req: IncomingMessage): string | null {
 }
 
 function shouldStreamSse(req: IncomingMessage): boolean {
-  const accept = normalizeLowercaseStringOrEmpty(getHeader(req, "accept"));
+  const accept = getHeader(req, "accept")?.toLowerCase() ?? "";
   return accept.includes("text/event-stream");
 }
 
@@ -55,8 +55,8 @@ function getRequestUrl(req: IncomingMessage): URL {
   return new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 }
 
-function resolveLimit(req: IncomingMessage): number | undefined {
-  const raw = getRequestUrl(req).searchParams.get("limit");
+function resolveLimit(url: URL): number | undefined {
+  const raw = url.searchParams.get("limit");
   if (raw == null || raw.trim() === "") {
     return undefined;
   }
@@ -95,7 +95,8 @@ export async function handleSessionHistoryHttpRequest(
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
-  const sessionKey = resolveSessionHistoryPath(req);
+  const requestUrl = getRequestUrl(req);
+  const sessionKey = resolveSessionHistoryPath(requestUrl);
   if (sessionKey === null) {
     return false;
   }
@@ -121,8 +122,6 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
 
-  // HTTP callers must declare the same least-privilege operator scopes they
-  // intend to use over WS so both transport surfaces enforce the same gate.
   const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
   if (!scopeAuth.allowed) {
@@ -149,27 +148,23 @@ export async function handleSessionHistoryHttpRequest(
     });
     return true;
   }
-  const limit = resolveLimit(req);
-  const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
+  const limit = resolveLimit(requestUrl);
+  const cursor = normalizeOptionalString(requestUrl.searchParams.get("cursor"));
   const effectiveMaxChars =
     typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number"
       ? cfg.gateway.webchat.chatHistoryMaxChars
       : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  // Read the transcript once and derive both sanitized and raw views from the
-  // same snapshot, eliminating the theoretical race window where a concurrent
-  // write between two separate reads could cause seq/content divergence.
-  const rawSnapshot = entry?.sessionId
+  const rawSnapshot = entry.sessionId
     ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
     : [];
-  const historySnapshot = buildSessionHistorySnapshot({
-    rawMessages: rawSnapshot,
-    maxChars: effectiveMaxChars,
-    limit,
-    cursor,
-  });
-  const history = historySnapshot.history;
 
   if (!shouldStreamSse(req)) {
+    const history = buildSessionHistorySnapshot({
+      rawMessages: rawSnapshot,
+      maxChars: effectiveMaxChars,
+      limit,
+      cursor,
+    }).history;
     sendJson(res, 200, {
       sessionKey: target.canonicalKey,
       ...history,
@@ -177,7 +172,7 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
 
-  const transcriptCandidates = entry?.sessionId
+  const transcriptCandidates = entry.sessionId
     ? new Set(
         resolveSessionTranscriptCandidates(
           entry.sessionId,
@@ -190,7 +185,6 @@ export async function handleSessionHistoryHttpRequest(
       )
     : new Set<string>();
 
-  let sentHistory = history;
   const sseState = SessionHistorySseState.fromRawSnapshot({
     target: {
       sessionId: entry.sessionId,
@@ -202,7 +196,7 @@ export async function handleSessionHistoryHttpRequest(
     limit,
     cursor,
   });
-  sentHistory = sseState.snapshot();
+  let sentHistory = sseState.snapshot();
   setSseHeaders(res);
   res.write("retry: 1000\n\n");
   sseWrite(res, "history", {
@@ -217,7 +211,7 @@ export async function handleSessionHistoryHttpRequest(
   }, 15_000);
 
   const unsubscribe = onSessionTranscriptUpdate((update) => {
-    if (res.writableEnded || !entry?.sessionId) {
+    if (res.writableEnded || !entry.sessionId) {
       return;
     }
     const updatePath = canonicalizePath(update.sessionFile);
@@ -225,20 +219,20 @@ export async function handleSessionHistoryHttpRequest(
       return;
     }
     if (update.message !== undefined) {
-      if (limit === undefined && cursor === undefined) {
-        const nextEvent = sseState.appendInlineMessage({
-          message: update.message,
-          messageId: update.messageId,
-        });
-        if (!nextEvent) {
-          return;
-        }
+      const nextEvent = sseState.appendInlineUpdate({
+        update,
+        readPersistedCount:
+          limit === undefined && cursor === undefined
+            ? () => readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile).length
+            : undefined,
+      });
+      if (nextEvent) {
         sentHistory = sseState.snapshot();
         sseWrite(res, "message", {
           sessionKey: target.canonicalKey,
           message: nextEvent.message,
           ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-          messageSeq: nextEvent.messageSeq,
+          ...(typeof nextEvent.messageSeq === "number" ? { messageSeq: nextEvent.messageSeq } : {}),
         });
         return;
       }

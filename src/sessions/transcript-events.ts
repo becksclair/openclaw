@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+function normalizeOptionalString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
 
 export type SessionTranscriptUpdate = {
   sessionFile: string;
@@ -34,15 +37,13 @@ export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUp
   if (!trimmed) {
     return;
   }
+  const sessionKey = normalizeOptionalString(normalized.sessionKey);
+  const messageId = normalizeOptionalString(normalized.messageId);
   const nextUpdate: SessionTranscriptUpdate = {
     sessionFile: trimmed,
-    ...(normalizeOptionalString(normalized.sessionKey)
-      ? { sessionKey: normalizeOptionalString(normalized.sessionKey) }
-      : {}),
+    ...(sessionKey ? { sessionKey } : {}),
     ...(normalized.message !== undefined ? { message: normalized.message } : {}),
-    ...(normalizeOptionalString(normalized.messageId)
-      ? { messageId: normalizeOptionalString(normalized.messageId) }
-      : {}),
+    ...(messageId ? { messageId } : {}),
     ...(typeof normalized.messageSeq === "number" && Number.isFinite(normalized.messageSeq)
       ? { messageSeq: normalized.messageSeq }
       : {}),

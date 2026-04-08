@@ -9,7 +9,7 @@ import {
 } from "../../sessions/transcript-events.js";
 import { resolveDefaultSessionStorePath } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
+import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 export type TranscriptAppendTarget = {
@@ -26,8 +26,8 @@ export async function resolveTranscriptAppendTarget(params: {
 }): Promise<TranscriptAppendTarget | { ok: false; reason: string }> {
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
   const store = loadSessionStore(storePath, { skipCache: true });
-  const normalizedKey = normalizeStoreSessionKey(params.sessionKey);
-  const entry = (store[normalizedKey] ?? store[params.sessionKey]) as SessionEntry | undefined;
+  const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+  const entry = resolved.existing;
   if (!entry?.sessionId) {
     return { ok: false, reason: `unknown sessionKey: ${params.sessionKey}` };
   }
@@ -44,8 +44,8 @@ export async function resolveTranscriptAppendTarget(params: {
     });
     return {
       storePath,
-      normalizedKey,
-      entry,
+      normalizedKey: resolved.normalizedKey,
+      entry: resolvedSessionFile.sessionEntry,
       sessionFile: resolvedSessionFile.sessionFile,
     };
   } catch (err) {
@@ -133,7 +133,7 @@ export async function withPreparedSessionTranscriptLock<T>(params: {
       .catch(() => false);
     let prepared = false;
     const ensurePrepared = async (sessionManager: SessionManager) => {
-      if (prepared || hadSessionFile) {
+      if (prepared) {
         return;
       }
       await prepareSessionManagerForRun({

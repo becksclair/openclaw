@@ -1,3 +1,5 @@
+import type { SessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { resolveTranscriptUpdateMessageSeq } from "../sessions/transcript-message-seq.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   sanitizeChatHistoryMessages,
@@ -170,13 +172,37 @@ export class SessionHistorySseState {
     message: unknown;
     messageId?: string;
   }): { message: unknown; messageSeq?: number } | null {
-    if (this.limit !== undefined || this.cursor !== undefined) {
+    return this.appendInlineUpdate({
+      update: {
+        sessionFile: this.target.sessionFile ?? "",
+        message: update.message,
+        ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+      },
+    });
+  }
+
+  appendInlineUpdate(params: {
+    update: SessionTranscriptUpdate;
+    readPersistedCount?: () => number | undefined;
+  }): { message: unknown; messageSeq?: number } | null {
+    if (
+      this.limit !== undefined ||
+      this.cursor !== undefined ||
+      params.update.message === undefined
+    ) {
       return null;
     }
-    this.rawTranscriptSeq += 1;
-    const nextMessage = attachOpenClawTranscriptMeta(update.message, {
-      ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
-      seq: this.rawTranscriptSeq,
+    const nextSeq = resolveTranscriptUpdateMessageSeq({
+      update: params.update,
+      previousSeq: this.rawTranscriptSeq,
+      readPersistedCount: params.readPersistedCount,
+    });
+    if (typeof nextSeq === "number") {
+      this.rawTranscriptSeq = nextSeq;
+    }
+    const nextMessage = attachOpenClawTranscriptMeta(params.update.message, {
+      ...(typeof params.update.messageId === "string" ? { id: params.update.messageId } : {}),
+      ...(typeof nextSeq === "number" ? { seq: nextSeq } : {}),
     });
     const sanitized = sanitizeChatHistoryMessages([nextMessage], this.maxChars);
     if (sanitized.length === 0) {
