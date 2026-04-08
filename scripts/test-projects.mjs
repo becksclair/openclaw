@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mjs";
+import { createTestRunnerEnv } from "./lib/test-env-sanitizer.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 import {
@@ -177,74 +178,80 @@ async function runVitestSpecsParallel(specs, concurrency) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
-  const changedTargetArgs =
-    targetArgs.length === 0 ? resolveChangedTargetArgs(args, process.cwd()) : null;
-  const runSpecs =
-    targetArgs.length === 0 && changedTargetArgs === null
-      ? buildFullSuiteVitestRunPlans(args, process.cwd()).map((plan) => ({
-          config: plan.config,
-          continueOnFailure: true,
-          env: process.env,
-          includeFilePath: null,
-          includePatterns: null,
-          pnpmArgs: [
-            "exec",
-            "node",
-            ...resolveVitestNodeArgs(process.env),
-            resolveVitestCliEntry(),
-            ...(plan.watchMode ? [] : ["run"]),
-            "--config",
-            plan.config,
-            ...plan.forwardedArgs,
-          ],
-          watchMode: plan.watchMode,
-        }))
-      : createVitestRunSpecs(args, {
-          baseEnv: process.env,
-          cwd: process.cwd(),
-        });
+  const { env: testEnv, cleanup: cleanupTestRunnerEnv } = createTestRunnerEnv(process.env);
 
-  const isFullSuiteRun =
-    targetArgs.length === 0 &&
-    changedTargetArgs === null &&
-    !runSpecs.some((spec) => spec.watchMode);
-  if (isFullSuiteRun) {
-    const concurrency = resolveParallelFullSuiteConcurrency(runSpecs.length, process.env);
-    if (concurrency > 1) {
-      const parallelSpecs = orderFullSuiteSpecsForParallelRun(runSpecs);
-      console.error(
-        `[test] running ${parallelSpecs.length} Vitest shards with parallelism ${concurrency}`,
-      );
-      const parallelExitCode = await runVitestSpecsParallel(parallelSpecs, concurrency);
-      releaseLockOnce();
-      if (parallelExitCode !== 0) {
-        process.exit(parallelExitCode);
-      }
-      return;
-    }
-  }
+  try {
+    const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
+    const changedTargetArgs =
+      targetArgs.length === 0 ? resolveChangedTargetArgs(args, process.cwd()) : null;
+    const runSpecs =
+      targetArgs.length === 0 && changedTargetArgs === null
+        ? buildFullSuiteVitestRunPlans(args, process.cwd()).map((plan) => ({
+            config: plan.config,
+            continueOnFailure: true,
+            env: testEnv,
+            includeFilePath: null,
+            includePatterns: null,
+            pnpmArgs: [
+              "exec",
+              "node",
+              ...resolveVitestNodeArgs(testEnv),
+              resolveVitestCliEntry(),
+              ...(plan.watchMode ? [] : ["run"]),
+              "--config",
+              plan.config,
+              ...plan.forwardedArgs,
+            ],
+            watchMode: plan.watchMode,
+          }))
+        : createVitestRunSpecs(args, {
+            baseEnv: testEnv,
+            cwd: process.cwd(),
+          });
 
-  let exitCode = 0;
-  for (const spec of runSpecs) {
-    const result = await runVitestSpec(spec);
-    if (result.signal) {
-      releaseLockOnce();
-      process.kill(process.pid, result.signal);
-      return;
-    }
-    if (result.code !== 0) {
-      exitCode = exitCode || result.code;
-      if (spec.continueOnFailure !== true) {
+    const isFullSuiteRun =
+      targetArgs.length === 0 &&
+      changedTargetArgs === null &&
+      !runSpecs.some((spec) => spec.watchMode);
+    if (isFullSuiteRun) {
+      const concurrency = resolveParallelFullSuiteConcurrency(runSpecs.length, testEnv);
+      if (concurrency > 1) {
+        const parallelSpecs = orderFullSuiteSpecsForParallelRun(runSpecs);
+        console.error(
+          `[test] running ${parallelSpecs.length} Vitest shards with parallelism ${concurrency}`,
+        );
+        const parallelExitCode = await runVitestSpecsParallel(parallelSpecs, concurrency);
         releaseLockOnce();
-        process.exit(result.code);
+        if (parallelExitCode !== 0) {
+          process.exit(parallelExitCode);
+        }
+        return;
       }
     }
-  }
 
-  releaseLockOnce();
-  if (exitCode !== 0) {
-    process.exit(exitCode);
+    let exitCode = 0;
+    for (const spec of runSpecs) {
+      const result = await runVitestSpec(spec);
+      if (result.signal) {
+        releaseLockOnce();
+        process.kill(process.pid, result.signal);
+        return;
+      }
+      if (result.code !== 0) {
+        exitCode = exitCode || result.code;
+        if (spec.continueOnFailure !== true) {
+          releaseLockOnce();
+          process.exit(result.code);
+        }
+      }
+    }
+
+    releaseLockOnce();
+    if (exitCode !== 0) {
+      process.exit(exitCode);
+    }
+  } finally {
+    cleanupTestRunnerEnv();
   }
 }
 
