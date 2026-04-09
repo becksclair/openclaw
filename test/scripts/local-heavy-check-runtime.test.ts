@@ -22,6 +22,8 @@ const ROOMY_HOST = {
 function makeEnv(overrides: Record<string, string | undefined> = {}) {
   return {
     ...process.env,
+    GOGC: undefined,
+    GOMEMLIMIT: undefined,
     OPENCLAW_LOCAL_CHECK: "1",
     ...overrides,
   };

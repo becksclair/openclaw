@@ -1,4 +1,5 @@
 import os from "node:os";
+import path from "node:path";
 import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -48,6 +49,10 @@ function buildPrompt(
       },
     } satisfies OpenClawConfig,
   });
+}
+
+function resolveTestHomeDir(): string {
+  return path.resolve(process.env.HOME ?? os.homedir());
 }
 
 describe("formatSkillsCompact", () => {
@@ -227,7 +232,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     // Budget check must use the compacted length, not the longer canonical path.
     // If it used canonical paths, it would overestimate and potentially drop
     // skills that actually fit after compaction.
-    const home = os.homedir();
+    const home = resolveTestHomeDir();
     const skills = Array.from({ length: 30 }, (_, i) =>
       makeSkill(
         `skill-${i}`,
@@ -259,7 +264,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
   });
 
   it("resolvedSkills in snapshot keeps canonical paths, not compacted", () => {
-    const home = os.homedir();
+    const home = resolveTestHomeDir();
     const skills = Array.from({ length: 5 }, (_, i) =>
       makeSkill(`skill-${i}`, "A skill", `${home}/.openclaw/workspace/skills/skill-${i}/SKILL.md`),
     );

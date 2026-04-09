@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { buildWorkspaceSkillsPrompt } from "./skills.js";
 
@@ -25,11 +26,13 @@ describe("buildWorkspaceSkillsPrompt", () => {
       body: "# Workspace\n",
     });
 
-    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
-      bundledSkillsDir: bundledDir,
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      config: { skills: { allowBundled: ["missing-skill"] } },
-    });
+    const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, {
+        bundledSkillsDir: bundledDir,
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        config: { skills: { allowBundled: ["missing-skill"] } },
+      }),
+    );
 
     expect(prompt).toContain("Workspace version");
     expect(prompt).not.toContain("peekaboo");

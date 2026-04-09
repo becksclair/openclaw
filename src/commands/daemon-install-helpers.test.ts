@@ -407,7 +407,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome, OPENAI_API_KEY: undefined },
       port: 3000,
       runtime: "node",
     });

@@ -114,25 +114,38 @@ export function captureFullEnv() {
   };
 }
 
-export function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
+export function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T;
+export function withEnv<T>(
+  env: Record<string, string | undefined>,
+  fn: () => Promise<T>,
+): Promise<T>;
+export function withEnv<T>(
+  env: Record<string, string | undefined>,
+  fn: () => T | Promise<T>,
+): T | Promise<T> {
   const snapshot = captureEnv(Object.keys(env));
+  applyEnvValues(env);
+  let result: T | Promise<T>;
   try {
-    applyEnvValues(env);
-    return fn();
-  } finally {
+    result = fn();
+  } catch (error) {
     snapshot.restore();
+    throw error;
   }
+
+  if (result && typeof (result as Promise<T>).then === "function") {
+    return Promise.resolve(result).finally(() => {
+      snapshot.restore();
+    });
+  }
+
+  snapshot.restore();
+  return result;
 }
 
 export async function withEnvAsync<T>(
   env: Record<string, string | undefined>,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const snapshot = captureEnv(Object.keys(env));
-  try {
-    applyEnvValues(env);
-    return await fn();
-  } finally {
-    snapshot.restore();
-  }
+  return await withEnv(env, fn);
 }

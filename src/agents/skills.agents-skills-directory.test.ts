@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildWorkspaceSkillsPrompt } from "./skills.js";
 import { writeSkill } from "./skills.test-helpers.js";
 
@@ -31,14 +31,20 @@ async function createWorkspaceSkillDirs() {
 
 describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
   let fakeHome: string;
+  let previousHome: string | undefined;
 
   beforeEach(async () => {
     fakeHome = await createTempDir("openclaw-home-");
-    vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    previousHome = process.env.HOME;
+    process.env.HOME = fakeHome;
   });
 
   afterEach(async () => {
-    vi.restoreAllMocks();
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
     await Promise.all(
       tempDirs
         .splice(0, tempDirs.length)
@@ -137,5 +143,35 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
     expect(prompt).toContain("personal-only");
     expect(prompt).toContain("project-only");
     expect(prompt).toContain("workspace-only");
+  });
+
+  it("keeps personal .agents/skills bound to OS home, not OPENCLAW_HOME", async () => {
+    const { workspaceDir, managedDir, bundledDir } = await createWorkspaceSkillDirs();
+    const configuredHome = await createTempDir("openclaw-config-home-");
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = configuredHome;
+
+    try {
+      await writeSkill({
+        dir: path.join(fakeHome, ".agents", "skills", "personal-home-skill"),
+        name: "personal-home-skill",
+        description: "Personal OS home skill",
+      });
+      await writeSkill({
+        dir: path.join(configuredHome, ".agents", "skills", "configured-home-skill"),
+        name: "configured-home-skill",
+        description: "Configured OpenClaw home skill",
+      });
+
+      const prompt = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
+      expect(prompt).toContain("personal-home-skill");
+      expect(prompt).not.toContain("configured-home-skill");
+    } finally {
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+    }
   });
 });

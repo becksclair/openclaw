@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import { buildWorkspaceSkillsPrompt } from "./skills.js";
 import { writeSkill } from "./skills.test-helpers.js";
 
@@ -25,10 +26,12 @@ describe("compactSkillPaths", () => {
         description: "A test skill for path compaction",
       });
 
-      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
-        bundledSkillsDir: path.join(workspaceDir, ".bundled-empty"),
-        managedSkillsDir: path.join(workspaceDir, ".managed-empty"),
-      });
+      const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
+        buildWorkspaceSkillsPrompt(workspaceDir, {
+          bundledSkillsDir: path.join(workspaceDir, ".bundled-empty"),
+          managedSkillsDir: path.join(workspaceDir, ".managed-empty"),
+        }),
+      );
 
       const home = os.homedir();
       // The prompt should NOT contain the absolute home directory path
@@ -44,6 +47,35 @@ describe("compactSkillPaths", () => {
     });
   });
 
+  it("prefers OS home over OPENCLAW_HOME when compacting personal paths", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const configuredHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-state-home-"));
+      try {
+        const skillDir = path.join(workspaceDir, "skills", "test-skill");
+
+        await writeSkill({
+          dir: skillDir,
+          name: "test-skill",
+          description: "A test skill for path compaction",
+        });
+
+        const prompt = withEnv(
+          { HOME: workspaceDir, OPENCLAW_HOME: configuredHome, PATH: "" },
+          () =>
+            buildWorkspaceSkillsPrompt(workspaceDir, {
+              bundledSkillsDir: path.join(workspaceDir, ".bundled-empty"),
+              managedSkillsDir: path.join(workspaceDir, ".managed-empty"),
+            }),
+        );
+
+        expect(prompt).toContain("~/");
+        expect(prompt).not.toContain(`${workspaceDir}${path.sep}`);
+      } finally {
+        await fs.rm(configuredHome, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("preserves paths outside home directory", async () => {
     // Skills outside ~ should keep their absolute paths
     await withTempWorkspace(async (workspaceDir) => {
@@ -55,10 +87,12 @@ describe("compactSkillPaths", () => {
         description: "External skill",
       });
 
-      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
-        bundledSkillsDir: path.join(workspaceDir, ".bundled-empty"),
-        managedSkillsDir: path.join(workspaceDir, ".managed-empty"),
-      });
+      const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
+        buildWorkspaceSkillsPrompt(workspaceDir, {
+          bundledSkillsDir: path.join(workspaceDir, ".bundled-empty"),
+          managedSkillsDir: path.join(workspaceDir, ".managed-empty"),
+        }),
+      );
 
       // Should still contain a valid location tag
       expect(prompt).toMatch(/<location>[^<]+SKILL\.md<\/location>/);

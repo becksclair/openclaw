@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { loadWorkspaceSkillEntries } from "./skills.js";
 import { readSkillFrontmatterSafe } from "./skills/local-loader.js";
@@ -15,7 +15,13 @@ async function createTempWorkspaceDir() {
   return workspaceDir;
 }
 
+beforeEach(async () => {
+  const fakeHomeDir = await createTempWorkspaceDir();
+  vi.spyOn(os, "homedir").mockReturnValue(fakeHomeDir);
+});
+
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );

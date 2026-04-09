@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -67,12 +68,14 @@ async function writeEnvSkill(workspaceDir: string) {
 beforeAll(async () => {
   await fixtureSuite.setup();
   tempHome = await createTempHomeEnv("openclaw-skills-home-");
+  vi.spyOn(os, "homedir").mockImplementation(() => tempHome?.home ?? process.env.HOME ?? "");
   await fs.mkdir(path.join(tempHome.home, ".openclaw", "agents", "main", "sessions"), {
     recursive: true,
   });
 });
 
 afterAll(async () => {
+  vi.restoreAllMocks();
   if (tempHome) {
     await tempHome.restore();
     tempHome = null;
