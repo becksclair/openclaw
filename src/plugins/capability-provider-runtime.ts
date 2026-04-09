@@ -6,6 +6,7 @@ import {
 } from "./bundled-compat.js";
 import { resolveRuntimePluginRegistry } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { normalizeCapabilityProviderId } from "./provider-registry-shared.js";
 import type { PluginRegistry } from "./registry.js";
 
 type CapabilityProviderRegistryKey =
@@ -78,19 +79,56 @@ function resolveCapabilityProviderConfig(params: {
   });
 }
 
+function mergeCapabilityProviders<T>(
+  activeProviders: readonly T[],
+  loadedProviders: readonly T[],
+  getId: (provider: T) => string | undefined,
+): T[] {
+  if (activeProviders.length === 0) {
+    return [...loadedProviders];
+  }
+  if (loadedProviders.length === 0) {
+    return [...activeProviders];
+  }
+  const merged = [...activeProviders];
+  const seen = new Set(
+    activeProviders.map(getId).filter((providerId): providerId is string => Boolean(providerId)),
+  );
+  for (const provider of loadedProviders) {
+    const normalized = getId(provider);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    merged.push(provider);
+  }
+  return merged;
+}
+
 export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {
   key: K;
   cfg?: OpenClawConfig;
 }): CapabilityProviderForKey<K>[] {
   const activeRegistry = resolveRuntimePluginRegistry();
-  const activeProviders = activeRegistry?.[params.key] ?? [];
-  if (activeProviders.length > 0) {
-    return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
-  }
-  const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
-  const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
-  const registry = resolveRuntimePluginRegistry(loadOptions);
-  return (registry?.[params.key] ?? []).map(
+  const activeProviders = (activeRegistry?.[params.key] ?? []).map(
     (entry) => entry.provider,
   ) as CapabilityProviderForKey<K>[];
+  if (params.cfg === undefined && activeProviders.length > 0) {
+    return activeProviders;
+  }
+  const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
+  const loadOptions =
+    compatConfig === undefined
+      ? undefined
+      : {
+          config: compatConfig,
+          activate: false,
+          cache: false,
+        };
+  const loadedProviders = (resolveRuntimePluginRegistry(loadOptions)?.[params.key] ?? []).map(
+    (entry) => entry.provider,
+  ) as CapabilityProviderForKey<K>[];
+  return mergeCapabilityProviders(activeProviders, loadedProviders, (provider) =>
+    normalizeCapabilityProviderId((provider as { id?: string }).id),
+  );
 }

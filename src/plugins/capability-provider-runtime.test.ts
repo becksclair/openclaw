@@ -74,6 +74,8 @@ function expectBundledCompatLoadPath(params: {
   });
   expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
     config: params.enablementCompat,
+    activate: false,
+    cache: false,
   });
 }
 
@@ -183,7 +185,7 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
   });
 
-  it("keeps active capability providers even when cfg is passed", () => {
+  it("merges config-compatible providers when the active registry is partial", () => {
     const active = createEmptyPluginRegistry();
     active.speechProviders.push({
       pluginId: "microsoft",
@@ -202,8 +204,44 @@ describe("resolvePluginCapabilityProviders", () => {
         }),
       },
     } as never);
+    const compatLoaded = createEmptyPluginRegistry();
+    compatLoaded.speechProviders.push(
+      {
+        pluginId: "microsoft",
+        pluginName: "microsoft",
+        source: "test",
+        provider: {
+          id: "microsoft",
+          label: "microsoft",
+          aliases: ["edge"],
+          isConfigured: () => true,
+          synthesize: async () => ({
+            audioBuffer: Buffer.from("x"),
+            outputFormat: "mp3",
+            voiceCompatible: false,
+            fileExtension: ".mp3",
+          }),
+        },
+      } as never,
+      {
+        pluginId: "elevenlabs",
+        pluginName: "elevenlabs",
+        source: "test",
+        provider: {
+          id: "elevenlabs",
+          label: "elevenlabs",
+          isConfigured: () => true,
+          synthesize: async () => ({
+            audioBuffer: Buffer.from("x"),
+            outputFormat: "mp3",
+            voiceCompatible: false,
+            fileExtension: ".mp3",
+          }),
+        },
+      } as never,
+    );
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
-      params === undefined ? active : createEmptyPluginRegistry(),
+      params === undefined ? active : compatLoaded,
     );
 
     const providers = resolvePluginCapabilityProviders({
@@ -211,10 +249,12 @@ describe("resolvePluginCapabilityProviders", () => {
       cfg: { messages: { tts: { provider: "edge" } } } as OpenClawConfig,
     });
 
-    expectResolvedCapabilityProviderIds(providers, ["microsoft"]);
+    expectResolvedCapabilityProviderIds(providers, ["microsoft", "elevenlabs"]);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
-    expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalledWith({
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: expect.anything(),
+      activate: false,
+      cache: false,
     });
   });
 
@@ -250,6 +290,8 @@ describe("resolvePluginCapabilityProviders", () => {
     expectNoResolvedCapabilityProviders(providers);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: expect.anything(),
+      activate: false,
+      cache: false,
     });
   });
 
@@ -290,6 +332,10 @@ describe("resolvePluginCapabilityProviders", () => {
       config: undefined,
       env: process.env,
     });
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({ config: compatConfig });
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
+      config: compatConfig,
+      activate: false,
+      cache: false,
+    });
   });
 });

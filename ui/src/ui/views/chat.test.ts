@@ -1104,6 +1104,42 @@ describe("chat view", () => {
     expect(modelSelect?.disabled).toBe(true);
   });
 
+  it("includes configured agent main sessions in the chat session picker even before they have history", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.hello = {
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "pi",
+          mainKey: "main",
+          mainSessionKey: "main",
+        },
+      },
+    } as AppViewState["hello"];
+    state.agentsList = {
+      defaultId: "pi",
+      mainKey: "main",
+      scope: "agents",
+      agents: [
+        { id: "pi", name: "Pi" },
+        { id: "luke", name: "Luke" },
+      ],
+    } as AppViewState["agentsList"];
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const sessionSelect = container.querySelector<HTMLSelectElement>(
+      ".chat-controls__session-row select:not([data-chat-model-select]):not([data-chat-thinking-select])",
+    );
+    expect(sessionSelect).not.toBeNull();
+
+    const optionValues = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map(
+      (option) => option.value,
+    );
+    expect(optionValues).toContain("main");
+    expect(optionValues).toContain("agent:luke:main");
+  });
+
   it("keeps the selected model visible when the active session is absent from sessions.list", async () => {
     vi.stubGlobal(
       "fetch",

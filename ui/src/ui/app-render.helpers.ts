@@ -15,7 +15,7 @@ import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
-import { parseAgentSessionKey } from "./session-key.ts";
+import { buildAgentMainSessionKey, parseAgentSessionKey } from "./session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import {
@@ -26,19 +26,23 @@ import {
 import type { SessionsListResult } from "./types.ts";
 
 type SessionDefaultsSnapshot = {
+  defaultAgentId?: string;
   mainSessionKey?: string;
   mainKey?: string;
 };
 
+function resolveSessionDefaultsSnapshot(state: AppViewState): SessionDefaultsSnapshot | undefined {
+  return (state.hello?.snapshot as { sessionDefaults?: SessionDefaultsSnapshot } | undefined)
+    ?.sessionDefaults;
+}
+
 function resolveSidebarChatSessionKey(state: AppViewState): string {
-  const snapshot = state.hello?.snapshot as
-    | { sessionDefaults?: SessionDefaultsSnapshot }
-    | undefined;
-  const mainSessionKey = normalizeOptionalString(snapshot?.sessionDefaults?.mainSessionKey);
+  const sessionDefaults = resolveSessionDefaultsSnapshot(state);
+  const mainSessionKey = normalizeOptionalString(sessionDefaults?.mainSessionKey);
   if (mainSessionKey) {
     return mainSessionKey;
   }
-  const mainKey = normalizeOptionalString(snapshot?.sessionDefaults?.mainKey);
+  const mainKey = normalizeOptionalString(sessionDefaults?.mainKey);
   if (mainKey) {
     return mainKey;
   }
@@ -908,6 +912,35 @@ type SessionOptionGroup = {
   options: SessionOptionEntry[];
 };
 
+function resolveConfiguredAgentMainSessionKeys(state: AppViewState): string[] {
+  const sessionDefaults = resolveSessionDefaultsSnapshot(state);
+  const mainKey = normalizeOptionalString(sessionDefaults?.mainKey);
+  const defaultAgentId =
+    normalizeOptionalString(sessionDefaults?.defaultAgentId) ??
+    normalizeOptionalString(state.agentsList?.defaultId);
+  const mainSessionKey = normalizeOptionalString(sessionDefaults?.mainSessionKey);
+  const configuredAgents = state.agentsList?.agents ?? [];
+  const seen = new Set<string>();
+  const keys: string[] = [];
+  for (const agent of configuredAgents) {
+    const agentId = normalizeOptionalString(agent.id);
+    if (!agentId) {
+      continue;
+    }
+    const key =
+      defaultAgentId &&
+      normalizeLowercaseStringOrEmpty(agentId) === normalizeLowercaseStringOrEmpty(defaultAgentId)
+        ? (mainSessionKey ?? buildAgentMainSessionKey({ agentId, ...(mainKey ? { mainKey } : {}) }))
+        : buildAgentMainSessionKey({ agentId, ...(mainKey ? { mainKey } : {}) });
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
 export function resolveSessionOptionGroups(
   state: AppViewState,
   sessionKey: string,
@@ -969,6 +1002,9 @@ export function resolveSessionOptionGroups(
     addOption(row.key);
   }
   addOption(sessionKey);
+  for (const key of resolveConfiguredAgentMainSessionKeys(state)) {
+    addOption(key);
+  }
 
   for (const group of groups.values()) {
     const counts = new Map<string, number>();

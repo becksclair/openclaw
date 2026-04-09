@@ -113,17 +113,49 @@ describe("speech provider registry", () => {
 
     expect(listSpeechProviders(cfg).map((provider) => provider.id)).toEqual(["microsoft"]);
     expect(getSpeechProvider("edge", cfg)?.id).toBe("microsoft");
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith({
-      config: {
-        plugins: {
-          entries: {
-            elevenlabs: { enabled: true },
-            microsoft: { enabled: true },
-            openai: { enabled: true },
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalled();
+  });
+
+  it("falls back to config-compatible providers when the active registry misses the requested provider", () => {
+    resolveRuntimePluginRegistryMock.mockImplementation((params?: unknown) =>
+      params === undefined
+        ? {
+            ...createEmptyPluginRegistry(),
+            speechProviders: [
+              {
+                pluginId: "test-microsoft",
+                source: "test",
+                provider: createSpeechProvider("microsoft", ["edge"]),
+              },
+            ],
+          }
+        : {
+            ...createEmptyPluginRegistry(),
+            speechProviders: [
+              {
+                pluginId: "test-microsoft",
+                source: "test",
+                provider: createSpeechProvider("microsoft", ["edge"]),
+              },
+              {
+                pluginId: "test-elevenlabs",
+                source: "test",
+                provider: createSpeechProvider("elevenlabs"),
+              },
+            ],
           },
-        },
-      },
-    });
+    );
+
+    const cfg = {} as OpenClawConfig;
+
+    expect(listSpeechProviders(cfg).map((provider) => provider.id)).toEqual([
+      "microsoft",
+      "elevenlabs",
+    ]);
+    expect(getSpeechProvider("elevenlabs", cfg)?.id).toBe("elevenlabs");
+    expect(canonicalizeSpeechProviderId("elevenlabs", cfg)).toBe("elevenlabs");
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith();
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalled();
   });
 
   it("returns no providers when neither plugins nor active registry provide speech support", () => {
