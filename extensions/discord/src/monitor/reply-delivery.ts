@@ -22,7 +22,12 @@ import { resolveDiscordAccount } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { isLikelyDiscordVideoMedia } from "../media-detection.js";
 import { createDiscordRetryRunner } from "../retry.js";
-import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
+import {
+  sendDiscordVoicePayload,
+  sendMessageDiscord,
+  sendVoiceMessageDiscord,
+  sendWebhookMessageDiscord,
+} from "../send.js";
 import { sendDiscordText } from "../send.shared.js";
 
 export type DiscordThreadBindingLookupRecord = {
@@ -118,14 +123,14 @@ async function sendDiscordMediaBatch(params: {
   cfg: OpenClawConfig;
   token: string;
   rest?: RequestClient;
-  mediaUrls: string[];
+  mediaUrls: readonly string[];
   accountId?: string;
   mediaLocalRoots?: readonly string[];
   replyTo: () => string | undefined;
   retryConfig: ResolvedRetryConfig;
 }): Promise<void> {
   await sendMediaWithLeadingCaption({
-    mediaUrls: params.mediaUrls,
+    mediaUrls: [...params.mediaUrls],
     caption: "",
     send: async ({ mediaUrl }) => {
       await sendDiscordMediaOnly({
@@ -459,21 +464,55 @@ export async function deliverDiscordReply(params: {
     if (!firstMedia) {
       continue;
     }
-    // Voice message path: audioAsVoice flag routes through sendVoiceMessageDiscord.
     if (payload.audioAsVoice) {
       const replyTo = resolvePayloadReplyTo();
-      await sendVoiceMessageDiscord(params.target, firstMedia, {
-        cfg: params.cfg,
-        token: params.token,
-        rest: params.rest,
-        accountId: params.accountId,
-        replyTo,
+      await sendDiscordVoicePayload({
+        target: params.target,
+        text: reply.text,
+        trailingMediaUrls: reply.mediaUrls.slice(1),
+        sendVoiceMessage: async () =>
+          await sendVoiceMessageDiscord(params.target, firstMedia, {
+            cfg: params.cfg,
+            token: params.token,
+            rest: params.rest,
+            accountId: params.accountId,
+            mediaLocalRoots: params.mediaLocalRoots,
+            replyTo,
+            threadStarterText: reply.text,
+          }),
+        sendText: async ({ target, channelId }, text) =>
+          await sendDiscordPayloadText({
+            cfg: params.cfg,
+            target,
+            text,
+            token: params.token,
+            rest: params.rest,
+            accountId: params.accountId,
+            textLimit: params.textLimit,
+            maxLinesPerMessage: params.maxLinesPerMessage,
+            resolveReplyTo: resolvePayloadReplyTo,
+            binding,
+            chunkMode: params.chunkMode,
+            username: persona.username,
+            avatarUrl: persona.avatarUrl,
+            channelId,
+            request,
+            retryConfig,
+          }),
+        sendTrailingMedia: async ({ target }, mediaUrls) =>
+          await sendDiscordMediaBatch({
+            target,
+            cfg: params.cfg,
+            token: params.token,
+            rest: params.rest,
+            mediaUrls,
+            accountId: params.accountId,
+            mediaLocalRoots: params.mediaLocalRoots,
+            replyTo: resolvePayloadReplyTo,
+            retryConfig,
+          }),
       });
       deliveredAny = true;
-      // Voice messages cannot include text; send remaining text separately if present.
-      await sendReplyText();
-      // Additional media items are sent as regular attachments (voice is single-file only).
-      await sendReplyMediaBatch(reply.mediaUrls.slice(1));
       continue;
     }
 

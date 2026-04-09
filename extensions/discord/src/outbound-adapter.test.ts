@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordOutboundHoisted,
   expectDiscordThreadBotSend,
@@ -237,6 +237,124 @@ describe("discordOutbound", () => {
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-2",
+      channelId: "ch-1",
+    });
+  });
+
+  it("routes audioAsVoice payloads through Discord voice bubbles", async () => {
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "Read this out loud",
+        mediaUrls: ["https://example.com/voice.opus"],
+        audioAsVoice: true,
+      },
+      accountId: "default",
+      replyToId: "reply-1",
+    });
+
+    expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:123456",
+      "https://example.com/voice.opus",
+      expect.objectContaining({
+        accountId: "default",
+        replyTo: "reply-1",
+      }),
+    );
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:123456",
+      "Read this out loud",
+      expect.objectContaining({
+        accountId: "default",
+        replyTo: "reply-1",
+      }),
+    );
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "msg-1",
+      channelId: "ch-1",
+    });
+  });
+
+  it("forwards local media access when routing audioAsVoice payloads", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("voice"));
+
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "Read this out loud",
+        mediaUrls: ["/tmp/voice.opus"],
+        audioAsVoice: true,
+      },
+      accountId: "default",
+      mediaLocalRoots: ["/tmp/media"],
+      mediaReadFile,
+      mediaAccess: {
+        localRoots: ["/tmp/media"],
+        readFile: mediaReadFile,
+      },
+    });
+
+    expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:123456",
+      "/tmp/voice.opus",
+      expect.objectContaining({
+        accountId: "default",
+        mediaLocalRoots: ["/tmp/media"],
+        mediaReadFile,
+        mediaAccess: {
+          localRoots: ["/tmp/media"],
+          readFile: mediaReadFile,
+        },
+      }),
+    );
+  });
+
+  it("uses the voice-created thread for follow-up media without duplicating consumed text", async () => {
+    hoisted.sendVoiceMessageDiscordMock.mockResolvedValueOnce({
+      messageId: "voice-1",
+      channelId: "thread-9",
+    });
+
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:forum-parent",
+      text: "",
+      payload: {
+        text: "Thread intro",
+        mediaUrls: ["https://example.com/voice.opus", "https://example.com/extra.png"],
+        audioAsVoice: true,
+      },
+      accountId: "default",
+      replyToId: "reply-1",
+      mediaLocalRoots: ["/tmp/media"],
+    });
+
+    expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:forum-parent",
+      "https://example.com/voice.opus",
+      expect.objectContaining({
+        threadStarterText: "Thread intro",
+        mediaLocalRoots: ["/tmp/media"],
+      }),
+    );
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:thread-9",
+      "",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/extra.png",
+        mediaLocalRoots: ["/tmp/media"],
+        replyTo: "reply-1",
+      }),
+    );
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "msg-1",
       channelId: "ch-1",
     });
   });

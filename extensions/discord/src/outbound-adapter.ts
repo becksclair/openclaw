@@ -21,7 +21,14 @@ import type { DiscordComponentMessageSpec } from "./components.js";
 import { getThreadBindingManager, type ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
 import { sendDiscordComponentMessage } from "./send.components.js";
-import { sendMessageDiscord, sendPollDiscord, sendWebhookMessageDiscord } from "./send.js";
+import {
+  sendDiscordVoicePayload,
+  sendMessageDiscord,
+  sendPollDiscord,
+  sendVoiceMessageDiscord,
+  sendWebhookMessageDiscord,
+} from "./send.js";
+import type { DiscordSendResult } from "./send.js";
 import { buildDiscordInteractiveComponents } from "./shared-interactive.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
@@ -118,6 +125,65 @@ async function maybeSendDiscordWebhookText(params: {
   return result;
 }
 
+async function sendDiscordAudioAsVoice(params: {
+  cfg?: OpenClawConfig;
+  target: string;
+  mediaUrl: string;
+  trailingMediaUrls?: readonly string[];
+  text?: string;
+  accountId?: string | null;
+  deps?: Record<string, unknown>;
+  replyToId?: string | null;
+  silent?: boolean;
+  mediaAccess?: NonNullable<Parameters<typeof sendMessageDiscord>[2]>["mediaAccess"];
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: NonNullable<Parameters<typeof sendMessageDiscord>[2]>["mediaReadFile"];
+}): Promise<{ messageId: string; channelId: string }> {
+  const send =
+    resolveOutboundSendDep<typeof sendMessageDiscord>(params.deps, "discord") ?? sendMessageDiscord;
+  return await sendDiscordVoicePayload({
+    target: params.target,
+    text: params.text,
+    trailingMediaUrls: params.trailingMediaUrls,
+    sendVoiceMessage: async () =>
+      await sendVoiceMessageDiscord(params.target, params.mediaUrl, {
+        cfg: params.cfg,
+        accountId: params.accountId ?? undefined,
+        mediaAccess: params.mediaAccess,
+        mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
+        replyTo: params.replyToId ?? undefined,
+        silent: params.silent ?? undefined,
+        threadStarterText: params.text,
+      }),
+    sendText: async ({ target }, text) =>
+      await send(target, text, {
+        verbose: false,
+        replyTo: params.replyToId ?? undefined,
+        accountId: params.accountId ?? undefined,
+        silent: params.silent ?? undefined,
+        cfg: params.cfg,
+      }),
+    sendTrailingMedia: async ({ target }, mediaUrls) => {
+      let result: DiscordSendResult | undefined;
+      for (const mediaUrl of mediaUrls) {
+        result = await send(target, "", {
+          verbose: false,
+          mediaUrl,
+          mediaAccess: params.mediaAccess,
+          mediaLocalRoots: params.mediaLocalRoots,
+          mediaReadFile: params.mediaReadFile,
+          replyTo: params.replyToId ?? undefined,
+          accountId: params.accountId ?? undefined,
+          silent: params.silent ?? undefined,
+          cfg: params.cfg,
+        });
+      }
+      return result;
+    },
+  });
+}
+
 export const discordOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
@@ -143,6 +209,29 @@ export const discordOutbound: ChannelOutboundAdapter = {
             text: payload.text?.trim() ? payload.text : undefined,
           }
       : undefined;
+    const send =
+      resolveOutboundSendDep<typeof sendMessageDiscord>(ctx.deps, "discord") ?? sendMessageDiscord;
+    const target = resolveDiscordOutboundTarget({ to: ctx.to, threadId: ctx.threadId });
+    const mediaUrls = resolvePayloadMediaUrls(payload);
+    if (payload.audioAsVoice && mediaUrls.length > 0) {
+      return attachChannelToResult(
+        "discord",
+        await sendDiscordAudioAsVoice({
+          cfg: ctx.cfg,
+          target,
+          mediaUrl: mediaUrls[0],
+          trailingMediaUrls: mediaUrls.slice(1),
+          text: payload.text,
+          accountId: ctx.accountId,
+          deps: ctx.deps,
+          replyToId: ctx.replyToId,
+          silent: ctx.silent,
+          mediaAccess: ctx.mediaAccess,
+          mediaLocalRoots: ctx.mediaLocalRoots,
+          mediaReadFile: ctx.mediaReadFile,
+        }),
+      );
+    }
     if (!componentSpec) {
       return await sendTextMediaPayload({
         channel: "discord",
@@ -153,10 +242,6 @@ export const discordOutbound: ChannelOutboundAdapter = {
         adapter: discordOutbound,
       });
     }
-    const send =
-      resolveOutboundSendDep<typeof sendMessageDiscord>(ctx.deps, "discord") ?? sendMessageDiscord;
-    const target = resolveDiscordOutboundTarget({ to: ctx.to, threadId: ctx.threadId });
-    const mediaUrls = resolvePayloadMediaUrls(payload);
     const result = await sendPayloadMediaSequenceOrFallback({
       text: payload.text ?? "",
       mediaUrls,
@@ -234,10 +319,26 @@ export const discordOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       silent,
+      audioAsVoice,
     }) => {
+      const target = resolveDiscordOutboundTarget({ to, threadId });
+      if (audioAsVoice && mediaUrl) {
+        return await sendDiscordAudioAsVoice({
+          cfg,
+          target,
+          mediaUrl,
+          text,
+          accountId,
+          deps,
+          replyToId,
+          silent,
+          mediaLocalRoots,
+          mediaReadFile,
+        });
+      }
       const send =
         resolveOutboundSendDep<typeof sendMessageDiscord>(deps, "discord") ?? sendMessageDiscord;
-      return await send(resolveDiscordOutboundTarget({ to, threadId }), text, {
+      return await send(target, text, {
         verbose: false,
         mediaUrl,
         mediaLocalRoots,

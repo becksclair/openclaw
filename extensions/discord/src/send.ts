@@ -41,6 +41,7 @@ export {
 export {
   sendMessageDiscord,
   sendPollDiscord,
+  sendDiscordVoicePayload,
   sendStickerDiscord,
   sendWebhookMessageDiscord,
   sendVoiceMessageDiscord,

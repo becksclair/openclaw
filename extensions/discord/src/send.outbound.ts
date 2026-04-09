@@ -6,6 +6,7 @@ import { ChannelType, Routes } from "discord-api-types/v10";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import { maxBytesForKind } from "openclaw/plugin-sdk/media-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
@@ -503,17 +504,32 @@ type VoiceMessageOpts = {
   cfg?: OpenClawConfig;
   token?: string;
   accountId?: string;
+  mediaAccess?: DiscordSendOpts["mediaAccess"];
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   verbose?: boolean;
   rest?: RequestClient;
   replyTo?: string;
   retry?: RetryConfig;
   silent?: boolean;
+  threadStarterText?: string;
 };
 
-async function materializeVoiceMessageInput(mediaUrl: string): Promise<{ filePath: string }> {
+async function materializeVoiceMessageInput(
+  mediaUrl: string,
+  opts: Pick<VoiceMessageOpts, "mediaAccess" | "mediaLocalRoots" | "mediaReadFile"> = {},
+): Promise<{ filePath: string }> {
   // Security: reuse the standard media loader so we apply SSRF guards + allowed-local-root checks.
   // Then write to a private temp file so ffmpeg/ffprobe never sees the original URL/path string.
-  const media = await loadWebMediaRaw(mediaUrl, maxBytesForKind("audio"));
+  const media = await loadWebMediaRaw(
+    mediaUrl,
+    buildOutboundMediaLoadOptions({
+      maxBytes: maxBytesForKind("audio"),
+      mediaAccess: opts.mediaAccess,
+      mediaLocalRoots: opts.mediaLocalRoots,
+      mediaReadFile: opts.mediaReadFile,
+    }),
+  );
   const extFromName = media.fileName ? path.extname(media.fileName) : "";
   const extFromMime = media.contentType ? extensionForMime(media.contentType) : "";
   const ext = extFromName || extFromMime || ".bin";
@@ -521,6 +537,33 @@ async function materializeVoiceMessageInput(mediaUrl: string): Promise<{ filePat
   const filePath = path.join(tempDir, `voice-src-${crypto.randomUUID()}${ext}`);
   await fs.writeFile(filePath, media.buffer, { mode: 0o600 });
   return { filePath };
+}
+
+async function createForumLikeVoiceThread(params: {
+  rest: RequestClient;
+  request: DiscordClientRequest;
+  parentChannelId: string;
+  starterText?: string;
+  silent?: boolean;
+}): Promise<{ threadId: string }> {
+  const threadName = deriveForumThreadName(params.starterText ?? "");
+  const starterContent = normalizeOptionalString(params.starterText) ?? threadName;
+  const starterFlags = params.silent ? 1 << 12 : undefined;
+  const starterPayload: MessagePayloadObject = buildDiscordMessagePayload({
+    text: starterContent,
+    flags: starterFlags,
+  });
+  const threadRes = (await params.request(
+    () =>
+      params.rest.post(Routes.threads(params.parentChannelId), {
+        body: {
+          name: threadName,
+          message: stripUndefinedFields(serializePayload(starterPayload)),
+        },
+      }) as Promise<{ id: string }>,
+    "forum-thread",
+  )) as { id: string };
+  return { threadId: threadRes.id };
 }
 
 /**
@@ -538,7 +581,7 @@ export async function sendVoiceMessageDiscord(
   audioPath: string,
   opts: VoiceMessageOpts = {},
 ): Promise<DiscordSendResult> {
-  const { filePath: localInputPath } = await materializeVoiceMessageInput(audioPath);
+  const { filePath: localInputPath } = await materializeVoiceMessageInput(audioPath, opts);
   let oggPath: string | null = null;
   let oggCleanup = false;
   let token: string | undefined;
@@ -557,6 +600,17 @@ export async function sendVoiceMessageDiscord(
     const request = client.request;
     const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
     channelId = (await resolveChannelId(rest, recipient, request)).channelId;
+    if (isForumLikeType(await resolveDiscordChannelType(rest, channelId))) {
+      channelId = (
+        await createForumLikeVoiceThread({
+          rest,
+          request,
+          parentChannelId: channelId,
+          starterText: opts.threadStarterText,
+          silent: opts.silent,
+        })
+      ).threadId;
+    }
 
     // Convert to OGG/Opus if needed
     const ogg = await ensureOggOpus(localInputPath);
@@ -602,4 +656,53 @@ export async function sendVoiceMessageDiscord(
     await unlinkIfExists(oggCleanup ? oggPath : null);
     await unlinkIfExists(localInputPath);
   }
+}
+
+export async function sendDiscordVoicePayload(params: {
+  target: string;
+  text?: string;
+  trailingMediaUrls?: readonly string[];
+  sendVoiceMessage: () => Promise<DiscordSendResult>;
+  sendText?: (
+    followUp: {
+      target: string;
+      channelId: string;
+      voiceSendCreatedThread: boolean;
+    },
+    text: string,
+  ) => Promise<DiscordSendResult | void>;
+  sendTrailingMedia?: (
+    followUp: {
+      target: string;
+      channelId: string;
+      voiceSendCreatedThread: boolean;
+    },
+    mediaUrls: readonly string[],
+  ) => Promise<DiscordSendResult | void>;
+}): Promise<DiscordSendResult> {
+  let result = await params.sendVoiceMessage();
+  const followUp = {
+    target: `channel:${result.channelId}`,
+    channelId: result.channelId,
+    voiceSendCreatedThread:
+      params.target.startsWith("channel:") &&
+      params.target.slice("channel:".length) !== result.channelId,
+  };
+
+  if (params.text?.trim() && !followUp.voiceSendCreatedThread) {
+    const textResult = await params.sendText?.(followUp, params.text);
+    if (textResult) {
+      result = textResult;
+    }
+  }
+
+  const trailingMediaUrls = (params.trailingMediaUrls ?? []).filter((mediaUrl) => mediaUrl);
+  if (trailingMediaUrls.length > 0) {
+    const mediaResult = await params.sendTrailingMedia?.(followUp, trailingMediaUrls);
+    if (mediaResult) {
+      result = mediaResult;
+    }
+  }
+
+  return result;
 }

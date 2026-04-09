@@ -123,10 +123,13 @@ describe("deliverDiscordReply", () => {
       messageId: "msg-1",
       channelId: "channel-1",
     });
-    sendVoiceMessageDiscordMock.mockClear().mockResolvedValue({
+    sendVoiceMessageDiscordMock.mockClear().mockImplementation(async (target: unknown) => ({
       messageId: "voice-1",
-      channelId: "channel-1",
-    });
+      channelId:
+        typeof target === "string" && target.startsWith("channel:")
+          ? target.slice("channel:".length)
+          : "dm-1",
+    }));
     sendWebhookMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "webhook-1",
       channelId: "thread-1",
@@ -177,6 +180,77 @@ describe("deliverDiscordReply", () => {
       expect.objectContaining({
         token: "token",
         mediaUrl: "https://example.com/extra.mp3",
+        replyTo: "reply-1",
+      }),
+    );
+  });
+
+  it("routes auto-TTS Opus payloads through the native Discord voice bubble path", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          mediaUrl: "https://example.com/voice.opus",
+          audioAsVoice: true,
+        },
+      ],
+      target: "channel:456",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendVoiceMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendVoiceMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:456",
+      "https://example.com/voice.opus",
+      expect.objectContaining({ token: "token", replyTo: undefined }),
+    );
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(sendWebhookMessageDiscordMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the created thread for follow-up media when a voice send targets a forum parent", async () => {
+    sendVoiceMessageDiscordMock.mockResolvedValueOnce({
+      messageId: "voice-1",
+      channelId: "thread-42",
+    });
+
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "Hello there",
+          mediaUrls: ["https://example.com/voice.ogg", "https://example.com/extra.mp3"],
+          audioAsVoice: true,
+        },
+      ],
+      target: "channel:forum-parent",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      replyToId: "reply-1",
+      mediaLocalRoots: ["/tmp/agent-root"],
+    });
+
+    expect(sendVoiceMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:forum-parent",
+      "https://example.com/voice.ogg",
+      expect.objectContaining({
+        token: "token",
+        replyTo: "reply-1",
+        mediaLocalRoots: ["/tmp/agent-root"],
+        threadStarterText: "Hello there",
+      }),
+    );
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:thread-42",
+      "",
+      expect.objectContaining({
+        token: "token",
+        mediaUrl: "https://example.com/extra.mp3",
+        mediaLocalRoots: ["/tmp/agent-root"],
         replyTo: "reply-1",
       }),
     );
