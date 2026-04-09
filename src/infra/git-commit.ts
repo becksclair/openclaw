@@ -104,8 +104,15 @@ const readCommitFromGit = (
     if (!refPath) {
       return null;
     }
-    const refHash = safeReadFilePrefix(refPath).trim();
-    return formatCommit(refHash);
+    try {
+      const refHash = safeReadFilePrefix(refPath).trim();
+      return formatCommit(refHash);
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+      return readPackedRefCommit(headPath, ref);
+    }
   }
   return formatCommit(head);
 };
@@ -144,6 +151,29 @@ const resolveRefPath = (headPath: string, ref: string) => {
     return null;
   }
   return resolved;
+};
+
+const readPackedRefCommit = (headPath: string, ref: string) => {
+  const packedRefsPath = path.join(resolveGitRefsBase(headPath), "packed-refs");
+  try {
+    const packedRefs = fs.readFileSync(packedRefsPath, "utf-8");
+    for (const line of packedRefs.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("^")) {
+        continue;
+      }
+      const [hash, refName] = trimmed.split(/\s+/, 2);
+      if (refName === ref) {
+        return formatCommit(hash);
+      }
+    }
+    return null;
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return null;
+    }
+    throw error;
+  }
 };
 
 const readCommitFromPackageJson = () => {
@@ -214,11 +244,15 @@ export const resolveCommitHash = (
   } catch {
     // Fall through to baked metadata for packaged installs that are not in a live checkout.
   }
-  const buildInfoCommit = readers.readBuildInfoCommit?.() ?? readCommitFromBuildInfo();
+  const buildInfoCommit = readers.readBuildInfoCommit
+    ? readers.readBuildInfoCommit()
+    : readCommitFromBuildInfo();
   if (buildInfoCommit) {
     return cacheGitCommit(searchDir, buildInfoCommit);
   }
-  const pkgCommit = readers.readPackageJsonCommit?.() ?? readCommitFromPackageJson();
+  const pkgCommit = readers.readPackageJsonCommit
+    ? readers.readPackageJsonCommit()
+    : readCommitFromPackageJson();
   if (pkgCommit) {
     return cacheGitCommit(searchDir, pkgCommit);
   }
