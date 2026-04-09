@@ -13,6 +13,7 @@ import {
   SecretInputSchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
+  TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -795,6 +796,7 @@ export const AgentEntrySchema = z
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
+    tts: TtsConfigSchema,
     subagents: z
       .object({
         allowAgents: z.array(z.string()).optional(),

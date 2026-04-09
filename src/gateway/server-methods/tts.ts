@@ -1,3 +1,4 @@
+import { resolveConfigWithAgentTts } from "../../agents/tts-config.js";
 import { loadConfig } from "../../config/config.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -23,10 +24,16 @@ import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+function resolveAgentScopedConfig(params: unknown) {
+  const cfg = loadConfig();
+  const agentId = normalizeOptionalString((params as { agentId?: string } | undefined)?.agentId);
+  return resolveConfigWithAgentTts(cfg, agentId);
+}
+
 export const ttsHandlers: GatewayRequestHandlers = {
-  "tts.status": async ({ respond }) => {
+  "tts.status": async ({ params, respond }) => {
     try {
-      const cfg = loadConfig();
+      const cfg = resolveAgentScopedConfig(params);
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       const provider = getTtsProvider(config, prefsPath);
@@ -56,9 +63,9 @@ export const ttsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "tts.enable": async ({ respond }) => {
+  "tts.enable": async ({ params, respond }) => {
     try {
-      const cfg = loadConfig();
+      const cfg = resolveAgentScopedConfig(params);
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       setTtsEnabled(prefsPath, true);
@@ -67,9 +74,9 @@ export const ttsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "tts.disable": async ({ respond }) => {
+  "tts.disable": async ({ params, respond }) => {
     try {
-      const cfg = loadConfig();
+      const cfg = resolveAgentScopedConfig(params);
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       setTtsEnabled(prefsPath, false);
@@ -89,7 +96,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const cfg = loadConfig();
+      const cfg = resolveAgentScopedConfig(params);
       const channel = normalizeOptionalString(params.channel);
       const providerRaw = normalizeOptionalString(params.provider);
       const modelId = normalizeOptionalString(params.modelId);
@@ -132,7 +139,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
   },
   "tts.setProvider": async ({ params, respond }) => {
-    const cfg = loadConfig();
+    const cfg = resolveAgentScopedConfig(params);
     const provider = canonicalizeSpeechProviderId(
       normalizeOptionalString(params.provider) ?? "",
       cfg,
@@ -157,9 +164,9 @@ export const ttsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "tts.providers": async ({ respond }) => {
+  "tts.providers": async ({ params, respond }) => {
     try {
-      const cfg = loadConfig();
+      const cfg = resolveAgentScopedConfig(params);
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       respond(true, {

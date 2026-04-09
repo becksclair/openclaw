@@ -38,6 +38,7 @@ Scope intent:
 - `skills.entries.*.apiKey`
 - `agents.defaults.memorySearch.remote.apiKey`
 - `agents.list[].memorySearch.remote.apiKey`
+- `agents.list[].tts.providers.*.apiKey`
 - `talk.providers.*.apiKey`
 - `messages.tts.providers.*.apiKey`
 - `tools.web.fetch.firecrawl.apiKey`

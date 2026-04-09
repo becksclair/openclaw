@@ -41,10 +41,6 @@ Current carried seams:
 - Control UI read-aloud via gateway Talk TTS
 - agent-scoped TTS overrides
 
-Rebase rule:
-
-- do not introduce old Android or realtime-backend fork behavior by habit during future rebases; if one of those behaviors is needed again, reintroduce it as a fresh, explicitly reviewed seam on top of current upstream
-
 ### 1. Discord native voice-bubble auto-TTS seam
 
 Status: implemented

@@ -224,6 +224,7 @@ export function createOpenClawTools(
     createTtsTool({
       agentChannel: options?.agentChannel,
       config: options?.config,
+      agentId: options?.requesterAgentIdOverride ?? sessionAgentId,
     }),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     createGatewayTool({

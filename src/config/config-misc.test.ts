@@ -617,6 +617,37 @@ describe("config strict validation", () => {
     }
   });
 
+  it("accepts agents.list[].tts overrides", () => {
+    const res = validateConfigObject({
+      messages: {
+        tts: {
+          provider: "openai",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "voice-a",
+            tts: {
+              providers: {
+                openai: {
+                  voice: "nova",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.list?.[0]?.tts?.providers?.openai).toEqual({
+        voice: "nova",
+      });
+    }
+  });
+
   it("accepts top-level memorySearch via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {

@@ -6031,6 +6031,188 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   additionalProperties: false,
                 },
+                tts: {
+                  type: "object",
+                  properties: {
+                    auto: {
+                      type: "string",
+                      enum: ["off", "always", "inbound", "tagged"],
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    mode: {
+                      type: "string",
+                      enum: ["final", "all"],
+                    },
+                    provider: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    summaryModel: {
+                      type: "string",
+                    },
+                    modelOverrides: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        allowText: {
+                          type: "boolean",
+                        },
+                        allowProvider: {
+                          type: "boolean",
+                        },
+                        allowVoice: {
+                          type: "boolean",
+                        },
+                        allowModelId: {
+                          type: "boolean",
+                        },
+                        allowVoiceSettings: {
+                          type: "boolean",
+                        },
+                        allowNormalization: {
+                          type: "boolean",
+                        },
+                        allowSeed: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    providers: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          apiKey: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                            title: "Agent TTS Provider API Key",
+                            description: "Per-agent TTS provider API key override for this agent.",
+                          },
+                        },
+                        additionalProperties: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              type: "number",
+                            },
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "null",
+                            },
+                            {
+                              type: "array",
+                              items: {},
+                            },
+                            {
+                              type: "object",
+                              propertyNames: {
+                                type: "string",
+                              },
+                              additionalProperties: {},
+                            },
+                          ],
+                        },
+                        title: "Agent TTS Provider Config",
+                        description:
+                          "Per-agent config for a specific TTS provider override under this agent.",
+                      },
+                      title: "Agent TTS Provider Settings",
+                      description:
+                        "Per-agent provider-specific TTS settings merged over messages.tts.providers for this agent.",
+                    },
+                    prefsPath: {
+                      type: "string",
+                    },
+                    maxTextLength: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 9007199254740991,
+                    },
+                    timeoutMs: {
+                      type: "integer",
+                      minimum: 1000,
+                      maximum: 120000,
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Agent TTS Overrides",
+                  description:
+                    "Optional per-agent TTS overrides using the same shape as messages.tts. Deep-merges over messages.tts for runs routed to this agent.",
+                },
                 subagents: {
                   type: "object",
                   properties: {
@@ -22820,6 +23002,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent ACP Working Directory",
       help: "Optional default working directory for this agent's ACP sessions.",
       tags: ["advanced"],
+    },
+    "agents.list[].tts": {
+      label: "Agent TTS Overrides",
+      help: "Optional per-agent TTS overrides using the same shape as messages.tts. Deep-merges over messages.tts for runs routed to this agent.",
+      tags: ["media"],
+    },
+    "agents.list[].tts.providers": {
+      label: "Agent TTS Provider Settings",
+      help: "Per-agent provider-specific TTS settings merged over messages.tts.providers for this agent.",
+      tags: ["media"],
+    },
+    "agents.list[].tts.providers.*": {
+      label: "Agent TTS Provider Config",
+      help: "Per-agent config for a specific TTS provider override under this agent.",
+      tags: ["media"],
+    },
+    "agents.list[].tts.providers.*.apiKey": {
+      label: "Agent TTS Provider API Key",
+      help: "Per-agent TTS provider API key override for this agent.",
+      tags: ["security", "auth", "media"],
+      sensitive: true,
     },
     "agents.list[].thinkingDefault": {
       label: "Agent Thinking Default",

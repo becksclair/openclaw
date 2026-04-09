@@ -62,6 +62,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].runtime.acp.backend": "Agent ACP Backend",
   "agents.list[].runtime.acp.mode": "Agent ACP Mode",
   "agents.list[].runtime.acp.cwd": "Agent ACP Working Directory",
+  "agents.list[].tts": "Agent TTS Overrides",
+  "agents.list[].tts.providers": "Agent TTS Provider Settings",
+  "agents.list[].tts.providers.*": "Agent TTS Provider Config",
+  "agents.list[].tts.providers.*.apiKey": "Agent TTS Provider API Key", // pragma: allowlist secret
   "agents.list[].thinkingDefault": "Agent Thinking Default",
   "agents.list[].reasoningDefault": "Agent Reasoning Default",
   "agents.list[].fastModeDefault": "Agent Fast Mode Default",

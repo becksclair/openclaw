@@ -22,11 +22,18 @@ const STATIC_MODEL_TARGET_IDS = [
   "models.providers.*.request.tls.key",
   "models.providers.*.request.tls.passphrase",
 ] as const;
-const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
-  ...STATIC_MODEL_TARGET_IDS,
+const STATIC_MEMORY_SEARCH_TARGET_IDS = [
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
+] as const;
+const STATIC_TTS_TARGET_IDS = [
+  "agents.list[].tts.providers.*.apiKey",
   "messages.tts.providers.*.apiKey",
+] as const;
+const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
+  ...STATIC_MODEL_TARGET_IDS,
+  ...STATIC_MEMORY_SEARCH_TARGET_IDS,
+  ...STATIC_TTS_TARGET_IDS,
   "skills.entries.*.apiKey",
   "tools.web.search.apiKey",
   "plugins.entries.brave.config.webSearch.apiKey",
@@ -40,8 +47,8 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   "plugins.entries.minimax.config.webSearch.apiKey",
 ] as const;
 const STATIC_STATUS_TARGET_IDS = [
-  "agents.defaults.memorySearch.remote.apiKey",
-  "agents.list[].memorySearch.remote.apiKey",
+  ...STATIC_MEMORY_SEARCH_TARGET_IDS,
+  ...STATIC_TTS_TARGET_IDS,
 ] as const;
 const STATIC_SECURITY_AUDIT_TARGET_IDS = [
   "gateway.auth.token",

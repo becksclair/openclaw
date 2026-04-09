@@ -218,6 +218,13 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional ACP session mode default for this agent (persistent or oneshot).",
   "agents.list[].runtime.acp.cwd":
     "Optional default working directory for this agent's ACP sessions.",
+  "agents.list[].tts":
+    "Optional per-agent TTS overrides using the same shape as messages.tts. Deep-merges over messages.tts for runs routed to this agent.",
+  "agents.list[].tts.providers":
+    "Per-agent provider-specific TTS settings merged over messages.tts.providers for this agent.",
+  "agents.list[].tts.providers.*":
+    "Per-agent config for a specific TTS provider override under this agent.",
+  "agents.list[].tts.providers.*.apiKey": "Per-agent TTS provider API key override for this agent.",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
   "agents.defaults.heartbeat.suppressToolErrorWarnings":

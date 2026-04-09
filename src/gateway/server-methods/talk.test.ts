@@ -112,4 +112,80 @@ describe("talk.speak handler", () => {
       undefined,
     );
   });
+
+  it("applies agent-level tts overrides for talk.speak", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      ...createTalkConfig("env-acme-key"),
+      messages: {
+        tts: {
+          timeoutMs: 30_000,
+          providers: {
+            openai: {
+              voice: "alloy",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "voice-a",
+            tts: {
+              timeoutMs: 45_000,
+              providers: {
+                openai: {
+                  voice: "nova",
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    mocks.loadConfig.mockReturnValue(runtimeConfig);
+    mocks.getSpeechProvider.mockReturnValue({
+      id: "acme",
+      label: "Acme Speech",
+      resolveTalkConfig: ({
+        talkProviderConfig,
+      }: {
+        talkProviderConfig: Record<string, unknown>;
+      }) => talkProviderConfig,
+    });
+    mocks.synthesizeSpeech.mockImplementation(
+      async ({ cfg }: { cfg: OpenClawConfig; text: string; disableFallback: boolean }) => {
+        expect(cfg.messages?.tts?.timeoutMs).toBe(45_000);
+        expect(cfg.messages?.tts?.providers?.openai?.voice).toBe("nova");
+        expect(cfg.messages?.tts?.provider).toBe("acme");
+        return {
+          success: true,
+          provider: "acme",
+          audioBuffer: Buffer.from([4, 5, 6]),
+          outputFormat: "mp3",
+          voiceCompatible: false,
+          fileExtension: ".mp3",
+        };
+      },
+    );
+
+    const respond = vi.fn();
+    await talkHandlers["talk.speak"]({
+      req: { type: "req", id: "2", method: "talk.speak" },
+      params: { text: "Hello from agent override.", agentId: "voice-a" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {} as never,
+    });
+
+    expect(mocks.synthesizeSpeech).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        provider: "acme",
+      }),
+      undefined,
+    );
+  });
 });

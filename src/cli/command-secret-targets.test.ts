@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 const REGISTRY_IDS = [
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
+  "agents.list[].tts.providers.openai.apiKey",
   "channels.discord.token",
   "channels.discord.accounts.ops.token",
   "channels.discord.accounts.chat.token",
@@ -57,6 +58,7 @@ import {
   getQrRemoteCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
   getSecurityAuditCommandSecretTargetIds,
+  getStatusCommandSecretTargetIds,
 } from "./command-secret-targets.js";
 
 describe("command secret target ids", () => {
@@ -76,6 +78,7 @@ describe("command secret target ids", () => {
     const ids = getAgentRuntimeCommandSecretTargetIds();
     expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
+    expect(ids.has("agents.list[].tts.providers.*.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
   });
@@ -93,6 +96,15 @@ describe("command secret target ids", () => {
     expect(ids.has("gateway.auth.password")).toBe(true);
     expect(ids.has("gateway.remote.token")).toBe(true);
     expect(ids.has("gateway.remote.password")).toBe(true);
+  });
+
+  it("includes TTS and memorySearch targets for status commands", () => {
+    const ids = getStatusCommandSecretTargetIds();
+    expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
+    expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
+    expect(ids.has("messages.tts.providers.*.apiKey")).toBe(true);
+    expect(ids.has("agents.list[].tts.providers.*.apiKey")).toBe(true);
+    expect(ids.has("channels.discord.token")).toBe(true);
   });
 
   it("scopes channel targets to the requested channel", () => {

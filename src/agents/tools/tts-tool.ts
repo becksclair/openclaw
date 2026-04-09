@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { resolveConfigWithAgentTts } from "../../agents/tts-config.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
@@ -17,6 +18,7 @@ const TtsToolSchema = Type.Object({
 export function createTtsTool(opts?: {
   config?: OpenClawConfig;
   agentChannel?: GatewayMessageChannel;
+  agentId?: string;
 }): AnyAgentTool {
   return {
     label: "TTS",
@@ -28,7 +30,7 @@ export function createTtsTool(opts?: {
       const params = args as Record<string, unknown>;
       const text = readStringParam(params, "text", { required: true });
       const channel = readStringParam(params, "channel");
-      const cfg = opts?.config ?? loadConfig();
+      const cfg = resolveConfigWithAgentTts(opts?.config ?? loadConfig(), opts?.agentId);
       const result = await textToSpeech({
         text,
         cfg,

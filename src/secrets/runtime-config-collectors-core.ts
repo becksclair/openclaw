@@ -506,6 +506,35 @@ function collectMessagesTtsAssignments(params: {
   });
 }
 
+function collectAgentTtsAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const agents = params.config.agents as Record<string, unknown> | undefined;
+  if (!isRecord(agents)) {
+    return;
+  }
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  list.forEach((rawAgent, index) => {
+    if (!isRecord(rawAgent)) {
+      return;
+    }
+    const tts = isRecord(rawAgent.tts) ? rawAgent.tts : undefined;
+    if (!tts) {
+      return;
+    }
+    collectTtsApiKeyAssignments({
+      tts,
+      pathPrefix: `agents.list.${index}.tts`,
+      defaults: params.defaults,
+      context: params.context,
+      active: rawAgent.enabled !== false,
+      inactiveReason: "agent override is disabled.",
+    });
+  });
+}
+
 function collectCronAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -640,6 +669,7 @@ export function collectCoreConfigAssignments(params: {
   collectGatewayAssignments(params);
   collectSandboxSshAssignments(params);
   collectMessagesTtsAssignments(params);
+  collectAgentTtsAssignments(params);
   collectCronAssignments(params);
   collectMediaRequestAssignments(params);
 }

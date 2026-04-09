@@ -1,3 +1,4 @@
+import { resolveConfigWithAgentTts } from "../../agents/tts-config.js";
 import { logVerbose } from "../../globals.js";
 import {
   normalizeOptionalLowercaseString,
@@ -111,7 +112,8 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     return { shouldContinue: false };
   }
 
-  const config = resolveTtsConfig(params.cfg);
+  const ttsCommandCfg = resolveConfigWithAgentTts(params.cfg, params.agentId);
+  const config = resolveTtsConfig(ttsCommandCfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const action = parsed.action;
   const args = parsed.args;
@@ -146,7 +148,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     const start = Date.now();
     const result = await textToSpeech({
       text: args,
-      cfg: params.cfg,
+      cfg: ttsCommandCfg,
       channel: params.command.channel,
       prefsPath,
     });
@@ -191,7 +193,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "provider") {
     const currentProvider = getTtsProvider(config, prefsPath);
     if (!args.trim()) {
-      const providers = listSpeechProviders(params.cfg);
+      const providers = listSpeechProviders(ttsCommandCfg);
       return {
         shouldContinue: false,
         reply: {
@@ -203,11 +205,11 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
                 (provider) =>
                   `${provider.label}: ${
                     provider.isConfigured({
-                      cfg: params.cfg,
+                      cfg: ttsCommandCfg,
                       providerConfig: getResolvedSpeechProviderConfig(
                         config,
                         provider.id,
-                        params.cfg,
+                        ttsCommandCfg,
                       ),
                       timeoutMs: config.timeoutMs,
                     })
@@ -222,12 +224,13 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     }
 
     const requested = normalizeOptionalLowercaseString(args) ?? "";
-    const resolvedProvider = getSpeechProvider(requested, params.cfg);
+    const resolvedProvider = getSpeechProvider(requested, ttsCommandCfg);
     if (!resolvedProvider) {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 
-    const nextProvider = canonicalizeSpeechProviderId(requested, params.cfg) ?? resolvedProvider.id;
+    const nextProvider =
+      canonicalizeSpeechProviderId(requested, ttsCommandCfg) ?? resolvedProvider.id;
     setTtsProvider(prefsPath, nextProvider);
     return {
       shouldContinue: false,
@@ -296,7 +299,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "status") {
     const enabled = isTtsEnabled(config, prefsPath);
     const provider = getTtsProvider(config, prefsPath);
-    const hasKey = isTtsProviderConfigured(config, provider, params.cfg);
+    const hasKey = isTtsProviderConfigured(config, provider, ttsCommandCfg);
     const maxLength = getTtsMaxLength(prefsPath);
     const summarize = isSummarizationEnabled(prefsPath);
     const last = getLastTtsAttempt();

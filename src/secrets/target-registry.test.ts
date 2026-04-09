@@ -53,6 +53,39 @@ process.stdout.write(JSON.stringify(result));`,
     expect(targets[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
   });
 
+  it("discovers agent-level tts provider api keys", () => {
+    const config = {
+      agents: {
+        list: [
+          {
+            id: "voice-a",
+            tts: {
+              providers: {
+                openai: {
+                  apiKey: { source: "env", provider: "default", id: "OPENAI_TTS_KEY" },
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const targets = runTargetRegistrySnippet<
+      Array<{ entry?: { id?: string }; providerId?: string; path?: string }>
+    >(
+      `import { discoverConfigSecretTargetsByIds } from "./src/secrets/target-registry.ts";
+const config = ${JSON.stringify(config)};
+const result = discoverConfigSecretTargetsByIds(config, new Set(["agents.list[].tts.providers.*.apiKey"]));
+process.stdout.write(JSON.stringify(result));`,
+    );
+
+    expect(targets).toHaveLength(1);
+    expect(targets[0]?.entry?.id).toBe("agents.list[].tts.providers.*.apiKey");
+    expect(targets[0]?.providerId).toBe("openai");
+    expect(targets[0]?.path).toBe("agents.list.0.tts.providers.openai.apiKey");
+  });
+
   it("resolves config targets by exact path including sibling ref metadata", () => {
     const target = runTargetRegistrySnippet<{
       entry?: { id?: string };

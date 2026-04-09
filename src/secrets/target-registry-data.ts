@@ -76,6 +76,18 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
+    id: "agents.list[].tts.providers.*.apiKey",
+    targetType: "agents.list[].tts.providers.*.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "agents.list[].tts.providers.*.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+    providerIdPathSegmentIndex: 5,
+  },
+  {
     id: "cron.webhookToken",
     targetType: "cron.webhookToken",
     configFile: "openclaw.json",

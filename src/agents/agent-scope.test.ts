@@ -420,6 +420,36 @@ describe("resolveAgentConfig", () => {
     expect(result?.tools?.allow).toEqual(["read"]);
   });
 
+  it("should return agent-specific tts config", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "voice",
+            tts: {
+              provider: "openai",
+              providers: {
+                openai: {
+                  voice: "fable",
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const result = resolveAgentConfig(cfg, "voice");
+    expect(result?.tts).toEqual({
+      provider: "openai",
+      providers: {
+        openai: {
+          voice: "fable",
+        },
+      },
+    });
+  });
+
   it("should normalize agent id", () => {
     const cfg: OpenClawConfig = {
       agents: {

@@ -55,6 +55,68 @@ describe("ttsHandlers", () => {
     });
   });
 
+  it("uses agent-level tts overrides for tts.convert", async () => {
+    mocks.loadConfig.mockReturnValue({
+      messages: {
+        tts: {
+          provider: "openai",
+          providers: {
+            openai: {
+              voice: "alloy",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "voice-a",
+            tts: {
+              providers: {
+                openai: {
+                  voice: "nova",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const { ttsHandlers } = await import("./tts.js");
+    const respond = vi.fn();
+
+    await ttsHandlers["tts.convert"]({
+      params: {
+        text: "hello",
+        agentId: "voice-a",
+      },
+      respond,
+    } as never);
+
+    expect(mocks.textToSpeech).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          messages: expect.objectContaining({
+            tts: expect.objectContaining({
+              providers: expect.objectContaining({
+                openai: expect.objectContaining({
+                  voice: "nova",
+                }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        audioPath: "/tmp/tts.mp3",
+      }),
+    );
+  });
+
   it("returns INVALID_REQUEST when TTS override validation fails", async () => {
     mocks.resolveExplicitTtsOverrides.mockImplementation(() => {
       throw new Error('Unknown TTS provider "bad".');

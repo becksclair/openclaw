@@ -6,6 +6,7 @@ import {
   isSessionIdentityPending,
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
+import { resolveConfigWithAgentTts } from "../../agents/tts-config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -305,10 +306,17 @@ export async function tryDispatchAcpReply(params: {
     return null;
   }
   const canonicalSessionKey = acpResolution.sessionKey;
+  const resolvedAcpAgent =
+    acpResolution.kind === "ready"
+      ? (normalizeOptionalString(acpResolution.meta.agent) ??
+        normalizeOptionalString(params.cfg.acp?.defaultAgent) ??
+        resolveAgentIdFromSessionKey(canonicalSessionKey))
+      : resolveAgentIdFromSessionKey(canonicalSessionKey);
+  const ttsCfg = resolveConfigWithAgentTts(params.cfg, resolvedAcpAgent);
 
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
-    cfg: params.cfg,
+    cfg: ttsCfg,
     ctx: params.ctx,
     dispatcher: params.dispatcher,
     inboundAudio: params.inboundAudio,
@@ -338,12 +346,6 @@ export async function tryDispatchAcpReply(params: {
         accountIdRaw: params.ctx.AccountId,
       })));
 
-  const resolvedAcpAgent =
-    acpResolution.kind === "ready"
-      ? (normalizeOptionalString(acpResolution.meta.agent) ??
-        normalizeOptionalString(params.cfg.acp?.defaultAgent) ??
-        resolveAgentIdFromSessionKey(canonicalSessionKey))
-      : resolveAgentIdFromSessionKey(canonicalSessionKey);
   const normalizedDispatchChannel = normalizeOptionalLowercaseString(
     params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
   );
@@ -442,7 +444,7 @@ export async function tryDispatchAcpReply(params: {
     await projector.flush(true);
     queuedFinal =
       (await finalizeAcpTurnOutput({
-        cfg: params.cfg,
+        cfg: ttsCfg,
         sessionKey: canonicalSessionKey,
         delivery,
         inboundAudio: params.inboundAudio,
