@@ -5,7 +5,8 @@
     "deepgram": ["DEEPGRAM_API_KEY"]
   },
   "contracts": {
-    "mediaUnderstandingProviders": ["deepgram"]
+    "mediaUnderstandingProviders": ["deepgram"],
+    "speechProviders": ["deepgram"]
   },
   "configSchema": {
     "type": "object",
