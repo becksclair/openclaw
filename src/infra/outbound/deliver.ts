@@ -696,14 +696,16 @@ async function deliverOutboundPayloadsCore(
         audioAsVoice: effectivePayload.audioAsVoice === true ? true : undefined,
         forceDocument: params.forceDocument,
       };
-      if (
+      const shouldUsePayloadSender =
         handler.sendPayload &&
-        hasReplyPayloadContent({
+        (hasReplyPayloadContent({
           interactive: effectivePayload.interactive,
           channelData: effectivePayload.channelData,
-        })
-      ) {
-        const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
+        }) ||
+          (effectivePayload.audioAsVoice === true && payloadSummary.mediaUrls.length > 0));
+      const payloadSender = shouldUsePayloadSender ? handler.sendPayload : undefined;
+      if (payloadSender) {
+        const delivery = await payloadSender(effectivePayload, sendOverrides);
         results.push(delivery);
         emitMessageSent({
           success: true,
