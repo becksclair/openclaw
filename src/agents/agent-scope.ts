@@ -4,6 +4,7 @@ import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { TtsConfig } from "../config/types.tts.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_AGENT_ID,
@@ -58,6 +59,7 @@ type ResolvedAgentConfig = {
   subagents?: AgentEntry["subagents"];
   embeddedPi?: AgentEntry["embeddedPi"];
   sandbox?: AgentEntry["sandbox"];
+  tts?: TtsConfig;
   tools?: AgentEntry["tools"];
 };
 
@@ -167,6 +169,7 @@ export function resolveAgentConfig(
     embeddedPi:
       typeof entry.embeddedPi === "object" && entry.embeddedPi ? entry.embeddedPi : undefined,
     sandbox: entry.sandbox,
+    tts: entry.tts,
     tools: entry.tools,
   };
 }

@@ -24,6 +24,7 @@ import {
   validateTalkModeParams,
   validateTalkSpeakParams,
 } from "../protocol/index.js";
+import { resolveConfigWithAgentTalk } from "../talk-agent-config.js";
 import { formatForLog } from "../ws-log.js";
 import { asRecord } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -84,11 +85,13 @@ function resolveTalkVoiceId(
 
 function buildTalkTtsConfig(
   config: OpenClawConfig,
+  agentId?: string,
 ):
   | { cfg: OpenClawConfig; provider: string; providerConfig: TalkProviderConfig }
   | { error: string; reason: TalkSpeakReason } {
-  const resolved = resolveActiveTalkProviderConfig(config.talk);
-  const provider = canonicalizeSpeechProviderId(resolved?.provider, config);
+  const scopedConfig = resolveConfigWithAgentTalk(config, agentId);
+  const resolved = resolveActiveTalkProviderConfig(scopedConfig.talk);
+  const provider = canonicalizeSpeechProviderId(resolved?.provider, scopedConfig);
   if (!resolved || !provider) {
     return {
       error: "talk.speak unavailable: talk provider not configured",
@@ -96,7 +99,7 @@ function buildTalkTtsConfig(
     };
   }
 
-  const speechProvider = getSpeechProvider(provider, config);
+  const speechProvider = getSpeechProvider(provider, scopedConfig);
   if (!speechProvider) {
     return {
       error: `talk.speak unavailable: speech provider "${provider}" does not support Talk mode`,
@@ -104,11 +107,11 @@ function buildTalkTtsConfig(
     };
   }
 
-  const baseTts = config.messages?.tts ?? {};
+  const baseTts = scopedConfig.messages?.tts ?? {};
   const providerConfig = resolved.config;
   const resolvedProviderConfig =
     speechProvider.resolveTalkConfig?.({
-      cfg: config,
+      cfg: scopedConfig,
       baseTtsConfig: baseTts as Record<string, unknown>,
       talkProviderConfig: providerConfig,
       timeoutMs: baseTts.timeoutMs ?? 30_000,
@@ -127,9 +130,9 @@ function buildTalkTtsConfig(
     provider,
     providerConfig,
     cfg: {
-      ...config,
+      ...scopedConfig,
       messages: {
-        ...config.messages,
+        ...scopedConfig.messages,
         tts: talkTts,
       },
     },
@@ -235,8 +238,14 @@ function resolveTalkResponseFromConfig(params: {
   includeSecrets: boolean;
   sourceConfig: OpenClawConfig;
   runtimeConfig: OpenClawConfig;
+  agentId?: string;
 }): TalkConfigResponse | undefined {
-  const normalizedTalk = normalizeTalkSection(params.sourceConfig.talk);
+  const sourceTtsScopedConfig = resolveConfigWithAgentTalk(params.sourceConfig, params.agentId);
+  const runtimeTtsScopedConfig = resolveConfigWithAgentTalk(params.runtimeConfig, params.agentId);
+  const normalizedTalk =
+    normalizeTalkSection(sourceTtsScopedConfig.talk) ??
+    normalizeTalkSection(params.sourceConfig.talk) ??
+    normalizeTalkSection(runtimeTtsScopedConfig.talk);
   if (!normalizedTalk) {
     return undefined;
   }
@@ -249,22 +258,21 @@ function resolveTalkResponseFromConfig(params: {
   if (params.includeSecrets) {
     return payload;
   }
-
   const sourceResolved = resolveActiveTalkProviderConfig(normalizedTalk);
-  const runtimeResolved = resolveActiveTalkProviderConfig(params.runtimeConfig.talk);
+  const runtimeResolved = resolveActiveTalkProviderConfig(runtimeTtsScopedConfig.talk);
   const activeProviderId = sourceResolved?.provider ?? runtimeResolved?.provider;
-  const provider = canonicalizeSpeechProviderId(activeProviderId, params.runtimeConfig);
+  const provider = canonicalizeSpeechProviderId(activeProviderId, runtimeTtsScopedConfig);
   if (!provider) {
     return payload;
   }
 
-  const speechProvider = getSpeechProvider(provider, params.runtimeConfig);
-  const sourceBaseTts = asRecord(params.sourceConfig.messages?.tts) ?? {};
-  const runtimeBaseTts = asRecord(params.runtimeConfig.messages?.tts) ?? {};
+  const speechProvider = getSpeechProvider(provider, runtimeTtsScopedConfig);
+  const sourceBaseTts = asRecord(sourceTtsScopedConfig.messages?.tts) ?? {};
+  const runtimeBaseTts = asRecord(runtimeTtsScopedConfig.messages?.tts) ?? {};
   const talkProviderConfig = sourceResolved?.config ?? runtimeResolved?.config ?? {};
   const resolvedConfig =
     speechProvider?.resolveTalkConfig?.({
-      cfg: params.runtimeConfig,
+      cfg: runtimeTtsScopedConfig,
       baseTtsConfig: Object.keys(sourceBaseTts).length > 0 ? sourceBaseTts : runtimeBaseTts,
       talkProviderConfig,
       timeoutMs:
@@ -317,6 +325,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       includeSecrets,
       sourceConfig: snapshot.config,
       runtimeConfig,
+      agentId: normalizeOptionalString((params as { agentId?: string }).agentId),
     });
     if (talk) {
       configPayload.talk = includeSecrets ? talk : redactConfigObject(talk);
@@ -372,7 +381,10 @@ export const talkHandlers: GatewayRequestHandlers = {
 
     try {
       const runtimeConfig = loadConfig();
-      const setup = buildTalkTtsConfig(runtimeConfig);
+      const setup = buildTalkTtsConfig(
+        runtimeConfig,
+        normalizeOptionalString((params as { agentId?: string }).agentId),
+      );
       if ("error" in setup) {
         respond(false, undefined, talkSpeakError(setup.reason, setup.error));
         return;
