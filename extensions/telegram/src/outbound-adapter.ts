@@ -158,6 +158,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       threadId,
       forceDocument,
       gatewayClientScopes,
+      audioAsVoice,
     }) => {
       const { send, baseOpts } = await resolveTelegramSendContext({
         cfg,
@@ -172,6 +173,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         mediaUrl,
         mediaLocalRoots,
         mediaReadFile,
+        asVoice: audioAsVoice === true ? true : undefined,
         forceDocument: forceDocument ?? false,
       });
     },
@@ -188,6 +190,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     threadId,
     forceDocument,
     gatewayClientScopes,
+    audioAsVoice,
   }) => {
     const { send, baseOpts } = await resolveTelegramSendContext({
       cfg,
@@ -205,6 +208,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         ...baseOpts,
         mediaLocalRoots,
         mediaReadFile,
+        asVoice: audioAsVoice === true ? true : undefined,
         forceDocument: forceDocument ?? false,
       },
     });

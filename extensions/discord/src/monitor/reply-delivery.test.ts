@@ -163,7 +163,10 @@ describe("deliverDiscordReply", () => {
     expect(sendVoiceMessageDiscordMock).toHaveBeenCalledWith(
       "channel:123",
       "https://example.com/voice.ogg",
-      expect.objectContaining({ token: "token", replyTo: "reply-1" }),
+      expect.objectContaining({
+        token: "token",
+        replyTo: "reply-1",
+      }),
     );
 
     expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);

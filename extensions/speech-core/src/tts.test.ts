@@ -33,14 +33,21 @@ vi.mock("../api.js", () => ({
 }));
 
 let synthesizeSpeech: (typeof import("./tts.js"))["synthesizeSpeech"];
+let textToSpeech: (typeof import("./tts.js"))["textToSpeech"];
 let maybeApplyTtsToPayload: (typeof import("./tts.js"))["maybeApplyTtsToPayload"];
 
 beforeAll(async () => {
-  ({ synthesizeSpeech, maybeApplyTtsToPayload } = await import("./tts.js"));
+  ({ synthesizeSpeech, textToSpeech, maybeApplyTtsToPayload } = await import("./tts.js"));
 });
 
 beforeEach(() => {
-  synthesizeProviderMock.mockClear();
+  synthesizeProviderMock.mockReset().mockImplementation(async (params: { target: string }) => ({
+    audioBuffer: Buffer.from("fake-audio"),
+    outputFormat: "ogg",
+    voiceCompatible: true,
+    fileExtension: ".ogg",
+    target: params.target,
+  }));
 });
 
 function createConfig(): OpenClawConfig {
@@ -81,6 +88,48 @@ describe("speech-core tts opus channel routing", () => {
       },
       cfg: createConfig(),
       channel: "discord",
+      kind: "final",
+    });
+
+    expect(updated.mediaUrl).toContain("voice-");
+    expect(updated.audioAsVoice).toBe(true);
+  });
+
+  it("upgrades telegram voice compatibility from the synthesized artifact when provider metadata is pessimistic", async () => {
+    synthesizeProviderMock.mockResolvedValueOnce({
+      audioBuffer: Buffer.from("fake-audio"),
+      outputFormat: "opus",
+      voiceCompatible: false,
+      fileExtension: ".opus",
+      target: "voice-note",
+    });
+
+    const result = await textToSpeech({
+      text: "A long enough message for direct speech output",
+      cfg: createConfig(),
+      channel: "telegram",
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.voiceCompatible).toBe(true);
+  });
+
+  it("marks telegram auto-tts payloads as voice when the artifact is compatible even if provider metadata is false", async () => {
+    synthesizeProviderMock.mockResolvedValueOnce({
+      audioBuffer: Buffer.from("fake-audio"),
+      outputFormat: "opus",
+      voiceCompatible: false,
+      fileExtension: ".opus",
+      target: "voice-note",
+    });
+
+    const updated = await maybeApplyTtsToPayload({
+      payload: {
+        text: "A long enough assistant response for speech output",
+      },
+      cfg: createConfig(),
+      channel: "telegram",
       kind: "final",
     });
 

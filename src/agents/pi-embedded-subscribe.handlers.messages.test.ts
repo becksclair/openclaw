@@ -207,6 +207,25 @@ describe("consumePendingToolMediaIntoReply", () => {
     expect(state.pendingToolMediaUrls).toEqual([]);
   });
 
+  it("merges queued audioAsVoice media into the next assistant reply without losing voice intent", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolAudioAsVoice: true,
+    };
+
+    expect(
+      consumePendingToolMediaIntoReply(state, {
+        text: "done",
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolAudioAsVoice).toBe(false);
+  });
+
   it("preserves reasoning replies without consuming queued media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/a.png"],
@@ -225,10 +244,33 @@ describe("consumePendingToolMediaIntoReply", () => {
     expect(state.pendingToolMediaUrls).toEqual(["/tmp/a.png"]);
     expect(state.pendingToolAudioAsVoice).toBe(true);
   });
+
+  it("does not drop queued tool audio media after reasoning-only assistant output", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolAudioAsVoice: true,
+    };
+
+    expect(
+      consumePendingToolMediaIntoReply(state, {
+        text: "thinking",
+        isReasoning: true,
+      }),
+    ).toEqual({
+      text: "thinking",
+      isReasoning: true,
+    });
+    expect(consumePendingToolMediaReply(state)).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolAudioAsVoice).toBe(false);
+  });
 });
 
 describe("consumePendingToolMediaReply", () => {
-  it("builds a media-only reply for orphaned tool media", () => {
+  it("flushes queued tool audio media as a standalone reply when no assistant text follows", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
       pendingToolAudioAsVoice: true,

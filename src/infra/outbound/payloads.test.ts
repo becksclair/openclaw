@@ -179,7 +179,12 @@ describe("normalizeOutboundPayloadsForJson", () => {
         { text: "final answer" },
       ]),
     ).toEqual([
-      { text: "final answer", mediaUrl: null, mediaUrls: undefined, audioAsVoice: undefined },
+      {
+        text: "final answer",
+        mediaUrl: null,
+        mediaUrls: undefined,
+        audioAsVoice: undefined,
+      },
     ]);
   });
 });
@@ -209,7 +214,12 @@ describe("normalizeOutboundPayloads", () => {
           btw: { question: "what is 17 * 19?" },
         },
       ]),
-    ).toEqual([{ text: "BTW\nQuestion: what is 17 * 19?\n\n323", mediaUrls: [] }]);
+    ).toEqual([
+      {
+        text: "BTW\nQuestion: what is 17 * 19?\n\n323",
+        mediaUrls: [],
+      },
+    ]);
   });
 });
 
