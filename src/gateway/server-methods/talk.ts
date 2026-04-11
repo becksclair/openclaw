@@ -1,4 +1,3 @@
-import { resolveConfigWithAgentTts } from "../../agents/tts-config.js";
 import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import {
@@ -25,6 +24,7 @@ import {
   validateTalkModeParams,
   validateTalkSpeakParams,
 } from "../protocol/index.js";
+import { resolveConfigWithAgentTalk } from "../talk-agent-config.js";
 import { formatForLog } from "../ws-log.js";
 import { asRecord } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -89,7 +89,7 @@ function buildTalkTtsConfig(
 ):
   | { cfg: OpenClawConfig; provider: string; providerConfig: TalkProviderConfig }
   | { error: string; reason: TalkSpeakReason } {
-  const scopedConfig = resolveConfigWithAgentTts(config, agentId);
+  const scopedConfig = resolveConfigWithAgentTalk(config, agentId);
   const resolved = resolveActiveTalkProviderConfig(scopedConfig.talk);
   const provider = canonicalizeSpeechProviderId(resolved?.provider, scopedConfig);
   if (!resolved || !provider) {
@@ -239,7 +239,12 @@ function resolveTalkResponseFromConfig(params: {
   runtimeConfig: OpenClawConfig;
   agentId?: string;
 }): TalkConfigResponse | undefined {
-  const normalizedTalk = normalizeTalkSection(params.sourceConfig.talk);
+  const sourceTtsScopedConfig = resolveConfigWithAgentTalk(params.sourceConfig, params.agentId);
+  const runtimeTtsScopedConfig = resolveConfigWithAgentTalk(params.runtimeConfig, params.agentId);
+  const normalizedTalk =
+    normalizeTalkSection(sourceTtsScopedConfig.talk) ??
+    normalizeTalkSection(params.sourceConfig.talk) ??
+    normalizeTalkSection(runtimeTtsScopedConfig.talk);
   if (!normalizedTalk) {
     return undefined;
   }
@@ -249,8 +254,6 @@ function resolveTalkResponseFromConfig(params: {
     return undefined;
   }
 
-  const sourceTtsScopedConfig = resolveConfigWithAgentTts(params.sourceConfig, params.agentId);
-  const runtimeTtsScopedConfig = resolveConfigWithAgentTts(params.runtimeConfig, params.agentId);
   const sourceResolved = resolveActiveTalkProviderConfig(normalizedTalk);
   const runtimeResolved = resolveActiveTalkProviderConfig(runtimeTtsScopedConfig.talk);
   const activeProviderId = sourceResolved?.provider ?? runtimeResolved?.provider;

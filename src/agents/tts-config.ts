@@ -32,7 +32,7 @@ function cloneProviderConfigValue(value: unknown): unknown {
   );
 }
 
-function mergeProviderConfig(
+export function mergeProviderConfig(
   base: Record<string, unknown> | undefined,
   override: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
@@ -101,7 +101,8 @@ export function resolveAgentTtsOverride(
   if (!agentId) {
     return undefined;
   }
-  return resolveAgentConfig(cfg, agentId)?.tts;
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  return agentConfig?.tts;
 }
 
 export function resolveAgentTtsConfig(cfg: OpenClawConfig, agentId?: string): TtsConfig {
