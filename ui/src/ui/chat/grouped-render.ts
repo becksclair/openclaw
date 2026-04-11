@@ -160,6 +160,7 @@ export function renderMessageGroup(
     onDelete?: () => void;
     client?: SpeechGatewayClient | null;
     onTtsError?: (message: string | null) => void;
+    agentId?: string;
   },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
@@ -216,7 +217,7 @@ export function renderMessageGroup(
           <span class="chat-group-timestamp">${timestamp}</span>
           ${renderMessageMeta(meta)}
           ${normalizedRole === "assistant" && opts.client && isTtsSupported()
-            ? renderTtsButton(group, opts.client, opts.onTtsError)
+            ? renderTtsButton(group, opts.client, opts.onTtsError, opts.agentId)
             : nothing}
           ${opts.onDelete
             ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
@@ -482,6 +483,7 @@ function renderTtsButton(
   group: MessageGroup,
   client: SpeechGatewayClient,
   onTtsError?: (message: string | null) => void,
+  agentId?: string,
 ) {
   return html`
     <button
@@ -525,6 +527,7 @@ function renderTtsButton(
         setTtsButtonActive(btn);
 
         const started = await speakText(text, client, {
+          agentId,
           onEnd: () => {
             if (btn.isConnected) {
               setTtsButtonIdle(btn);

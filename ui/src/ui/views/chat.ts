@@ -1030,6 +1030,7 @@ export function renderChat(props: ChatProps) {
                   activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
                 client: props.connected ? props.client : null,
                 onTtsError: props.onTtsError,
+                agentId: props.currentAgentId,
                 onDelete: () => {
                   deleted.delete(item.key);
                   requestUpdate();

@@ -105,6 +105,7 @@ export async function speakText(
     onStart?: () => void;
     onEnd?: () => void;
     onError?: (error: string) => void;
+    agentId?: string;
   },
 ): Promise<boolean> {
   if (!isTtsSupported()) {
@@ -128,7 +129,10 @@ export async function speakText(
 
   let result: TalkSpeakResult;
   try {
-    result = await client.request<TalkSpeakResult>("talk.speak", { text: cleaned });
+    result = await client.request<TalkSpeakResult>("talk.speak", {
+      text: cleaned,
+      ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+    });
   } catch (error) {
     opts?.onError?.(error instanceof Error ? error.message : String(error));
     return false;
