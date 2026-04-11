@@ -26,7 +26,13 @@ import {
   normalizeMessage,
   normalizeRoleForGrouping,
 } from "./message-normalizer.ts";
-import { isTtsSupported, speakText, stopTts, isTtsSpeaking } from "./speech.ts";
+import {
+  isTtsSpeaking,
+  isTtsSupported,
+  speakText,
+  stopTts,
+  type SpeechGatewayClient,
+} from "./talk-tts.ts";
 import {
   extractToolCards,
   renderExpandedToolCardContent,
@@ -162,6 +168,9 @@ export function renderMessageGroup(
     allowExternalEmbedUrls?: boolean;
     contextWindow?: number | null;
     onDelete?: () => void;
+    client?: SpeechGatewayClient | null;
+    onTtsError?: (message: string | null) => void;
+    agentId?: string;
   },
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
@@ -229,7 +238,9 @@ export function renderMessageGroup(
           <span class="chat-sender-name">${who}</span>
           <span class="chat-group-timestamp">${timestamp}</span>
           ${renderMessageMeta(meta)}
-          ${normalizedRole === "assistant" && isTtsSupported() ? renderTtsButton(group) : nothing}
+          ${normalizedRole === "assistant" && opts.client && isTtsSupported()
+            ? renderTtsButton(group, opts.client, opts.onTtsError, opts.agentId)
+            : nothing}
           ${opts.onDelete
             ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
             : nothing}
@@ -445,41 +456,82 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
   `;
 }
 
-function renderTtsButton(group: MessageGroup) {
+function setTtsButtonIdle(button: HTMLButtonElement): void {
+  button.classList.remove("chat-tts-btn--active");
+  button.title = "Read aloud";
+  button.setAttribute("aria-label", "Read aloud");
+}
+
+function setTtsButtonActive(button: HTMLButtonElement): void {
+  button.classList.add("chat-tts-btn--active");
+  button.title = "Stop speaking";
+  button.setAttribute("aria-label", "Stop speaking");
+}
+
+function renderTtsButton(
+  group: MessageGroup,
+  client: SpeechGatewayClient,
+  onTtsError?: (message: string | null) => void,
+  agentId?: string,
+) {
   return html`
     <button
       class="btn btn--xs chat-tts-btn"
       type="button"
       title=${isTtsSpeaking() ? "Stop speaking" : "Read aloud"}
       aria-label=${isTtsSpeaking() ? "Stop speaking" : "Read aloud"}
-      @click=${(e: Event) => {
+      @click=${async (e: Event) => {
         const btn = e.currentTarget as HTMLButtonElement;
+        const activeButtons = Array.from(
+          document.querySelectorAll<HTMLButtonElement>(".chat-tts-btn--active"),
+        );
+
         if (isTtsSpeaking()) {
           stopTts();
-          btn.classList.remove("chat-tts-btn--active");
-          btn.title = "Read aloud";
-          return;
+          onTtsError?.(null);
+          for (const activeButton of activeButtons) {
+            setTtsButtonIdle(activeButton);
+          }
+          if (activeButtons.length === 0) {
+            setTtsButtonIdle(btn);
+            return;
+          }
+          if (activeButtons.includes(btn)) {
+            return;
+          }
         }
         const text = extractGroupText(group);
         if (!text) {
           return;
         }
-        btn.classList.add("chat-tts-btn--active");
-        btn.title = "Stop speaking";
-        speakText(text, {
+
+        for (const activeButton of activeButtons) {
+          if (activeButton !== btn) {
+            setTtsButtonIdle(activeButton);
+          }
+        }
+
+        onTtsError?.(null);
+        setTtsButtonActive(btn);
+
+        const started = await speakText(text, client, {
+          agentId,
           onEnd: () => {
             if (btn.isConnected) {
-              btn.classList.remove("chat-tts-btn--active");
-              btn.title = "Read aloud";
+              setTtsButtonIdle(btn);
             }
           },
-          onError: () => {
+          onError: (error) => {
+            onTtsError?.(`Read aloud failed: ${error}`);
             if (btn.isConnected) {
-              btn.classList.remove("chat-tts-btn--active");
-              btn.title = "Read aloud";
+              setTtsButtonIdle(btn);
             }
           },
         });
+
+        if (!started && btn.isConnected) {
+          setTtsButtonIdle(btn);
+        }
       }}
     >
       ${icons.volume2}
