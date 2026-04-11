@@ -31,6 +31,45 @@ Use these rules when changing forked areas:
 - If upstream gains a real extension point or equivalent behavior, delete the fork seam and collapse back to upstream instead of carrying vanity diffs.
 - When in doubt, optimize for the next rebase and the working feature, not the cleverest local abstraction.
 
+## Seam hygiene lessons
+
+These are the working rules that kept this branch smaller during the recent voice-routing and Talk cleanup passes.
+
+- Prefer behavior seams over tracing seams.
+  - Keep behavior that changes the product.
+  - Delete correlation ids, debug breadcrumbs, and intermediate payload metadata unless they are required for runtime correctness.
+  - Temporary diagnostics should leave the branch when the failure class is understood.
+
+- Keep seam ownership local to the subsystem that actually owns the behavior.
+  - Agent-scoped `messages.tts` merging belongs in `src/agents/tts-config.ts`.
+  - Talk-specific provider synthesis and repointing belongs in a Talk-owned seam such as `src/gateway/talk-agent-config.ts`, not back in generic agent config helpers.
+  - UI read-aloud agent selection belongs next to chat/read-aloud code, not in generic `app-render` helpers.
+
+- Prefer deletion over “supporting” a fork diff with more fork diff.
+  - If a production-file change exists only to satisfy a test/example value, change the test/example to use an already-supported value and delete the production diff.
+  - If a debug field forces edits across tools, queue state, payloads, and delivery, that is a strong signal to delete it unless the behavior truly depends on it.
+
+- Keep fork helpers narrowly named and obviously fork-owned.
+  - Good seams advertise what they own: `talk-agent-config`, `read-aloud-agent`, `talk-tts`.
+  - Avoid hiding fork policy inside broad upstream coordinators or utility files where unrelated upstream churn will create merge noise.
+
+- Prefer contract tests over seam-internal bookkeeping tests.
+  - Test that Discord sends native voice bubbles, that Talk uses the agent-scoped voice, and that read-aloud calls `talk.speak`.
+  - Avoid tests that only prove internal breadcrumbs, temporary metadata, or private intermediate state.
+
+- Shrink the touched-file set after every working fix.
+  - Once behavior is green, review the diff and ask which touched files can be dropped, moved closer to the owning seam, or collapsed back to upstream behavior.
+  - Do not leave blank-line churn, `.gitignore` drift, or dead helper imports in the fork. Small diff acne becomes rebase tax later.
+
+- When a helper starts serving two owners, split it before the split gets expensive.
+  - If a generic helper picks up gateway-specific policy, move that policy out.
+  - If a shared render helper picks up chat-specific logic, move that logic closer to chat.
+  - The earlier this split happens, the easier future rebases become.
+
+- Rebase posture: adopt upstream first, re-carry only what still matters.
+  - On every rebase, look for chances to delete a seam, move it onto a cleaner upstream extension point, or reduce the number of touched files.
+  - The branch should trend toward fewer fork-specific files and thinner seam helpers over time.
+
 ## Seam inventory
 
 ### 0. Branch inventory
@@ -106,6 +145,7 @@ Primary seam files:
 
 - `ui/src/ui/chat/talk-tts.ts`
 - `ui/src/ui/chat/grouped-render.ts`
+- `ui/src/ui/chat/read-aloud-agent.ts`
 
 Files touched by this seam:
 
@@ -115,6 +155,8 @@ Files touched by this seam:
   - Contract tests for Talk request, audio playback, and error handling.
 - `ui/src/ui/chat/grouped-render.ts`
   - Wires read-aloud controls into assistant message-group rendering by importing the gateway Talk playback seam directly.
+- `ui/src/ui/chat/read-aloud-agent.ts`
+  - Resolves which agent id read-aloud should use without leaving that policy in generic `app-render` helpers.
 - `ui/src/ui/chat/grouped-render.test.ts`
   - Regression coverage for read-aloud visibility and playback handoff.
 - `ui/src/ui/views/chat.ts`
@@ -154,14 +196,19 @@ Behavior added by this fork:
 Primary seam files:
 
 - `src/agents/tts-config.ts`
+- `src/gateway/talk-agent-config.ts`
 - `src/plugin-sdk/agent-runtime.ts`
 
 Files touched by this seam:
 
 - `src/agents/tts-config.ts`
-  - Central merge and resolution helpers for agent-level TTS overrides.
+  - Central merge and resolution helpers for agent-level `messages.tts` overrides.
+- `src/gateway/talk-agent-config.ts`
+  - Gateway-owned seam that derives Talk provider config from the effective agent-scoped TTS config without mixing Talk policy back into generic agent helpers.
 - `src/agents/tts-config.test.ts`
   - Coverage for override precedence and provider-specific merges.
+- `src/gateway/talk-agent-config.test.ts`
+  - Coverage for Talk-provider mapping, provider-default synthesis, and invalid-provider repoint protection.
 - `src/plugin-sdk/agent-runtime.ts`
   - Exposes the agent-scoped TTS resolution seam to callers that already live on the plugin/runtime boundary.
 - `src/agents/tools/tts-tool.ts`
@@ -185,6 +232,7 @@ Rebase notes:
 
 - If upstream adds native agent-scoped TTS config, delete this seam and collapse back to the upstream implementation.
 - Keep override merging centralized; do not let talk, tts, ACP, or auto-reply paths drift into bespoke merge logic.
+- If upstream adds a Talk-owned agent-scoped seam, delete `src/gateway/talk-agent-config.ts` instead of re-expanding `src/agents/tts-config.ts`.
 - If provider-specific auth discovery moves upstream, prefer adopting the upstream seam instead of keeping local credential-surface glue.
 
 Required invariants after rebase:
