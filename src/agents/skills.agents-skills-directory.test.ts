@@ -162,4 +162,25 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
     expect(prompt).toContain("project-only");
     expect(prompt).toContain("workspace-only");
   });
+
+  it("keeps personal .agents/skills bound to OS home, not OPENCLAW_HOME", async () => {
+    const { workspaceDir, managedDir, bundledDir } = await createWorkspaceSkillDirs();
+    const configuredHome = await createTempDir("openclaw-config-home-");
+    process.env.OPENCLAW_HOME = configuredHome;
+
+    await writeSkill({
+      dir: path.join(fakeHome, ".agents", "skills", "personal-home-skill"),
+      name: "personal-home-skill",
+      description: "Personal OS home skill",
+    });
+    await writeSkill({
+      dir: path.join(configuredHome, ".agents", "skills", "configured-home-skill"),
+      name: "configured-home-skill",
+      description: "Configured OpenClaw home skill",
+    });
+
+    const prompt = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
+    expect(prompt).toContain("personal-home-skill");
+    expect(prompt).not.toContain("configured-home-skill");
+  });
 });
