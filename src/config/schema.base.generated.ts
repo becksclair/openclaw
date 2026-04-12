@@ -3265,6 +3265,71 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               userTimezone: {
                 type: "string",
               },
+              startupContext: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                    title: "Enable Startup Context",
+                    description:
+                      "Enable the startup-context prelude for bare session resets (default: true). Disable this to fall back to prompt-only behavior with no runtime-loaded daily memory.",
+                  },
+                  applyOn: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "new",
+                        },
+                        {
+                          type: "string",
+                          const: "reset",
+                        },
+                      ],
+                    },
+                    title: "Startup Context Apply On",
+                    description:
+                      'Chooses which bare reset commands get startup context: include "new", "reset", or both (default: ["new","reset"]).',
+                  },
+                  dailyMemoryDays: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 14,
+                    title: "Startup Context Daily Memory Days",
+                    description:
+                      "Number of dated memory files to load counting backward from today in the configured user timezone (default: 2 for today + yesterday).",
+                  },
+                  maxFileBytes: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 65536,
+                    title: "Startup Context Max File Bytes",
+                    description:
+                      "Maximum bytes allowed per daily memory file when building startup context (default: 16384). Files over this boundary-safe read limit are skipped.",
+                  },
+                  maxFileChars: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 10000,
+                    title: "Startup Context Max File Chars",
+                    description:
+                      "Maximum characters retained from each loaded daily memory file in the startup prelude (default: 2000).",
+                  },
+                  maxTotalChars: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 50000,
+                    title: "Startup Context Max Total Chars",
+                    description:
+                      "Maximum total characters retained across all loaded daily memory files in the startup prelude (default: 4500). Additional files are truncated from the prelude once this cap is reached.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Startup Context",
+                description:
+                  'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
+              },
               timeFormat: {
                 anyOf: [
                   {
@@ -6715,6 +6780,177 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                   },
                   additionalProperties: {},
+                },
+                tts: {
+                  type: "object",
+                  properties: {
+                    auto: {
+                      type: "string",
+                      enum: ["off", "always", "inbound", "tagged"],
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    mode: {
+                      type: "string",
+                      enum: ["final", "all"],
+                    },
+                    provider: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    summaryModel: {
+                      type: "string",
+                    },
+                    modelOverrides: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        allowText: {
+                          type: "boolean",
+                        },
+                        allowProvider: {
+                          type: "boolean",
+                        },
+                        allowVoice: {
+                          type: "boolean",
+                        },
+                        allowModelId: {
+                          type: "boolean",
+                        },
+                        allowVoiceSettings: {
+                          type: "boolean",
+                        },
+                        allowNormalization: {
+                          type: "boolean",
+                        },
+                        allowSeed: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    providers: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          apiKey: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              type: "number",
+                            },
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "null",
+                            },
+                            {
+                              type: "array",
+                              items: {},
+                            },
+                            {
+                              type: "object",
+                              propertyNames: {
+                                type: "string",
+                              },
+                              additionalProperties: {},
+                            },
+                          ],
+                        },
+                      },
+                    },
+                    prefsPath: {
+                      type: "string",
+                    },
+                    maxTextLength: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 9007199254740991,
+                    },
+                    timeoutMs: {
+                      type: "integer",
+                      minimum: 1000,
+                      maximum: 120000,
+                    },
+                  },
+                  additionalProperties: false,
                 },
                 tools: {
                   type: "object",
@@ -24435,6 +24671,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'Inject agent-visible warning text when bootstrap files are truncated: "off", "once" (default), or "always".',
       tags: ["advanced"],
     },
+    "agents.defaults.startupContext": {
+      label: "Startup Context",
+      help: 'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
+      tags: ["advanced"],
+    },
+    "agents.defaults.startupContext.enabled": {
+      label: "Enable Startup Context",
+      help: "Enable the startup-context prelude for bare session resets (default: true). Disable this to fall back to prompt-only behavior with no runtime-loaded daily memory.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.startupContext.applyOn": {
+      label: "Startup Context Apply On",
+      help: 'Chooses which bare reset commands get startup context: include "new", "reset", or both (default: ["new","reset"]).',
+      tags: ["advanced"],
+    },
+    "agents.defaults.startupContext.dailyMemoryDays": {
+      label: "Startup Context Daily Memory Days",
+      help: "Number of dated memory files to load counting backward from today in the configured user timezone (default: 2 for today + yesterday).",
+      tags: ["advanced"],
+    },
+    "agents.defaults.startupContext.maxFileBytes": {
+      label: "Startup Context Max File Bytes",
+      help: "Maximum bytes allowed per daily memory file when building startup context (default: 16384). Files over this boundary-safe read limit are skipped.",
+      tags: ["performance", "storage"],
+    },
+    "agents.defaults.startupContext.maxFileChars": {
+      label: "Startup Context Max File Chars",
+      help: "Maximum characters retained from each loaded daily memory file in the startup prelude (default: 2000).",
+      tags: ["performance", "storage"],
+    },
+    "agents.defaults.startupContext.maxTotalChars": {
+      label: "Startup Context Max Total Chars",
+      help: "Maximum total characters retained across all loaded daily memory files in the startup prelude (default: 4500). Additional files are truncated from the prelude once this cap is reached.",
+      tags: ["performance"],
+    },
     "agents.defaults.envelopeTimezone": {
       label: "Envelope Timezone",
       help: 'Timezone for message envelopes ("utc", "local", "user", or an IANA timezone string).',
@@ -26793,6 +27064,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.list[].sandbox.ssh.knownHostsData": {
       sensitive: true,
       tags: ["security", "storage"],
+    },
+    "agents.list[].tts.providers.*.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "media"],
     },
     "tools.web.search.apiKey": {
       sensitive: true,
