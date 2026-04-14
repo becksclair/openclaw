@@ -75,9 +75,10 @@ Verdicts for the previous fork-only commits:
 - `ddf51b11d9` — partial keep
   - The daemon install env-isolation fix is still required.
   - Proof: on the fresh replay branch, `pnpm test src/commands/daemon-install-helpers.test.ts` still leaked ambient env vars and failed until the tests passed isolated `HOME` / `OPENAI_API_KEY` input explicitly.
-  - The global-skills half did not re-prove itself on this base:
-    - `pnpm test src/agents/skills.agents-skills-directory.test.ts` passed without replaying the old workspace-skill patch.
-    - Do not carry the old skills-path change unless a fresh failure reproduces that exact leak class again.
+  - The global-skills half is still required, but in a reduced upstream-shaped form.
+  - Proof:
+    - `pnpm test src/agents/skills.agents-skills-directory.test.ts` passed initially on the fresh replay branch.
+    - Later full-suite coverage reproduced the real leak class through workspace-skill prompt tests, which picked up personal `~/.agents/skills` state until `src/agents/skills/workspace.ts` was switched to the env-scoped OS-home seam and the regression test was restored.
 
 - `90e5779609` — drop
   - The Firecrawl-specific secrets runtime test-support change did not re-prove itself.
@@ -93,6 +94,17 @@ Verdicts for the previous fork-only commits:
 - `db25acf3fb` — regenerate only
   - Never replay generated baselines by cherry-pick.
   - Regenerate after carrying public config-surface changes.
+
+- `d900ee4b20` / `dc0e30e262` — keep
+  - Carry the Telegram inbound-audio auto-TTS patch and its regression coverage.
+  - Proof:
+    - Telegram inbound audio now sets an explicit `InboundAudio` flag in the finalized inbound context instead of relying on body-shape or media-type heuristics later in dispatch.
+    - `dispatch-from-config` now treats that explicit flag as authoritative, so wrapped Telegram transcript bodies still trigger the correct auto-TTS lane.
+    - Focused validation passed on the replay branch:
+      - `pnpm test extensions/telegram/src/bot-message-context.audio-transcript.test.ts`
+      - `pnpm test src/auto-reply/reply/dispatch-from-config.reply-dispatch.test.ts`
+      - `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts -t "preserves explicit inbound-audio detection for final TTS dispatch when body text is wrapped"`
+      - `pnpm tsgo`
 
 ## Seam inventory
 
@@ -224,6 +236,45 @@ Required invariants after rebase:
 - Agent-specific TTS overrides win over global defaults for that agent only.
 - `talk.speak` and `talk.config` both see the effective agent-scoped provider and voice.
 - Talk only points at a provider it can actually resolve, and it stays on a working provider if the selected one cannot materialize a valid Talk config.
+
+### 4. Telegram inbound-audio auto-TTS seam
+
+Status: implemented
+
+Why this exists:
+
+- Telegram voice/audio turns can be preflight-transcribed into wrapped body text before reply dispatch sees them.
+- Auto-TTS dispatch should still know that the inbound turn was audio-originated even when later body text no longer looks like a raw audio placeholder.
+
+Behavior carried by this fork:
+
+- Telegram inbound context sets `InboundAudio` explicitly when current-turn media contains audio.
+- The shared reply-dispatch path treats `InboundAudio` as authoritative before falling back to media-type or body-shape heuristics.
+- Regression coverage proves the final TTS dispatch path keeps `inboundAudio: true` even when Telegram has already wrapped the transcript into envelope text.
+
+Primary seam files:
+
+- `extensions/telegram/src/bot-message-context.session.ts`
+- `src/auto-reply/reply/dispatch-from-config.ts`
+- `src/auto-reply/templating.ts`
+
+Primary seam tests:
+
+- `extensions/telegram/src/bot-message-context.audio-transcript.test.ts`
+- `src/auto-reply/reply/dispatch-from-config.reply-dispatch.test.ts`
+- `src/auto-reply/reply/dispatch-from-config.test.ts`
+
+Rebase notes:
+
+- Prefer the explicit inbound-audio bit over body-shape heuristics when both exist.
+- Keep the flag local to real audio-origin turns; do not broaden it into a generic “body contains transcript” marker.
+- If upstream adds an equivalent explicit context flag or equivalent dispatch contract, delete this seam and collapse to upstream behavior.
+
+Required invariants after rebase:
+
+- Telegram voice/audio turns keep `InboundAudio: true` in finalized context even when the transcript is already rendered into `Body` / `BodyForAgent`.
+- Final auto-TTS dispatch still sees `inboundAudio: true` for those wrapped Telegram transcript turns.
+- Non-audio text turns do not start opting into audio-origin behavior just because their body text resembles transcript formatting.
 
 ## Replay checklist
 
