@@ -9,7 +9,6 @@ import {
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
-import { normalizeChannelId, type ChannelId } from "openclaw/plugin-sdk/channel-targets";
 import type {
   OpenClawConfig,
   TtsAutoMode,
@@ -19,10 +18,12 @@ import type {
 } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import {
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import {
@@ -584,9 +585,58 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
 }
 
 const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix", "discord"]);
+const TELEGRAM_STYLE_VOICE_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
+const DISCORD_NATIVE_VOICE_OUTPUT_FORMATS = new Set(["opus", "ogg", "oga"]);
+const DISCORD_NATIVE_VOICE_FILE_EXTENSIONS = new Set([".opus", ".ogg", ".oga"]);
 
-function resolveChannelId(channel: string | undefined): ChannelId | null {
-  return channel ? normalizeChannelId(channel) : null;
+function resolveChannelId(channel: string | undefined): string | null {
+  return normalizeMessageChannel(channel) ?? null;
+}
+
+function resolveVoiceCompatibleContentType(outputFormat: string | undefined): string | undefined {
+  switch (normalizeOptionalLowercaseString(outputFormat)) {
+    case "ogg":
+    case "oga":
+    case "opus":
+      return "audio/ogg";
+    case "mp3":
+    case "mpeg":
+      return "audio/mpeg";
+    case "m4a":
+    case "mp4":
+      return "audio/mp4";
+    default:
+      return undefined;
+  }
+}
+
+function resolveChannelVoiceCompatibility(params: {
+  channelId: string | null;
+  providerVoiceCompatible?: boolean;
+  outputFormat?: string;
+  fileExtension?: string;
+}): boolean {
+  if (params.providerVoiceCompatible === true) {
+    return true;
+  }
+  if (!params.channelId) {
+    return false;
+  }
+  const fileExtension = normalizeOptionalLowercaseString(params.fileExtension);
+  const outputFormat = normalizeOptionalLowercaseString(params.outputFormat);
+  if (params.channelId === "discord") {
+    return Boolean(
+      (fileExtension && DISCORD_NATIVE_VOICE_FILE_EXTENSIONS.has(fileExtension)) ||
+      (outputFormat && DISCORD_NATIVE_VOICE_OUTPUT_FORMATS.has(outputFormat)),
+    );
+  }
+  if (TELEGRAM_STYLE_VOICE_CHANNELS.has(params.channelId)) {
+    return isVoiceCompatibleAudio({
+      contentType: resolveVoiceCompatibleContentType(outputFormat),
+      fileName: fileExtension ? `voice${fileExtension}` : undefined,
+    });
+  }
+  return false;
 }
 
 function supportsNativeVoiceNoteTts(channel: string | undefined): boolean {
@@ -802,6 +852,7 @@ export async function synthesizeSpeech(params: {
   }
 
   const { config, providers } = setup;
+  const channelId = resolveChannelId(params.channel);
   const target = supportsNativeVoiceNoteTts(params.channel) ? "voice-note" : "audio-file";
 
   const errors: string[] = [];
@@ -856,7 +907,12 @@ export async function synthesizeSpeech(params: {
         attemptedProviders,
         attempts,
         outputFormat: synthesis.outputFormat,
-        voiceCompatible: synthesis.voiceCompatible,
+        voiceCompatible: resolveChannelVoiceCompatibility({
+          channelId,
+          providerVoiceCompatible: synthesis.voiceCompatible,
+          outputFormat: synthesis.outputFormat,
+          fileExtension: synthesis.fileExtension,
+        }),
         fileExtension: synthesis.fileExtension,
       };
     } catch (err) {

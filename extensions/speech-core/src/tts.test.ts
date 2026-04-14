@@ -50,7 +50,7 @@ vi.mock("../api.js", async () => {
   };
 });
 
-const { _test, maybeApplyTtsToPayload } = await import("./tts.js");
+const { _test, maybeApplyTtsToPayload, textToSpeech } = await import("./tts.js");
 
 const nativeVoiceNoteChannels = ["discord", "feishu", "matrix", "telegram", "whatsapp"] as const;
 
@@ -100,6 +100,55 @@ describe("speech-core native voice-note routing", () => {
       );
       expect(result.audioAsVoice).toBe(true);
       expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("upgrades Telegram voice compatibility from the synthesized artifact when provider metadata is pessimistic", async () => {
+    synthesizeMock.mockResolvedValueOnce({
+      audioBuffer: Buffer.from("voice"),
+      fileExtension: ".opus",
+      outputFormat: "opus",
+      voiceCompatible: false,
+    });
+
+    const result = await textToSpeech({
+      text: "A long enough message for direct speech output.",
+      cfg: createTtsConfig("openclaw-speech-core-telegram-compat-test"),
+      channel: "telegram",
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.voiceCompatible).toBe(true);
+  });
+
+  it("marks Telegram auto TTS payloads as voice when the artifact is compatible even if provider metadata is false", async () => {
+    synthesizeMock.mockResolvedValueOnce({
+      audioBuffer: Buffer.from("voice"),
+      fileExtension: ".opus",
+      outputFormat: "opus",
+      voiceCompatible: false,
+    });
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload: {
+          text: "Telegram should still treat compatible Opus output as a voice note.",
+        },
+        cfg: createTtsConfig("openclaw-speech-core-telegram-voice-test"),
+        channel: "telegram",
+        kind: "final",
+      });
+
+      expect(result.audioAsVoice).toBe(true);
+      expect(result.mediaUrl).toMatch(/voice-\d+\.opus$/);
 
       mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
     } finally {

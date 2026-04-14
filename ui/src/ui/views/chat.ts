@@ -34,6 +34,7 @@ import {
   type SlashCommandDef,
 } from "../chat/slash-commands.ts";
 import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
+import type { SpeechGatewayClient } from "../chat/talk-tts.ts";
 import { buildSidebarContent, extractToolCards, extractToolPreview } from "../chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
@@ -65,6 +66,7 @@ export type ChatProps = {
   stream: string | null;
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
+  client?: SpeechGatewayClient | null;
   draft: string;
   queue: ChatQueueItem[];
   connected: boolean;
@@ -112,6 +114,7 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  onTtsError?: (message: string | null) => void;
   basePath?: string;
 };
 
@@ -1281,6 +1284,9 @@ export function renderChat(props: ChatProps) {
                 allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
                 contextWindow:
                   activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
+                client: props.connected ? props.client : null,
+                onTtsError: props.onTtsError,
+                agentId: props.currentAgentId,
                 onDelete: () => {
                   deleted.delete(item.key);
                   requestUpdate();
