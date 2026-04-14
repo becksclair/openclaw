@@ -1923,6 +1923,50 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalPayload?.text).toBeUndefined();
   });
 
+  it("preserves explicit inbound-audio detection for final TTS dispatch when body text is wrapped", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Body: "Conversation info\n\n[Audio]\nUser text:\n[Telegram test] hello\nTranscript:\nhello",
+      BodyForAgent: "hello",
+      BodyForCommands:
+        "Conversation info\n\n[Audio]\nUser text:\n[Telegram test] hello\nTranscript:\nhello",
+      InboundAudio: true,
+      MediaPath: undefined,
+      MediaUrl: undefined,
+      MediaType: undefined,
+      MediaPaths: undefined,
+      MediaUrls: undefined,
+      MediaTypes: undefined,
+      Provider: "telegram",
+      Surface: "telegram",
+      From: "telegram:123",
+      To: "telegram:123",
+      SessionKey: "agent:test:session",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "reply" }),
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inboundAudio: true,
+        kind: "final",
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+      }),
+    );
+  });
+
   it("closes oneshot ACP sessions after the turn completes", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "done" }]);
