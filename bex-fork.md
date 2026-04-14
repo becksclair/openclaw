@@ -108,17 +108,15 @@ Verdicts for the previous fork-only commits:
 
 ## Local workflow notes
 
-These are not carried fork seams, but they matter for keeping the replayed branch sane locally.
+These are local operating rules, not carried fork seams.
 
 - `main` now points at the replayed line that was pushed to `origin/main` on 2026-04-14.
-  - The old pre-repoint local-main history is preserved on `bex/local-main-pre-repoint-2026-04-14`.
-  - Treat that backup branch as historical salvage only; do not keep building new work on top of the pre-replay ancestry by accident.
+  - The old pre-repoint local-main history lives on `bex/local-main-pre-repoint-2026-04-14`; treat it as salvage, not the live continuation branch.
 
 - `extensions/memory-maintenance/` is intentionally a nested git repo, not part of the outer repo's carried fork surface.
-  - Keep it excluded from the outer repo via local `.git/info/exclude` with `/extensions/memory-maintenance/`.
-  - Do not add that ignore rule to tracked `.gitignore` unless the outer repo intentionally wants to standardize that local layout.
-  - Do not convert it into a submodule unless the outer repo actually wants to own its revision and lifecycle.
-  - Outer-repo stash, reset, rebase, and replay flows do not manage that nested repo's internal state; treat it as its own lifecycle.
+  - Keep it hidden from the outer repo via local `.git/info/exclude` with `/extensions/memory-maintenance/`.
+  - Do not track that ignore in `.gitignore` or convert the directory into a submodule unless the outer repo intentionally decides to own that lifecycle.
+  - Outer-repo stash, reset, rebase, and replay flows do not manage the nested repo's internal state.
 
 ## Seam inventory
 
