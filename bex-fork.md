@@ -106,6 +106,20 @@ Verdicts for the previous fork-only commits:
       - `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts -t "preserves explicit inbound-audio detection for final TTS dispatch when body text is wrapped"`
       - `pnpm tsgo`
 
+## Local workflow notes
+
+These are not carried fork seams, but they matter for keeping the replayed branch sane locally.
+
+- `main` now points at the replayed line that was pushed to `origin/main` on 2026-04-14.
+  - The old pre-repoint local-main history is preserved on `bex/local-main-pre-repoint-2026-04-14`.
+  - Treat that backup branch as historical salvage only; do not keep building new work on top of the pre-replay ancestry by accident.
+
+- `extensions/memory-maintenance/` is intentionally a nested git repo, not part of the outer repo's carried fork surface.
+  - Keep it excluded from the outer repo via local `.git/info/exclude` with `/extensions/memory-maintenance/`.
+  - Do not add that ignore rule to tracked `.gitignore` unless the outer repo intentionally wants to standardize that local layout.
+  - Do not convert it into a submodule unless the outer repo actually wants to own its revision and lifecycle.
+  - Outer-repo stash, reset, rebase, and replay flows do not manage that nested repo's internal state; treat it as its own lifecycle.
+
 ## Seam inventory
 
 ### 1. Voice-routing seam
