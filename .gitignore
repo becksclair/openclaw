@@ -87,6 +87,7 @@ apps/ios/*.mobileprovision
 docs/.local/
 docs/internal/
 tmp/
+CONTINUITY.md
 IDENTITY.md
 USER.md
 .tgz
