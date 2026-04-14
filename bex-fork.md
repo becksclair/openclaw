@@ -48,6 +48,52 @@ These are the working rules that kept this branch smaller during the voice-routi
   - Once behavior is green, review the diff and remove files that no longer carry fork-specific value.
   - Do not keep formatting churn, stale tests, or dead imports in the fork.
 
+## Replay impact: 2026-04-14 onto upstream/main `56625a189b`
+
+This replay was re-based onto upstream `main` at `56625a189b` on 2026-04-14.
+
+Verdicts for the previous fork-only commits:
+
+- `7c6c377fb0` — keep
+  - Replay the voice-routing behavior only.
+  - Upstream touched `extensions/speech-core/src/tts.ts` and `src/infra/outbound/deliver.ts`, so the fork behavior was ported onto upstream structure without reviving older Discord-specific fork logic.
+
+- `3bc8c045a3` — keep
+  - Replay the agent-scoped Talk/TTS seam fully.
+  - Upstream still has no native `src/gateway/talk-agent-config.ts`, but `src/agents/agent-scope.ts` was refactored upstream; keep that upstream split and carry the fork's `tts` extension in `src/agents/agent-scope-config.ts`.
+
+- `4838dcd86c` — keep
+  - Replay the UI read-aloud seam fully.
+  - Upstream still uses browser speech synthesis and does not provide `ui/src/ui/chat/talk-tts.ts` or `ui/src/ui/chat/read-aloud-agent.ts`.
+
+- `2874c4766f` — keep
+  - Fork ledger remains the replay contract.
+
+- `bf5068a111` — keep
+  - `CONTINUITY.md` remains ignored in `.gitignore`.
+
+- `ddf51b11d9` — partial keep
+  - The daemon install env-isolation fix is still required.
+  - Proof: on the fresh replay branch, `pnpm test src/commands/daemon-install-helpers.test.ts` still leaked ambient env vars and failed until the tests passed isolated `HOME` / `OPENAI_API_KEY` input explicitly.
+  - The global-skills half did not re-prove itself on this base:
+    - `pnpm test src/agents/skills.agents-skills-directory.test.ts` passed without replaying the old workspace-skill patch.
+    - Do not carry the old skills-path change unless a fresh failure reproduces that exact leak class again.
+
+- `90e5779609` — drop
+  - The Firecrawl-specific secrets runtime test-support change did not re-prove itself.
+  - Proof: the scoped secrets runtime suite passed on the fresh replay branch without carrying the old patch.
+
+- `e9ecf5d7a4` — partial keep
+  - Keep the plugin-boundary registration assertions for `opencode` and `opencode-go`.
+  - Drop the compaction-harness patch.
+  - Proof:
+    - `pnpm test extensions/opencode/index.test.ts extensions/opencode-go/index.test.ts` passed after restoring the provider-boundary registration assertions.
+    - `pnpm test src/agents/pi-embedded-runner/run.timeout-triggered-compaction.test.ts src/agents/pi-embedded-runner/run.overflow-compaction.test.ts` passed without the old compaction-harness change.
+
+- `db25acf3fb` — regenerate only
+  - Never replay generated baselines by cherry-pick.
+  - Regenerate after carrying public config-surface changes.
+
 ## Seam inventory
 
 ### 1. Voice-routing seam
