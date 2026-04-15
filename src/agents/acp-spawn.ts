@@ -286,7 +286,11 @@ function resolvePluginConversationRefForThreadBinding(params: {
     threadId: params.threadId,
     isGroup: true,
   });
-  const conversationId = normalizeOptionalString(resolvedConversation?.conversationId);
+  const rawConversationId = normalizeOptionalString(resolvedConversation?.conversationId);
+  const conversationId =
+    params.channelId === "discord"
+      ? rawConversationId?.replace(/^channel:/i, "")
+      : rawConversationId;
   if (!conversationId) {
     return null;
   }

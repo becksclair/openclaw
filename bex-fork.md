@@ -128,6 +128,15 @@ Verdicts for the previous fork-only commits:
     - `pnpm build`
   - Treat this as a replay-sensitive tooling carry, not a product seam; re-check it on the next upstream replay and drop it if upstream or the local pnpm/runtime path no longer needs it.
 
+- 2026-04-15 Discord ACP thread-binding conversation-id normalization seam — keep until upstream lands an equivalent fix
+  - Discord ACP thread-bound spawns can fail with `Session binding adapter failed to bind target conversation` because the plugin-resolved inbound conversation id may arrive as OpenClaw's internal `channel:<id>` form.
+  - The ACP thread-binding path passes that value into session binding as if it were a raw Discord channel id, which breaks the later Discord REST lookup/create-thread path.
+  - The fork carries a narrow Discord-only normalization in `src/agents/acp-spawn.ts`, stripping the `channel:` prefix from plugin-resolved conversation ids before preparing ACP thread bindings.
+  - Source context:
+    - upstream issue: `openclaw/openclaw#63686`
+    - upstream PR: `openclaw/openclaw#63574`
+  - Treat this as a temporary replay seam. If upstream lands an equivalent fix, delete the local normalization and remove this entry.
+
 ## Local workflow notes
 
 These are local operating rules, not carried fork seams.
