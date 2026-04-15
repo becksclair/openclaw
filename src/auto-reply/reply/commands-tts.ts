@@ -1,3 +1,4 @@
+import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { logVerbose } from "../../globals.js";
 import {
   normalizeOptionalLowercaseString,
@@ -8,6 +9,7 @@ import {
   getSpeechProvider,
   listSpeechProviders,
 } from "../../tts/provider-registry.js";
+import { resolveConfigWithAgentTts } from "../../tts/tts-config.js";
 import {
   getResolvedSpeechProviderConfig,
   getLastTtsAttempt,
@@ -111,7 +113,14 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     return { shouldContinue: false };
   }
 
-  const config = resolveTtsConfig(params.cfg);
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+    agentId: params.agentId,
+  });
+  const effectiveAgentId = sessionAgentId;
+  const scopedCfg = resolveConfigWithAgentTts(params.cfg, effectiveAgentId);
+  const config = resolveTtsConfig(scopedCfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const action = parsed.action;
   const args = parsed.args;
@@ -146,7 +155,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     const start = Date.now();
     const result = await textToSpeech({
       text: args,
-      cfg: params.cfg,
+      cfg: scopedCfg,
       channel: params.command.channel,
       prefsPath,
     });
@@ -191,7 +200,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "provider") {
     const currentProvider = getTtsProvider(config, prefsPath);
     if (!args.trim()) {
-      const providers = listSpeechProviders(params.cfg);
+      const providers = listSpeechProviders(scopedCfg);
       return {
         shouldContinue: false,
         reply: {
@@ -203,11 +212,11 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
                 (provider) =>
                   `${provider.label}: ${
                     provider.isConfigured({
-                      cfg: params.cfg,
+                      cfg: scopedCfg,
                       providerConfig: getResolvedSpeechProviderConfig(
                         config,
                         provider.id,
-                        params.cfg,
+                        scopedCfg,
                       ),
                       timeoutMs: config.timeoutMs,
                     })
@@ -222,12 +231,12 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     }
 
     const requested = normalizeOptionalLowercaseString(args) ?? "";
-    const resolvedProvider = getSpeechProvider(requested, params.cfg);
+    const resolvedProvider = getSpeechProvider(requested, scopedCfg);
     if (!resolvedProvider) {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 
-    const nextProvider = canonicalizeSpeechProviderId(requested, params.cfg) ?? resolvedProvider.id;
+    const nextProvider = canonicalizeSpeechProviderId(requested, scopedCfg) ?? resolvedProvider.id;
     setTtsProvider(prefsPath, nextProvider);
     return {
       shouldContinue: false,
@@ -296,7 +305,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "status") {
     const enabled = isTtsEnabled(config, prefsPath);
     const provider = getTtsProvider(config, prefsPath);
-    const hasKey = isTtsProviderConfigured(config, provider, params.cfg);
+    const hasKey = isTtsProviderConfigured(config, provider, scopedCfg);
     const maxLength = getTtsMaxLength(prefsPath);
     const summarize = isSummarizationEnabled(prefsPath);
     const last = getLastTtsAttempt();

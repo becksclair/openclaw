@@ -278,11 +278,16 @@ vi.mock("./dispatch-acp-session.runtime.js", () => ({
   readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
     acpMocks.readAcpSessionEntry(params),
 }));
-vi.mock("../../tts/tts-config.js", () => ({
-  normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
-  resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
-  shouldAttemptTtsPayload: () => true,
-}));
+vi.mock("../../tts/tts-config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../tts/tts-config.js")>("../../tts/tts-config.js");
+  return {
+    ...actual,
+    normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
+    resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
+    shouldAttemptTtsPayload: () => true,
+  };
+});
 
 export const noAbortResult = { handled: false, aborted: false } as const;
 export const emptyConfig = {} as OpenClawConfig;
