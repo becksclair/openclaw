@@ -152,7 +152,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
       warn,
@@ -171,7 +171,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
       config: {
@@ -201,7 +201,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
       config: {
@@ -222,7 +222,7 @@ describe("buildGatewayInstallPlan", () => {
     mockNodeGatewayPlanFixture();
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
       config: {
@@ -243,7 +243,7 @@ describe("buildGatewayInstallPlan", () => {
     mockNodeGatewayPlanFixture({ serviceEnvironment: {} });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
       config: {
@@ -269,7 +269,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome },
       port: 3000,
       runtime: "node",
       config: {
@@ -295,7 +295,7 @@ describe("buildGatewayInstallPlan", () => {
     mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome, OPENAI_API_KEY: undefined },
       port: 3000,
       runtime: "node",
     });
@@ -461,7 +461,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: { HOME: isolatedHome, OPENAI_API_KEY: undefined },
       port: 3000,
       runtime: "node",
     });
