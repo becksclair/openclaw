@@ -48,9 +48,10 @@ These are the working rules that kept this branch smaller during the voice-routi
   - Once behavior is green, review the diff and remove files that no longer carry fork-specific value.
   - Do not keep formatting churn, stale tests, or dead imports in the fork.
 
-## Replay impact: 2026-04-15 onto upstream/main `d7cc6f7643`
+## Replay impact snapshot: 2026-04-15 onto upstream/main `d7cc6f7643`
 
-This replay was re-based onto upstream `main` at `d7cc6f7643` on 2026-04-15 in fresh worktree `bex/replay-upstream-2026-04-15-fresh`.
+This section is historical replay provenance from the 2026-04-15 replay pass.
+Use the active seam inventory below as the current carry contract; do not assume the old replay worktree names or upstream tip here are still current.
 
 Verdicts for the previous fork-only commits:
 
@@ -137,18 +138,33 @@ Verdicts for the previous fork-only commits:
     - upstream PR: `openclaw/openclaw#63574`
   - Treat this as a temporary replay seam. If upstream lands an equivalent fix, delete the local normalization and remove this entry.
 
+- 2026-04-15 Discord auto-TTS native voice-note regression seam — keep until upstream preserves voice intent end-to-end
+  - Plain-text auto-TTS on Discord regressed so routed replies could arrive as plain opus attachments instead of native voice-message bubbles, and direct voice sends could fail when the synthesized audio artifact was only reachable through trusted local-media access.
+  - The fork carries a narrow Discord-only fix across three adjacent seams:
+    - Routed outbound and direct voice-send materialization:
+      - `extensions/discord/src/outbound-adapter.ts` must preserve `audioAsVoice` in the routed outbound adapter and send the first audio artifact through `sendVoiceMessageDiscord(...)` before any follow-up text/media.
+      - `extensions/discord/src/send.outbound.ts` must materialize voice-message input through outbound media-load options so trusted local roots and host read capability apply to local synthesized artifacts.
+      - Discord voice-send callers that already accept trusted media options must forward them into `sendVoiceMessageDiscord(...)`, including `extensions/discord/src/monitor/reply-delivery.ts` and `extensions/discord/src/actions/runtime.messaging.ts`.
+    - Native slash-command and interaction reply delivery:
+      - `extensions/discord/src/monitor/native-command.ts` must preserve `audioAsVoice`, route the first voice-compatible artifact through `sendVoiceMessageDiscord(...)` before any follow-up interaction text, forward agent-scoped `mediaLocalRoots` for both direct plugin replies and dispatcher replies, pass the effective routed account into direct plugin command execution and native model-picker replies, resolve text chunking / max-lines policy from the effective routed account, and close voice-only interaction cleanup through the same reply-vs-follow-up semantics as the normal interaction send path.
+    - Native interaction UI rerouting:
+      - `extensions/discord/src/monitor/native-command-ui.ts` must resolve the effective routed account before direct model-picker helper recents reads, model-picker component redispatch, recents-scope reads/writes, and command-arg redispatch, so button/select follow-ups stay aligned with the same routed account/session as the originating slash command.
+  - Proof on the source checkout:
+    - `pnpm test extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts extensions/discord/src/monitor/native-command.model-picker.test.ts extensions/discord/src/monitor/native-command.status-direct.test.ts extensions/discord/src/actions/runtime.test.ts extensions/discord/src/outbound-adapter.test.ts extensions/discord/src/monitor/reply-delivery.test.ts extensions/discord/src/send.sends-basic-channel-messages.test.ts`
+      - includes direct helper-level proof that voice-only native interaction cleanup uses follow-up semantics when required, not just dispatcher-path inference
+      - includes native interaction UI proof that the direct model-picker helper, model-picker component follow-ups, and command-arg component follow-ups all stay on the effective routed account
+    - `pnpm build`
+    - live Discord smoke after restarting `openclaw-gateway.service`: a plain text prompt produced both the expected text reply and a native Discord voice message with flag `8192` plus waveform/duration attachment metadata, not a plain opus file attachment.
+    - live Discord slash-command smoke after rebuilding and restarting `openclaw-gateway.service`: in the Sky DM, `/think high` on the stale pre-restart gateway still produced the bad `.opus` attachment, while the fresh `/think low` run on the rebuilt gateway produced the ephemeral text acknowledgment plus a separate native voice-bubble style message with only playback controls (`Play`, playback speed, volume) and no attachment filename/download affordance.
+  - Treat this as a replay-sensitive behavior seam. If upstream starts preserving `audioAsVoice` and voice-send media access through the Discord outbound/send/reply chain, delete the local carry and remove this entry.
+
 ## Local workflow notes
 
 These are local operating rules, not carried fork seams.
 
-- Fresh replay worktree for this pass:
-  - branch: `bex/replay-upstream-2026-04-15-fresh`
-  - base: `upstream/main` `d7cc6f7643`
-  - path: `/home/bex/projects/openclaw-replay-2026-04-15-fresh`
-
-- Source checkout used for seam carry:
-  - path: `/home/bex/projects/openclaw`
-  - the source checkout still has local staged fork-follow-up work; treat that checkout as source material, not the landing branch for this replay pass.
+- Repo-root `bex-fork.md` is the active carry ledger for this checkout.
+- Treat any replay worktree names in the historical snapshot above as provenance, not current workspace truth. Use `CONTINUITY.md` plus the live checkout state to identify the active replay branch or worktree for the current pass.
+- Keep this file focused on active seams and replay invariants; when a seam changes, update the relevant inventory, invariants, and narrow validation entries together so the document stays readable instead of accreting one-off bullets.
 
 - Nested repo handling:
   - `extensions/memory-maintenance/` remains outside the carried fork surface.
@@ -163,11 +179,15 @@ Status: implemented
 Why this exists:
 
 - The fork wants compatible synthesized voice output to stay on the native voice path where upstream still falls back too early.
-- Upstream now covers the basic Discord native-voice route, so the fork only keeps the still-missing behavior.
+- Upstream covers parts of the Discord native-voice route, but the current tree still needs narrow Discord carry to preserve `audioAsVoice` through routed outbound delivery and trusted local-media voice sends.
 
 Behavior carried by this fork:
 
 - `extensions/speech-core/src/tts.ts` normalizes channel identity and infers voice compatibility from the synthesized artifact, not only provider metadata.
+- Discord routed outbound preserves `audioAsVoice` in `extensions/discord/src/outbound-adapter.ts` so voice-compatible TTS replies become native voice messages instead of plain audio attachments.
+- Discord voice sends materialize source audio through outbound media-load options, and voice-send callers that already have trusted media access forward it into that path.
+- Discord native slash-command and interaction replies in `extensions/discord/src/monitor/native-command.ts` preserve `audioAsVoice` by sending the first voice-compatible artifact through the native voice-message path before any interaction follow-up text, forwarding agent-scoped media roots, passing the effective routed account into direct plugin command execution, resolving text chunking from the effective routed account, and closing voice-only interaction cleanup with the same follow-up semantics used by the main interaction send path.
+- Discord native interaction UI follow-ups in `extensions/discord/src/monitor/native-command-ui.ts` keep model-picker helper reads, model-picker component redispatch, recents-scope reads and writes, and command-arg redispatch on the effective routed account.
 - Telegram outbound keeps `audioAsVoice` through the adapter.
 - Shared outbound delivery routes `audioAsVoice` media payloads through `sendPayload` when that is the channel seam that can preserve voice semantics.
 - Queued tool-media reply merging preserves `audioAsVoice` when a later assistant reply absorbs queued voice output.
@@ -175,6 +195,12 @@ Behavior carried by this fork:
 Primary seam files:
 
 - `extensions/speech-core/src/tts.ts`
+- `extensions/discord/src/outbound-adapter.ts`
+- `extensions/discord/src/send.outbound.ts`
+- `extensions/discord/src/monitor/reply-delivery.ts`
+- `extensions/discord/src/actions/runtime.messaging.ts`
+- `extensions/discord/src/monitor/native-command.ts`
+- `extensions/discord/src/monitor/native-command-ui.ts`
 - `extensions/telegram/src/outbound-adapter.ts`
 - `src/infra/outbound/deliver.ts`
 - `src/agents/pi-embedded-subscribe.handlers.messages.ts`
@@ -182,24 +208,43 @@ Primary seam files:
 Primary seam tests:
 
 - `extensions/speech-core/src/tts.test.ts`
+- `extensions/discord/src/outbound-adapter.test.ts`
+- `extensions/discord/src/send.sends-basic-channel-messages.test.ts`
+- `extensions/discord/src/monitor/reply-delivery.test.ts`
+- `extensions/discord/src/actions/runtime.test.ts`
+- `extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts`
+- `extensions/discord/src/monitor/native-command.model-picker.test.ts`
+- `extensions/discord/src/monitor/native-command.status-direct.test.ts`
 - `extensions/telegram/src/outbound-adapter.test.ts`
 - `extensions/telegram/src/voice.test.ts`
 - `src/infra/outbound/deliver.test.ts`
 - `src/agents/pi-embedded-subscribe.handlers.messages.test.ts`
-- `extensions/discord/src/monitor/reply-delivery.test.ts`
 
 Rebase notes:
 
-- Treat upstream as authoritative for the basic Discord native-voice path.
-- Do not re-carry custom Discord monitor/outbound/send logic unless tests prove a real regression.
+- Treat upstream as authoritative for the base Discord voice-message protocol.
+- Re-check Discord's routed outbound adapter plus direct voice-send media access on every replay; until upstream preserves both, keep the narrow Discord carry instead of assuming the upstream path is still complete.
 - Do not revive `ttsArtifactId` or diagnostic breadcrumb plumbing.
 
 Required invariants after rebase:
 
+- Discord routed outbound does not strip `audioAsVoice` into a plain attachment send when the reply should become a native voice bubble.
+- Discord voice sends can read trusted local synthesized artifacts through outbound media-access plumbing.
+- Discord voice-send callers that already receive trusted media options pass them through instead of silently dropping them on the floor.
+- Discord native slash-command and interaction replies do not fall back to `interaction.reply` or `interaction.followUp` file attachments when the reply should become a native voice bubble.
+- Live slash-command proof should still show the interaction lane as an ephemeral text acknowledgment plus a separate voice-bubble style message, not a `voice-*.opus` attachment row with download controls.
+- Discord direct plugin slash replies still forward agent-scoped local-media roots into the native voice path.
+- Discord direct plugin slash replies execute under the effective routed account, not the incoming command account.
+- Discord native model-picker replies resolve through the effective routed account, not the incoming command account.
+- Discord native model-picker component follow-ups and command-arg component follow-ups also redispatch through the effective routed account, not the provider account they were instantiated under.
+- Discord direct model-picker helper recents reads also use the effective routed account, not the caller account that happened to open the picker.
+- Discord native slash-command text chunking and max-lines limits follow the effective routed account, not the incoming command account.
+- Discord voice-only native interaction cleanup does not get left hanging after the voice message is sent, and does not call `interaction.reply(...)` when the flow already requires follow-up semantics.
+- The helper-level native interaction delivery test still proves the voice-only cleanup branch directly, not only through slash-command dispatcher integration.
 - Telegram-compatible voice output still delivers as voice, even when provider metadata is pessimistic but the artifact is clearly compatible.
 - Shared outbound delivery does not strip `audioAsVoice` by routing through the wrong sender.
 - Queued voice tool media does not lose voice intent when merged into the next reply.
-- Discord reply delivery still passes on upstream's native voice path without extra fork logic unless a regression proves otherwise.
+- Discord reply delivery still passes the native voice path end-to-end, including routed outbound replies and direct monitor replies, unless upstream re-proves an equivalent fix.
 
 ### 2. Control UI Talk read-aloud seam
 
@@ -394,7 +439,7 @@ When rebasing this fork onto a newer upstream base:
 1. Start from a fresh branch off `upstream/main`.
 2. Run `pnpm install` immediately after branching.
 3. Replay only the active seams above.
-4. Prefer upstream behavior wherever it now overlaps, especially in Discord voice delivery.
+4. Prefer upstream behavior wherever it now overlaps, but explicitly re-prove Discord voice delivery on the routed outbound lane, the direct reply lane, and the native slash-command/interaction lane before dropping any Discord voice-note carry.
 5. After replay, remove stale tests and redundant fork code before calling it done.
 
 ## Narrow validation set
@@ -402,10 +447,10 @@ When rebasing this fork onto a newer upstream base:
 Run these after replaying the live seams:
 
 - `pnpm test extensions/speech-core/src/tts.test.ts`
+- `pnpm test extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts extensions/discord/src/monitor/native-command.model-picker.test.ts extensions/discord/src/monitor/native-command.status-direct.test.ts extensions/discord/src/actions/runtime.test.ts extensions/discord/src/outbound-adapter.test.ts extensions/discord/src/monitor/reply-delivery.test.ts extensions/discord/src/send.sends-basic-channel-messages.test.ts`
 - `pnpm test extensions/telegram/src/outbound-adapter.test.ts extensions/telegram/src/voice.test.ts`
 - `pnpm test src/infra/outbound/deliver.test.ts`
 - `pnpm test src/agents/pi-embedded-subscribe.handlers.messages.test.ts`
-- `pnpm test extensions/discord/src/monitor/reply-delivery.test.ts`
 - `pnpm test src/tts/tts-config.test.ts src/gateway/talk-agent-config.test.ts`
 - `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/reply/dispatch-from-config.reply-dispatch.test.ts`
 - `pnpm test src/auto-reply/reply/dispatch-acp.test.ts`
@@ -413,4 +458,5 @@ Run these after replaying the live seams:
 - `pnpm test src/agents/openclaw-tools.tts-scope.test.ts`
 - `pnpm test src/gateway/server-methods/talk.test.ts src/gateway/server.talk-config.test.ts`
 - `pnpm test ui/src/ui/views/chat.test.ts`
+- `pnpm build`
 - `pnpm check`

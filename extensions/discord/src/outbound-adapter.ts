@@ -21,7 +21,12 @@ import type { DiscordComponentMessageSpec } from "./components.js";
 import { getThreadBindingManager, type ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
 import { sendDiscordComponentMessage } from "./send.components.js";
-import { sendMessageDiscord, sendPollDiscord, sendWebhookMessageDiscord } from "./send.js";
+import {
+  sendMessageDiscord,
+  sendPollDiscord,
+  sendVoiceMessageDiscord,
+  sendWebhookMessageDiscord,
+} from "./send.js";
 import { buildDiscordInteractiveComponents } from "./shared-interactive.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
@@ -143,34 +148,49 @@ export const discordOutbound: ChannelOutboundAdapter = {
             text: payload.text?.trim() ? payload.text : undefined,
           }
       : undefined;
-    if (!componentSpec) {
-      return await sendTextMediaPayload({
-        channel: "discord",
-        ctx: {
-          ...ctx,
-          payload,
-        },
-        adapter: discordOutbound,
-      });
-    }
     const send =
       resolveOutboundSendDep<typeof sendMessageDiscord>(ctx.deps, "discord") ?? sendMessageDiscord;
     const target = resolveDiscordOutboundTarget({ to: ctx.to, threadId: ctx.threadId });
-    const mediaUrls = resolvePayloadMediaUrls(payload);
-    const result = await sendPayloadMediaSequenceOrFallback({
-      text: payload.text ?? "",
-      mediaUrls,
-      fallbackResult: { messageId: "", channelId: target },
-      sendNoMedia: async () =>
-        await sendDiscordComponentMessage(target, componentSpec, {
-          replyTo: ctx.replyToId ?? undefined,
-          accountId: ctx.accountId ?? undefined,
-          silent: ctx.silent ?? undefined,
-          cfg: ctx.cfg,
-        }),
-      send: async ({ text, mediaUrl, isFirst }) => {
-        if (isFirst) {
-          return await sendDiscordComponentMessage(target, componentSpec, {
+    const sendStandardPayload = async (
+      nextPayload: typeof payload,
+    ): Promise<{ channel: "discord"; messageId: string; channelId?: string }> => {
+      if (!componentSpec) {
+        return await sendTextMediaPayload({
+          channel: "discord",
+          ctx: {
+            ...ctx,
+            payload: nextPayload,
+          },
+          adapter: discordOutbound,
+        });
+      }
+      const mediaUrls = resolvePayloadMediaUrls(nextPayload);
+      const result = await sendPayloadMediaSequenceOrFallback({
+        text: nextPayload.text ?? "",
+        mediaUrls,
+        fallbackResult: { messageId: "", channelId: target },
+        sendNoMedia: async () =>
+          await sendDiscordComponentMessage(target, componentSpec, {
+            replyTo: ctx.replyToId ?? undefined,
+            accountId: ctx.accountId ?? undefined,
+            silent: ctx.silent ?? undefined,
+            cfg: ctx.cfg,
+          }),
+        send: async ({ text, mediaUrl, isFirst }) => {
+          if (isFirst) {
+            return await sendDiscordComponentMessage(target, componentSpec, {
+              mediaUrl,
+              mediaAccess: ctx.mediaAccess,
+              mediaLocalRoots: ctx.mediaLocalRoots,
+              mediaReadFile: ctx.mediaReadFile,
+              replyTo: ctx.replyToId ?? undefined,
+              accountId: ctx.accountId ?? undefined,
+              silent: ctx.silent ?? undefined,
+              cfg: ctx.cfg,
+            });
+          }
+          return await send(target, text, {
+            verbose: false,
             mediaUrl,
             mediaAccess: ctx.mediaAccess,
             mediaLocalRoots: ctx.mediaLocalRoots,
@@ -180,21 +200,35 @@ export const discordOutbound: ChannelOutboundAdapter = {
             silent: ctx.silent ?? undefined,
             cfg: ctx.cfg,
           });
-        }
-        return await send(target, text, {
-          verbose: false,
-          mediaUrl,
-          mediaAccess: ctx.mediaAccess,
-          mediaLocalRoots: ctx.mediaLocalRoots,
-          mediaReadFile: ctx.mediaReadFile,
-          replyTo: ctx.replyToId ?? undefined,
-          accountId: ctx.accountId ?? undefined,
-          silent: ctx.silent ?? undefined,
-          cfg: ctx.cfg,
-        });
-      },
-    });
-    return attachChannelToResult("discord", result);
+        },
+      });
+      return attachChannelToResult("discord", result);
+    };
+    const mediaUrls = resolvePayloadMediaUrls(payload);
+    if (payload.audioAsVoice && mediaUrls.length > 0) {
+      const sendVoice =
+        resolveOutboundSendDep<typeof sendVoiceMessageDiscord>(ctx.deps, "discord") ??
+        sendVoiceMessageDiscord;
+      const voiceResult = await sendVoice(target, mediaUrls[0], {
+        cfg: ctx.cfg,
+        accountId: ctx.accountId ?? undefined,
+        mediaAccess: ctx.mediaAccess,
+        mediaLocalRoots: ctx.mediaLocalRoots,
+        mediaReadFile: ctx.mediaReadFile,
+        replyTo: ctx.replyToId ?? undefined,
+        silent: ctx.silent ?? undefined,
+      });
+      if (!payload.text?.trim() && mediaUrls.length === 1) {
+        return attachChannelToResult("discord", voiceResult);
+      }
+      return await sendStandardPayload({
+        ...payload,
+        mediaUrls: mediaUrls.slice(1),
+        mediaUrl: undefined,
+        audioAsVoice: undefined,
+      });
+    }
+    return await sendStandardPayload(payload);
   },
   ...createAttachedChannelResultAdapter({
     channel: "discord",

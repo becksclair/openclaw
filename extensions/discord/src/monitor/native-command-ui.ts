@@ -402,7 +402,7 @@ export async function replyWithDiscordModelPickerProviders(params: {
   const quickModels = await readDiscordModelPickerRecentModels({
     scope: resolveDiscordModelPickerPreferenceScope({
       interaction: params.interaction,
-      accountId: params.accountId,
+      accountId: route.accountId,
       userId: params.userId,
     }),
     allowedModelRefs: buildDiscordModelPickerAllowedModelRefs(data),
@@ -566,7 +566,7 @@ export async function handleDiscordModelPickerInteraction(params: {
   const allowedModelRefs = buildDiscordModelPickerAllowedModelRefs(pickerData);
   const preferenceScope = resolveDiscordModelPickerPreferenceScope({
     interaction,
-    accountId: ctx.accountId,
+    accountId: route.accountId,
     userId: parsed.userId,
   });
   const quickModels = await readDiscordModelPickerRecentModels({
@@ -778,7 +778,7 @@ export async function handleDiscordModelPickerInteraction(params: {
           commandArgs: selectionCommand.args,
           cfg: ctx.cfg,
           discordConfig: ctx.discordConfig,
-          accountId: ctx.accountId,
+          accountId: route.accountId,
           sessionPrefix: ctx.sessionPrefix,
           preferFollowUp: true,
           threadBindings: ctx.threadBindings,
@@ -906,6 +906,12 @@ export async function handleDiscordCommandArgInteraction(params: {
     raw: serializeCommandArgs(commandDefinition, commandArgs),
   };
   const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
+  const route = await resolveDiscordModelPickerRoute({
+    interaction,
+    cfg: ctx.cfg,
+    accountId: ctx.accountId,
+    threadBindings: ctx.threadBindings,
+  });
   await params.dispatchCommandInteraction({
     interaction,
     prompt,
@@ -913,7 +919,7 @@ export async function handleDiscordCommandArgInteraction(params: {
     commandArgs: commandArgsWithRaw,
     cfg: ctx.cfg,
     discordConfig: ctx.discordConfig,
-    accountId: ctx.accountId,
+    accountId: route.accountId,
     sessionPrefix: ctx.sessionPrefix,
     preferFollowUp: true,
     threadBindings: ctx.threadBindings,
