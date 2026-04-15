@@ -2,8 +2,23 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
-function isPnpmExecPath(value) {
-  return /^pnpm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(path.basename(value).toLowerCase());
+function getPathForPlatform(platform) {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
+function isPnpmExecPath(value, platform) {
+  return /^pnpm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(
+    getPathForPlatform(platform).basename(value).toLowerCase(),
+  );
+}
+
+function getPnpmExecExtension(value, platform) {
+  return getPathForPlatform(platform).extname(value).toLowerCase();
+}
+
+function isNodeLoadedPnpmExecPath(value, platform) {
+  const extension = getPnpmExecExtension(value, platform);
+  return extension === ".js" || extension === ".cjs" || extension === ".mjs";
 }
 
 export function resolvePnpmRunner(params = {}) {
@@ -14,10 +29,31 @@ export function resolvePnpmRunner(params = {}) {
   const platform = params.platform ?? process.platform;
   const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
 
-  if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isPnpmExecPath(npmExecPath)) {
+  if (
+    typeof npmExecPath === "string" &&
+    npmExecPath.length > 0 &&
+    isPnpmExecPath(npmExecPath, platform)
+  ) {
+    if (isNodeLoadedPnpmExecPath(npmExecPath, platform)) {
+      return {
+        command: nodeExecPath,
+        args: [...nodeArgs, npmExecPath, ...pnpmArgs],
+        shell: false,
+      };
+    }
+
+    if (platform === "win32" && getPnpmExecExtension(npmExecPath, platform) === ".cmd") {
+      return {
+        command: comSpec,
+        args: ["/d", "/s", "/c", buildCmdExeCommandLine(npmExecPath, pnpmArgs)],
+        shell: false,
+        windowsVerbatimArguments: true,
+      };
+    }
+
     return {
-      command: nodeExecPath,
-      args: [...nodeArgs, npmExecPath, ...pnpmArgs],
+      command: npmExecPath,
+      args: pnpmArgs,
       shell: false,
     };
   }

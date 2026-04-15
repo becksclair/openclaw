@@ -120,6 +120,14 @@ Verdicts for the previous fork-only commits:
       - `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts -t "preserves explicit inbound-audio detection for final TTS dispatch when body text is wrapped"`
       - `pnpm tsgo`
 
+- 2026-04-15 pnpm runner tooling support patch — keep for now
+  - `scripts/pnpm-runner.mjs` must distinguish JS pnpm shims from native `@pnpm/exe` binaries and Windows `pnpm.cmd` shims.
+  - Proof: in this source checkout, `pnpm build` failed at `[build-all] canvas:a2ui:bundle` because Node tried to execute the native pnpm binary as JavaScript (`SyntaxError: Invalid or unexpected token`) until the runner stopped routing native pnpm executables through `node`.
+  - Focused validation passed in the source checkout:
+    - `pnpm test test/scripts/pnpm-runner.test.ts`
+    - `pnpm build`
+  - Treat this as a replay-sensitive tooling carry, not a product seam; re-check it on the next upstream replay and drop it if upstream or the local pnpm/runtime path no longer needs it.
+
 ## Local workflow notes
 
 These are local operating rules, not carried fork seams.

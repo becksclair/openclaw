@@ -44,6 +44,43 @@ describe("resolvePnpmRunner", () => {
     });
   });
 
+  it("executes native pnpm binaries directly on non-Windows", () => {
+    expect(
+      resolvePnpmRunner({
+        npmExecPath:
+          "/home/test/.local/share/pnpm/.tools/@pnpm+exe/10.32.1/node_modules/@pnpm/exe/pnpm",
+        nodeExecPath: "/usr/local/bin/node",
+        pnpmArgs: ["exec", "vitest", "run"],
+        platform: "linux",
+      }),
+    ).toEqual({
+      command: "/home/test/.local/share/pnpm/.tools/@pnpm+exe/10.32.1/node_modules/@pnpm/exe/pnpm",
+      args: ["exec", "vitest", "run"],
+      shell: false,
+    });
+  });
+
+  it("runs pnpm.cmd through cmd.exe when npm_execpath points to the Windows shim", () => {
+    expect(
+      resolvePnpmRunner({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmExecPath: "C:\\Users\\test\\AppData\\Local\\pnpm\\pnpm.cmd",
+        pnpmArgs: ["exec", "vitest", "run", "-t", "path with spaces"],
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        'C:\\Users\\test\\AppData\\Local\\pnpm\\pnpm.cmd exec vitest run -t "path with spaces"',
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
   it("falls back to bare pnpm on non-Windows when npm_execpath is missing", () => {
     expect(
       resolvePnpmRunner({
