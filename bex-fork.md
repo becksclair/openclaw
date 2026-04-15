@@ -339,6 +339,54 @@ Required invariants after rebase:
 - Telegram inbound auto-TTS preserves both audio-origin detection and the effective agent-scoped TTS voice/provider on agent-bound sessions.
 - Non-audio text turns do not start opting into audio-origin behavior just because their body text resembles transcript formatting.
 
+### 5. Discord inbound untrusted-body opt-in seam
+
+Status: implemented
+
+Why this exists:
+
+- Upstream/local Discord guild inbound handling was duplicating the live message body into `UntrustedContext` for every guild message.
+- This fork wants guild traffic treated as trusted by default and only specific Discord channels to opt into that wrapped external-body copy when the room really is untrusted.
+- Channel topic metadata stays separate from this policy; it remains its own context seam instead of being coupled to message-body duplication.
+
+Behavior carried by this fork:
+
+- `channels.discord.guilds.<guild>.channels.<channel>.copyMessageBodyToUntrustedContext` is a valid Discord config surface.
+- Guild messages do not copy their live body into `UntrustedContext` by default.
+- Discord channel topic metadata still contributes its separate untrusted context block by default.
+- Channels explicitly marked with `copyMessageBodyToUntrustedContext: true` add the wrapped live message body back into `UntrustedContext`.
+- Discord threads inherit the effective setting from their parent channel through the existing Discord channel/thread resolution seam.
+
+Primary seam files:
+
+- `extensions/discord/src/monitor/inbound-context.ts`
+- `extensions/discord/src/monitor/allow-list.ts`
+- `src/config/types.discord.ts`
+- `src/config/zod-schema.providers-core.ts`
+- `extensions/discord/src/config-ui-hints.ts`
+- `src/config/bundled-channel-config-metadata.generated.ts`
+
+Primary seam tests:
+
+- `extensions/discord/src/monitor/inbound-context.test.ts`
+- `extensions/discord/src/monitor/message-handler.inbound-context.test.ts`
+- `extensions/discord/src/monitor.test.ts`
+- `src/config/config.discord.test.ts`
+
+Rebase notes:
+
+- Keep this seam Discord-local; do not widen it into a generic trusted-room abstraction.
+- Keep channel-topic metadata behavior separate from the message-body opt-in.
+- If upstream adds an equivalent channel-scoped control, delete this seam and collapse back to upstream behavior.
+
+Required invariants after rebase:
+
+- Default Discord guild inbound context does not duplicate the live message body into `UntrustedContext`.
+- Discord channel topic metadata still contributes its separate untrusted context block.
+- Channels with `copyMessageBodyToUntrustedContext: true` do duplicate the wrapped live message body into `UntrustedContext`.
+- Discord thread contexts inherit the effective opt-in from the parent channel.
+- Generated config metadata and config docs still expose `copyMessageBodyToUntrustedContext`.
+
 ## Replay checklist
 
 When rebasing this fork onto a newer upstream base:
