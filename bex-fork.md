@@ -180,6 +180,17 @@ Verdicts for the previous fork-only commits:
     - live Discord slash-command smoke after rebuilding and restarting `openclaw-gateway.service`: in the Sky DM, `/think high` on the stale pre-restart gateway still produced the bad `.opus` attachment, while the fresh `/think low` run on the rebuilt gateway produced the ephemeral text acknowledgment plus a separate native voice-bubble style message with only playback controls (`Play`, playback speed, volume) and no attachment filename/download affordance.
   - Treat this as a replay-sensitive behavior seam. If upstream starts preserving `audioAsVoice` and voice-send media access through the Discord outbound/send/reply chain, delete the local carry and remove this entry.
 
+- 2026-04-16 Agent-scoped TTS session initialization fix — behavior correction to seam #3, keep as part of the agent-scoped Talk/TTS carry
+  - **Root cause**: The 2026-04-15 replay of the Agent-scoped Talk/TTS seam (commit `3bc8c045a3`) added agent-scoped `tts.auto` config support but missed the session initialization path in `src/auto-reply/reply/session.ts`.
+  - **Symptom**: New sessions for agents with `agents.list[].tts.auto: "always"` did not have their `ttsAuto` field initialized from the agent config, causing auto-TTS to fail on Discord DMs and other channels.
+  - **Fix**: Modified `src/auto-reply/reply/session.ts` to initialize `ttsAuto` from the agent's TTS config when creating a new session:
+    - Added import for `resolveAgentConfig` from agent-scope
+    - Added import for `normalizeTtsAutoMode` from TTS auto-mode module
+    - Modified the `ttsAuto` initialization to include `normalizeTtsAutoMode(resolveAgentConfig(cfg, agentId)?.tts?.auto)` as a fallback
+  - **Verification**: New sessions for the "claude" agent now correctly inherit `ttsAuto: "always"` from agent config, while still respecting user overrides and persisted session values.
+  - **Test gap**: The original seam validation (lines 71-76) did not include `src/auto-reply/reply/session.test.ts`; this file should be added to the Agent-scoped Talk/TTS seam test coverage.
+  - Treat this as an essential correction to the Agent-scoped Talk/TTS seam; do not drop it during replay even though the delta is small.
+
 - 2026-04-16 safe-bin canonical-path trust seam — keep until upstream trusts canonical system-bin realpaths
   - The node-host/system-run allowlist lane correctly unwraps transparent `env` wrappers such as `env tr a b`, but the safe-bin trust check was still evaluating the discovered symlink path instead of the canonical executable path.
   - On this host `tr` resolves as `/usr/sbin/tr` with realpath `/usr/bin/tr`; the default trusted safe-bin dirs include `/usr/bin` but not `/usr/sbin`, so allowlist-mode system-run and adjacent safe-bin callers failed closed with `SYSTEM_RUN_DENIED: allowlist miss` even though the real binary was one of the default safe bins.
@@ -361,6 +372,7 @@ Primary seam files:
 - `src/agents/agent-scope.ts`
 - `src/agents/openclaw-tools.ts`
 - `src/tts/tts-config.ts`
+- `src/auto-reply/reply/session.ts` — session initialization must inherit `ttsAuto` from agent config when creating new sessions
 - `src/auto-reply/reply/commands-tts.ts`
 - `src/auto-reply/reply/dispatch-acp.ts`
 - `src/auto-reply/reply/dispatch-from-config.ts`
@@ -375,6 +387,7 @@ Primary seam tests:
 - `src/auto-reply/reply/commands-tts.test.ts`
 - `src/auto-reply/reply/dispatch-acp.test.ts`
 - `src/auto-reply/reply/dispatch-from-config.test.ts`
+- `src/auto-reply/reply/session.test.ts` — verifies that agent-scoped `tts.auto` is inherited on new session creation
 - `src/tts/tts-config.test.ts`
 - `src/gateway/talk-agent-config.test.ts`
 - `src/gateway/server-methods/talk.test.ts`
