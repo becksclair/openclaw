@@ -158,7 +158,10 @@ Verdicts for the previous fork-only commits:
 
 - 2026-04-15 Discord auto-TTS native voice-note regression seam — keep until upstream preserves voice intent end-to-end
   - Plain-text auto-TTS on Discord regressed so routed replies could arrive as plain opus attachments instead of native voice-message bubbles, and direct voice sends could fail when the synthesized audio artifact was only reachable through trusted local-media access.
-  - The fork carries a narrow Discord-only fix across three adjacent seams:
+  - The fork carries a narrow Discord-focused fix across four adjacent seams:
+    - Shared final-mode auto-TTS fallback:
+      - `src/auto-reply/reply/dispatch-from-config.ts` must capture sanitized preview text during partial streaming and synthesize a TTS-only final payload from that visible text when partial streaming produces no final reply payload.
+      - The same seam must dedupe against the final reply's visible text so it does not synthesize a redundant preview-fallback voice message when a final reply already resolves to the same user-visible text.
     - Routed outbound and direct voice-send materialization:
       - `extensions/discord/src/outbound-adapter.ts` must preserve `audioAsVoice` in the routed outbound adapter and send the first audio artifact through `sendVoiceMessageDiscord(...)` before any follow-up text/media.
       - `extensions/discord/src/send.outbound.ts` must materialize voice-message input through outbound media-load options so trusted local roots and host read capability apply to local synthesized artifacts.
@@ -168,6 +171,7 @@ Verdicts for the previous fork-only commits:
     - Native interaction UI rerouting:
       - `extensions/discord/src/monitor/native-command-ui.ts` must resolve the effective routed account before direct model-picker helper recents reads, model-picker component redispatch, recents-scope reads/writes, and command-arg redispatch, so button/select follow-ups stay aligned with the same routed account/session as the originating slash command.
   - Proof on the source checkout:
+    - `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts -t "uses cleaned preview text|does not retry preview fallback TTS"`
     - `pnpm test extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts extensions/discord/src/monitor/native-command.model-picker.test.ts extensions/discord/src/monitor/native-command.status-direct.test.ts extensions/discord/src/actions/runtime.test.ts extensions/discord/src/outbound-adapter.test.ts extensions/discord/src/monitor/reply-delivery.test.ts extensions/discord/src/send.sends-basic-channel-messages.test.ts`
       - includes direct helper-level proof that voice-only native interaction cleanup uses follow-up semantics when required, not just dispatcher-path inference
       - includes native interaction UI proof that the direct model-picker helper, model-picker component follow-ups, and command-arg component follow-ups all stay on the effective routed account
@@ -175,6 +179,22 @@ Verdicts for the previous fork-only commits:
     - live Discord smoke after restarting `openclaw-gateway.service`: a plain text prompt produced both the expected text reply and a native Discord voice message with flag `8192` plus waveform/duration attachment metadata, not a plain opus file attachment.
     - live Discord slash-command smoke after rebuilding and restarting `openclaw-gateway.service`: in the Sky DM, `/think high` on the stale pre-restart gateway still produced the bad `.opus` attachment, while the fresh `/think low` run on the rebuilt gateway produced the ephemeral text acknowledgment plus a separate native voice-bubble style message with only playback controls (`Play`, playback speed, volume) and no attachment filename/download affordance.
   - Treat this as a replay-sensitive behavior seam. If upstream starts preserving `audioAsVoice` and voice-send media access through the Discord outbound/send/reply chain, delete the local carry and remove this entry.
+
+- 2026-04-16 safe-bin canonical-path trust seam — keep until upstream trusts canonical system-bin realpaths
+  - The node-host/system-run allowlist lane correctly unwraps transparent `env` wrappers such as `env tr a b`, but the safe-bin trust check was still evaluating the discovered symlink path instead of the canonical executable path.
+  - On this host `tr` resolves as `/usr/sbin/tr` with realpath `/usr/bin/tr`; the default trusted safe-bin dirs include `/usr/bin` but not `/usr/sbin`, so allowlist-mode system-run and adjacent safe-bin callers failed closed with `SYSTEM_RUN_DENIED: allowlist miss` even though the real binary was one of the default safe bins.
+  - The fork carries a minimal trust fix:
+    - `src/infra/exec-safe-bin-trust.ts` now accepts an optional `resolvedRealPath` and, when present, trusts the canonical realpath dir instead of the discovered symlink dir so trusted-dir symlinks cannot escape into untrusted targets.
+    - `src/infra/exec-approvals-allowlist.ts` threads `resolution.resolvedRealPath` into that trust check so safe-bin evaluation follows the canonical executable when available.
+  - Proof on the source checkout:
+    - `pnpm test src/infra/exec-safe-bin-trust.test.ts src/infra/exec-approvals-safe-bins.test.ts src/node-host/invoke-system-run.test.ts -t "trusts canonical realpaths|fails closed when a trusted-dir symlink resolves outside trusted dirs|trusts safe-bin realpaths|handles transparent env wrappers in allowlist mode"`
+    - same follow-up pass also reconciled the now-intentional generated/baseline drift around `acpx-remote` and local heavy-check env handling:
+      - regenerated `src/config/schema.base.generated.ts`
+      - updated `scripts/lib/bundled-runtime-sidecar-paths.json`
+      - updated `test/vitest-scoped-config.test.ts`
+      - updated `test/scripts/local-heavy-check-runtime.test.ts`
+    - keep the proof commands above as the seam-local bar; do not leave a lingering "current full gates are green" claim here unless you have just re-proved `pnpm test`, `pnpm check`, and `pnpm build` on the exact pending tree.
+  - Treat this as a narrow execution-policy carry. If upstream starts canonicalizing trusted safe-bin paths before trust evaluation, delete the local patch and remove this entry.
 
 ## Local workflow notes
 
@@ -207,6 +227,8 @@ Why this exists:
 Behavior carried by this fork:
 
 - `extensions/speech-core/src/tts.ts` normalizes channel identity and infers voice compatibility from the synthesized artifact, not only provider metadata.
+- Shared final-mode auto-TTS in `src/auto-reply/reply/dispatch-from-config.ts` captures sanitized preview text during partial streaming and synthesizes a TTS-only final payload from that visible text when no final reply payload survives.
+- That same shared dispatch seam dedupes preview-fallback synthesis against the final reply's visible text so it does not emit a redundant second voice message when the final reply already resolves to the same user-visible text.
 - Discord routed outbound preserves `audioAsVoice` in `extensions/discord/src/outbound-adapter.ts` so voice-compatible TTS replies become native voice messages instead of plain audio attachments.
 - Discord voice sends materialize source audio through outbound media-load options, and voice-send callers that already have trusted media access forward it into that path.
 - Discord native slash-command and interaction replies in `extensions/discord/src/monitor/native-command.ts` preserve `audioAsVoice` by sending the first voice-compatible artifact through the native voice-message path before any interaction follow-up text, forwarding agent-scoped media roots, passing the effective routed account into direct plugin command execution, resolving text chunking from the effective routed account, and closing voice-only interaction cleanup with the same follow-up semantics used by the main interaction send path.
@@ -218,6 +240,7 @@ Behavior carried by this fork:
 Primary seam files:
 
 - `extensions/speech-core/src/tts.ts`
+- `src/auto-reply/reply/dispatch-from-config.ts`
 - `extensions/discord/src/outbound-adapter.ts`
 - `extensions/discord/src/send.outbound.ts`
 - `extensions/discord/src/monitor/reply-delivery.ts`
@@ -231,6 +254,7 @@ Primary seam files:
 Primary seam tests:
 
 - `extensions/speech-core/src/tts.test.ts`
+- `src/auto-reply/reply/dispatch-from-config.test.ts`
 - `extensions/discord/src/outbound-adapter.test.ts`
 - `extensions/discord/src/send.sends-basic-channel-messages.test.ts`
 - `extensions/discord/src/monitor/reply-delivery.test.ts`
@@ -252,6 +276,8 @@ Rebase notes:
 Required invariants after rebase:
 
 - Discord routed outbound does not strip `audioAsVoice` into a plain attachment send when the reply should become a native voice bubble.
+- Shared final-mode auto-TTS still emits a voice-path reply when partial streaming only exposed the visible text through preview payloads and no final reply payload survives.
+- Shared final-mode auto-TTS does not emit a redundant preview-fallback voice reply when the final reply already resolves to the same visible text.
 - Discord voice sends can read trusted local synthesized artifacts through outbound media-access plumbing.
 - Discord voice-send callers that already receive trusted media options pass them through instead of silently dropping them on the floor.
 - Discord native slash-command and interaction replies do not fall back to `interaction.reply` or `interaction.followUp` file attachments when the reply should become a native voice bubble.
@@ -325,6 +351,7 @@ Behavior carried by this fork:
 - `talk.speak` and `talk.config` both accept `agentId` and resolve through the same seam.
 - Internal agent-aware TTS paths scope `messages.tts` through that same merge seam before they inspect mode, prefs, provider config, or synthesize audio.
   - This includes generic reply dispatch, ACP reply dispatch, `/tts` commands, the shipped TTS agent tool, and Discord voice-manager synthesis when those lanes already know which agent is speaking.
+  - Generic reply dispatch also keeps final-mode auto-TTS alive through partial streaming by capturing sanitized preview text when no final reply payload survives, while deduping that fallback against the final reply's visible text when one does arrive.
   - Standalone gateway `tts.*` RPCs and direct CLI/local conversion remain intentionally global in this pass.
 
 Primary seam files:
@@ -363,6 +390,7 @@ Required invariants after rebase:
 
 - Agent-specific TTS overrides win over global defaults for that agent only.
 - Internal agent-aware TTS lanes use the effective agent-scoped `messages.tts` config before mode, status, prefs, and provider decisions, not only at the final synth call.
+- Generic reply dispatch keeps final-mode auto-TTS working for agent-bound partial-streaming replies even when the final visible text only existed in preview payloads, and it does not duplicate voice output when the final reply already resolves to the same visible text.
 - `talk.speak` and `talk.config` both see the effective agent-scoped provider and voice.
 - Talk only points at a provider it can actually resolve, and it stays on a working provider if the selected one cannot materialize a valid Talk config.
 

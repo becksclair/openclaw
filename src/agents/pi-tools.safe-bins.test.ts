@@ -36,6 +36,15 @@ vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: () => undefined,
 }));
 
+vi.mock("./channel-tools.js", () => ({
+  listChannelAgentTools: () => [],
+  copyChannelAgentToolMeta: vi.fn(),
+}));
+
+vi.mock("./openclaw-tools.js", () => ({
+  createOpenClawTools: () => [],
+}));
+
 vi.mock("../infra/exec-approvals.js", async () => {
   const mod = await vi.importActual<typeof import("../infra/exec-approvals.js")>(
     "../infra/exec-approvals.js",

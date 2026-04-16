@@ -97,6 +97,7 @@ export function isSafeBinUsage(params: {
   if (
     !isTrustedPath({
       resolvedPath: resolution.resolvedPath,
+      resolvedRealPath: resolution.resolvedRealPath,
       trustedDirs: params.trustedSafeBinDirs,
     })
   ) {

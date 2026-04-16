@@ -1928,6 +1928,88 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalPayload?.text).toBeUndefined();
   });
 
+  it("uses cleaned preview text for final-mode TTS when partial streaming has no final payload", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:luke:session-1",
+      BodyForAgent: "stream this",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_msgCtx, options?: GetReplyOptions) => {
+        await options?.onPartialReply?.({
+          text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+        });
+        return undefined;
+      },
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "luke voice smoke pass" },
+      }),
+    );
+    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as ReplyPayload | undefined;
+    expect(finalPayload).toEqual(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+      }),
+    );
+    expect(finalPayload?.text).toBeUndefined();
+  });
+
+  it("does not retry preview fallback TTS when the final reply already resolves to the same visible text", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = false;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:luke:session-1",
+      BodyForAgent: "stream this",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_msgCtx, options?: GetReplyOptions) => {
+        await options?.onPartialReply?.({
+          text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+        });
+        return {
+          text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+        };
+      },
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: {
+          text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+        },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+      }),
+    );
+  });
+
   it("preserves explicit inbound-audio detection for final TTS dispatch when body text is wrapped", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;

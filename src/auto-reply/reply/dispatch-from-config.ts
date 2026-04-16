@@ -42,12 +42,14 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { sanitizeAssistantVisibleText } from "../../shared/text/assistant-visible-text.js";
 import {
   normalizeTtsAutoMode,
   resolveConfigWithAgentTts,
   resolveConfiguredTtsMode,
   shouldAttemptTtsPayload,
 } from "../../tts/tts-config.js";
+import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
@@ -103,6 +105,20 @@ async function maybeApplyTtsToReplyPayload(
   }
   const { maybeApplyTtsToPayload } = await loadTtsRuntime();
   return maybeApplyTtsToPayload(params);
+}
+
+function resolvePayloadTtsText(payload: ReplyPayload): string | undefined {
+  const rawText = payload.text;
+  if (typeof rawText !== "string") {
+    return undefined;
+  }
+  const cleaned = stripInlineDirectiveTagsForDelivery(
+    sanitizeAssistantVisibleText(rawText),
+  ).text.trim();
+  if (!cleaned || cleaned.startsWith("Reasoning:\n")) {
+    return undefined;
+  }
+  return cleaned;
 }
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -605,9 +621,12 @@ export async function dispatchReplyFromConfig(
 
     const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
     const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
+    let latestPreviewTtsText: string | undefined;
+    let latestFinalTtsSourceText: string | undefined;
     const sendFinalPayload = async (
       payload: ReplyPayload,
-    ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+    ): Promise<{ queuedFinal: boolean; routedFinalCount: number; deliveredMedia: boolean }> => {
+      latestFinalTtsSourceText = resolvePayloadTtsText(payload);
       const ttsPayload = await maybeApplyTtsToReplyPayload({
         payload,
         cfg: ttsScopedCfg,
@@ -616,6 +635,7 @@ export async function dispatchReplyFromConfig(
         inboundAudio,
         ttsAuto: sessionTtsAuto,
       });
+      const deliveredMedia = resolveSendableOutboundReplyParts(ttsPayload).hasMedia;
       const result = await routeReplyToOriginating(ttsPayload);
       if (result) {
         if (!result.ok) {
@@ -626,11 +646,14 @@ export async function dispatchReplyFromConfig(
         return {
           queuedFinal: result.ok,
           routedFinalCount: result.ok ? 1 : 0,
+          deliveredMedia: result.ok && deliveredMedia,
         };
       }
+      const didQueue = dispatcher.sendFinalReply(ttsPayload);
       return {
-        queuedFinal: dispatcher.sendFinalReply(ttsPayload),
+        queuedFinal: didQueue,
         routedFinalCount: 0,
+        deliveredMedia: didQueue && deliveredMedia,
       };
     };
 
@@ -859,6 +882,14 @@ export async function dispatchReplyFromConfig(
       ctx,
       {
         ...params.replyOptions,
+        onPartialReply: params.replyOptions?.onPartialReply
+          ? async (payload) => {
+              latestPreviewTtsText = resolvePayloadTtsText(payload) ?? latestPreviewTtsText;
+              await params.replyOptions?.onPartialReply?.(payload);
+            }
+          : async (payload) => {
+              latestPreviewTtsText = resolvePayloadTtsText(payload) ?? latestPreviewTtsText;
+            },
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
@@ -1008,6 +1039,47 @@ export async function dispatchReplyFromConfig(
 
     let queuedFinal = false;
     let routedFinalCount = 0;
+    let deliveredFinalMedia = false;
+    const sendTtsOnlyFinalPayload = async (text: string, label: string): Promise<boolean> => {
+      try {
+        const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
+          payload: { text },
+          cfg: ttsScopedCfg,
+          channel: ttsChannel,
+          kind: "final",
+          inboundAudio,
+          ttsAuto: sessionTtsAuto,
+        });
+        if (!ttsSyntheticReply.mediaUrl) {
+          return false;
+        }
+        const ttsOnlyPayload: ReplyPayload = {
+          mediaUrl: ttsSyntheticReply.mediaUrl,
+          audioAsVoice: ttsSyntheticReply.audioAsVoice,
+        };
+        const result = await routeReplyToOriginating(ttsOnlyPayload);
+        if (result) {
+          queuedFinal = result.ok || queuedFinal;
+          if (result.ok) {
+            routedFinalCount += 1;
+            deliveredFinalMedia = true;
+          }
+          if (!result.ok) {
+            logVerbose(
+              `dispatch-from-config: route-reply (${label}) failed: ${result.error ?? "unknown error"}`,
+            );
+          }
+          return result.ok;
+        }
+        const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
+        queuedFinal = didQueue || queuedFinal;
+        deliveredFinalMedia = didQueue || deliveredFinalMedia;
+        return didQueue;
+      } catch (err) {
+        logVerbose(`dispatch-from-config: ${label} TTS failed: ${formatErrorMessage(err)}`);
+        return false;
+      }
+    };
     if (!suppressDelivery) {
       for (const reply of replies) {
         // Suppress reasoning payloads from channel delivery — channels using this
@@ -1018,6 +1090,7 @@ export async function dispatchReplyFromConfig(
         const finalReply = await sendFinalPayload(reply);
         queuedFinal = finalReply.queuedFinal || queuedFinal;
         routedFinalCount += finalReply.routedFinalCount;
+        deliveredFinalMedia = finalReply.deliveredMedia || deliveredFinalMedia;
       }
 
       const ttsMode = resolveConfiguredTtsMode(ttsScopedCfg);
@@ -1030,42 +1103,13 @@ export async function dispatchReplyFromConfig(
         blockCount > 0 &&
         accumulatedBlockText.trim()
       ) {
-        try {
-          const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
-            payload: { text: accumulatedBlockText },
-            cfg: ttsScopedCfg,
-            channel: ttsChannel,
-            kind: "final",
-            inboundAudio,
-            ttsAuto: sessionTtsAuto,
-          });
-          // Only send if TTS was actually applied (mediaUrl exists)
-          if (ttsSyntheticReply.mediaUrl) {
-            // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content
-            const ttsOnlyPayload: ReplyPayload = {
-              mediaUrl: ttsSyntheticReply.mediaUrl,
-              audioAsVoice: ttsSyntheticReply.audioAsVoice,
-            };
-            const result = await routeReplyToOriginating(ttsOnlyPayload);
-            if (result) {
-              queuedFinal = result.ok || queuedFinal;
-              if (result.ok) {
-                routedFinalCount += 1;
-              }
-              if (!result.ok) {
-                logVerbose(
-                  `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,
-                );
-              }
-            } else {
-              const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
-              queuedFinal = didQueue || queuedFinal;
-            }
-          }
-        } catch (err) {
-          logVerbose(
-            `dispatch-from-config: accumulated block TTS failed: ${formatErrorMessage(err)}`,
-          );
+        await sendTtsOnlyFinalPayload(accumulatedBlockText, "tts-only");
+      }
+
+      if (ttsMode === "final" && !deliveredFinalMedia && latestPreviewTtsText) {
+        const sourceText = latestFinalTtsSourceText?.trim();
+        if (!sourceText || latestPreviewTtsText !== sourceText) {
+          await sendTtsOnlyFinalPayload(latestPreviewTtsText, "preview-tts-only");
         }
       }
     }
