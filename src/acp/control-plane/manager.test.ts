@@ -1,3 +1,4 @@
+import path from "node:path";
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -998,37 +999,39 @@ describe("AcpSessionManager", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    const sessionKey = "agent:codex:acp:binding:demo-binding:default:cwd-restart";
-    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
-      return {
-        sessionKey: key,
-        storeSessionKey: key,
-        acp: {
-          ...readySessionMeta(),
-          cwd: "/workspace/stale",
-          runtimeOptions: {
-            cwd: "/workspace/project",
+    await withTempDir({ prefix: "openclaw-acp-restart-cwd-" }, async (projectCwd) => {
+      const sessionKey = "agent:codex:acp:binding:demo-binding:default:cwd-restart";
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+        return {
+          sessionKey: key,
+          storeSessionKey: key,
+          acp: {
+            ...readySessionMeta(),
+            cwd: path.join(projectCwd, "stale"),
+            runtimeOptions: {
+              cwd: projectCwd,
+            },
           },
-        },
-      };
-    });
+        };
+      });
 
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      cfg: baseCfg,
-      sessionKey,
-      text: "after restart",
-      mode: "prompt",
-      requestId: "r-binding-restart-cwd",
-    });
-
-    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
-      expect.objectContaining({
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
         sessionKey,
-        cwd: "/workspace/project",
-      }),
-    );
+        text: "after restart",
+        mode: "prompt",
+        requestId: "r-binding-restart-cwd",
+      });
+
+      expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey,
+          cwd: projectCwd,
+        }),
+      );
+    });
   });
 
   it("does not resume persisted ACP identity for oneshot sessions after restart", async () => {
@@ -2616,71 +2619,73 @@ describe("AcpSessionManager", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    const sessionKey = "agent:codex:acp:session-cwd-update";
-    let currentEntry = {
-      sessionKey,
-      storeSessionKey: sessionKey,
-      acp: readySessionMeta(),
-    };
-    hoisted.readAcpSessionEntryMock.mockImplementation(() => currentEntry);
-    hoisted.upsertAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        mutate: (
-          current: SessionAcpMeta | undefined,
-          entry: { acp?: SessionAcpMeta } | undefined,
-        ) => SessionAcpMeta | null | undefined;
+    await withTempDir({ prefix: "openclaw-acp-next-cwd-" }, async (nextCwd) => {
+      const sessionKey = "agent:codex:acp:session-cwd-update";
+      let currentEntry = {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: readySessionMeta(),
       };
-      const nextMeta = params.mutate(currentEntry.acp, currentEntry);
-      if (nextMeta === null) {
-        return null;
-      }
-      currentEntry = {
-        ...currentEntry,
-        acp: nextMeta ?? currentEntry.acp,
-      };
-      return currentEntry;
-    });
+      hoisted.readAcpSessionEntryMock.mockImplementation(() => currentEntry);
+      hoisted.upsertAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+        const params = paramsUnknown as {
+          mutate: (
+            current: SessionAcpMeta | undefined,
+            entry: { acp?: SessionAcpMeta } | undefined,
+          ) => SessionAcpMeta | null | undefined;
+        };
+        const nextMeta = params.mutate(currentEntry.acp, currentEntry);
+        if (nextMeta === null) {
+          return null;
+        }
+        currentEntry = {
+          ...currentEntry,
+          acp: nextMeta ?? currentEntry.acp,
+        };
+        return currentEntry;
+      });
 
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      cfg: baseCfg,
-      sessionKey,
-      text: "first",
-      mode: "prompt",
-      requestId: "r1",
-    });
-
-    await expect(
-      manager.updateSessionRuntimeOptions({
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
         cfg: baseCfg,
         sessionKey,
-        patch: { cwd: "/workspace/next" },
-      }),
-    ).resolves.toEqual({
-      cwd: "/workspace/next",
-    });
+        text: "first",
+        mode: "prompt",
+        requestId: "r1",
+      });
 
-    expect(currentEntry.acp.runtimeOptions).toEqual({
-      cwd: "/workspace/next",
-    });
-    expect(currentEntry.acp.cwd).toBe("/workspace/next");
+      await expect(
+        manager.updateSessionRuntimeOptions({
+          cfg: baseCfg,
+          sessionKey,
+          patch: { cwd: nextCwd },
+        }),
+      ).resolves.toEqual({
+        cwd: nextCwd,
+      });
 
-    await manager.runTurn({
-      cfg: baseCfg,
-      sessionKey,
-      text: "second",
-      mode: "prompt",
-      requestId: "r2",
-    });
+      expect(currentEntry.acp.runtimeOptions).toEqual({
+        cwd: nextCwd,
+      });
+      expect(currentEntry.acp.cwd).toBe(nextCwd);
 
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
-    expect(runtimeState.ensureSession).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
+      await manager.runTurn({
+        cfg: baseCfg,
         sessionKey,
-        cwd: "/workspace/next",
-      }),
-    );
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      });
+
+      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+      expect(runtimeState.ensureSession).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          sessionKey,
+          cwd: nextCwd,
+        }),
+      );
+    });
   });
 
   it("returns unsupported-control error when backend does not support set_config_option", async () => {
@@ -2748,6 +2753,157 @@ describe("AcpSessionManager", () => {
       }),
     ).rejects.toMatchObject({
       code: "ACP_INVALID_RUNTIME_OPTION",
+    });
+  });
+
+  it("rejects missing local ACP working directories before session init or mutation", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await withTempDir({ prefix: "openclaw-acp-missing-cwd-" }, async (root) => {
+      const missingCwd = path.join(root, "missing");
+
+      await expect(
+        manager.initializeSession({
+          cfg: baseCfg,
+          sessionKey: "agent:codex:acp:init-missing-cwd",
+          agent: "codex",
+          mode: "persistent",
+          cwd: missingCwd,
+        }),
+      ).rejects.toMatchObject({
+        code: "ACP_SESSION_INIT_FAILED",
+        message: expect.stringContaining(missingCwd),
+      });
+      expect(runtimeState.ensureSession).not.toHaveBeenCalled();
+
+      await expect(
+        manager.setSessionConfigOption({
+          cfg: baseCfg,
+          sessionKey: "agent:codex:acp:session-1",
+          key: "cwd",
+          value: missingCwd,
+        }),
+      ).rejects.toMatchObject({
+        code: "ACP_INVALID_RUNTIME_OPTION",
+        message: expect.stringContaining(missingCwd),
+      });
+      expect(runtimeState.setConfigOption).not.toHaveBeenCalled();
+
+      await expect(
+        manager.updateSessionRuntimeOptions({
+          cfg: baseCfg,
+          sessionKey: "agent:codex:acp:session-1",
+          patch: { cwd: missingCwd },
+        }),
+      ).rejects.toMatchObject({
+        code: "ACP_INVALID_RUNTIME_OPTION",
+        message: expect.stringContaining(missingCwd),
+      });
+    });
+  });
+
+  it("treats cwd as backend-managed when capabilities advertise it", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_mode", "session/set_config_option", "session/status"],
+      managedRuntimeOptionKeys: ["cwd"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx-remote",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex-orion:acp:session-1",
+      storeSessionKey: "agent:codex-orion:acp:session-1",
+      acp: readySessionMeta({
+        backend: "acpx-remote",
+        agent: "codex-orion",
+      }),
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        sessionKey: string;
+        mutate: (current: SessionAcpMeta | undefined) => SessionAcpMeta | null | undefined;
+      };
+      const nextMeta = params.mutate(undefined);
+      if (nextMeta === null) {
+        return null;
+      }
+      return {
+        sessionKey: params.sessionKey,
+        storeSessionKey: params.sessionKey,
+        acp: nextMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    const remoteWindowsCwd = "C:/dev/work";
+
+    await expect(
+      manager.initializeSession({
+        cfg: baseCfg,
+        sessionKey: "agent:codex-orion:acp:init-managed-cwd",
+        agent: "codex-orion",
+        backendId: "acpx-remote",
+        mode: "persistent",
+        cwd: remoteWindowsCwd,
+      }),
+    ).resolves.toMatchObject({
+      handle: expect.objectContaining({
+        sessionKey: "agent:codex-orion:acp:init-managed-cwd",
+      }),
+    });
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex-orion:acp:init-managed-cwd",
+        cwd: undefined,
+      }),
+    );
+
+    await expect(
+      manager.setSessionConfigOption({
+        cfg: baseCfg,
+        sessionKey: "agent:codex-orion:acp:session-1",
+        key: "cwd",
+        value: remoteWindowsCwd,
+      }),
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(error).toMatchObject({
+        code: "ACP_INVALID_RUNTIME_OPTION",
+      });
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe(
+        'ACP runtime option "cwd" is managed by backend "acpx" and cannot be changed in-session.',
+      );
+      return true;
+    });
+    expect(runtimeState.setConfigOption).not.toHaveBeenCalled();
+
+    await expect(
+      manager.updateSessionRuntimeOptions({
+        cfg: baseCfg,
+        sessionKey: "agent:codex-orion:acp:session-1",
+        patch: { cwd: remoteWindowsCwd },
+      }),
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(error).toMatchObject({
+        code: "ACP_INVALID_RUNTIME_OPTION",
+      });
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe(
+        'ACP runtime option "cwd" is managed by backend "acpx-remote" and cannot be changed in-session.',
+      );
+      return true;
     });
   });
 

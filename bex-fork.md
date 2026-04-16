@@ -131,12 +131,30 @@ Verdicts for the previous fork-only commits:
 
 - 2026-04-15 Discord ACP thread-binding conversation-id normalization seam — keep until upstream lands an equivalent fix
   - Discord ACP thread-bound spawns can fail with `Session binding adapter failed to bind target conversation` because the plugin-resolved inbound conversation id may arrive as OpenClaw's internal `channel:<id>` form.
-  - The ACP thread-binding path passes that value into session binding as if it were a raw Discord channel id, which breaks the later Discord REST lookup/create-thread path.
-  - The fork carries a narrow Discord-only normalization in `src/agents/acp-spawn.ts`, stripping the `channel:` prefix from plugin-resolved conversation ids before preparing ACP thread bindings.
+  - The original replay carry normalized the `channel:` form near ACP spawn preparation.
+  - The current carry is narrower and lives at the Discord plugin binding seam instead: configured ACP conversation ids and inbound Discord thread/parent ids are normalized before matching, so raw Discord ids and `channel:<id>` forms compare as the same target.
   - Source context:
     - upstream issue: `openclaw/openclaw#63686`
     - upstream PR: `openclaw/openclaw#63574`
-  - Treat this as a temporary replay seam. If upstream lands an equivalent fix, delete the local normalization and remove this entry.
+  - Treat this as a temporary replay seam. If upstream lands an equivalent fix, delete the local normalization and remove this entry plus the active seam inventory entry below.
+
+- 2026-04-16 ACP cwd validation and persistent binding reset seam — keep until upstream validates the same failure class
+  - Root cause from live Discord persistent ACP debugging: a configured ACP `cwd` is not metadata. For a local `acpx` runtime it is the actual current-host working directory used when initializing/loading a session.
+  - Remote paths such as `/opt/homelab` are invalid for the local runtime and can poison a configured persistent binding before the bound Discord thread ever reaches a usable ACP session.
+  - The fork carries explicit local ACP cwd validation at config load plus session init/load/live mutation, and clears stale persistent runtime state when a configured binding changes backend/cwd/error state.
+  - This is paired with the `acpx-remote` seam below, where the remote backend owns cwd mapping instead of forcing users to remember local alias paths.
+
+- 2026-04-16 `acpx-remote` parent support seam — keep until upstream has equivalent backend-managed ACP runtime semantics
+  - The `acpx-remote` implementation itself now lives in its own private nested repository at `extensions/acpx-remote/`; the OpenClaw parent repo deliberately carries only the generic support seams needed for that extension to work from an in-tree checkout.
+  - Parent-side OpenClaw changes add backend-managed ACP runtime-option semantics, local cwd validation for unmanaged ACP backends, destructive persistent-binding reset when backend/cwd/error state changes, and Discord persistent-thread id normalization so remote bound sessions are actually reached.
+  - The private extension registers backend id `acpx-remote`, creates private local alias directories for remote agent cwd mappings, starts ACP over SSH, rewrites ACP cwd fields across the bridge, and advertises `cwd` as backend-managed so core will not validate or mutate it as a local path.
+  - Live proof was completed for both an Orion remote ACP binding and a Cesium remote ACP binding through Discord persistent threads; the persisted sessions used backend `acpx-remote`, remote cwd mapping, and returned successful Discord replies from the bound sessions.
+  - Treat this as a fork product seam, not a temporary diagnostic. Delete it only if upstream grows a first-class remote ACP backend with equivalent lifecycle, cwd, SSH, backend-managed runtime options, and persistent-binding behavior.
+
+- 2026-04-16 local Codex ChatGPT auth guardrail — local workflow note, not a fork carry
+  - The local `codex-openclaw` ACP backend must use ChatGPT login/auth, not an inherited `OPENAI_API_KEY` from the gateway service environment.
+  - The fix was local operator state: remove OpenAI/Codex API-key variables from the gateway process environment, re-login Codex with ChatGPT device auth, and keep Codex configured to reject API-key login.
+  - This is documented below as a local workflow invariant because it should not become repo code or committed live config.
 
 - 2026-04-15 Discord auto-TTS native voice-note regression seam — keep until upstream preserves voice intent end-to-end
   - Plain-text auto-TTS on Discord regressed so routed replies could arrive as plain opus attachments instead of native voice-message bubbles, and direct voice sends could fail when the synthesized audio artifact was only reachable through trusted local-media access.
@@ -165,6 +183,11 @@ These are local operating rules, not carried fork seams.
 - Repo-root `bex-fork.md` is the active carry ledger for this checkout.
 - Treat any replay worktree names in the historical snapshot above as provenance, not current workspace truth. Use `CONTINUITY.md` plus the live checkout state to identify the active replay branch or worktree for the current pass.
 - Keep this file focused on active seams and replay invariants; when a seam changes, update the relevant inventory, invariants, and narrow validation entries together so the document stays readable instead of accreting one-off bullets.
+
+- Local Codex ACP auth guardrail:
+  - Local persistent Codex ACP sessions should use ChatGPT login/auth, not OpenAI/Codex API-key environment variables inherited from the gateway service.
+  - Before blaming ACP routing for local Codex cost/auth surprises, check the gateway process environment for `OPENAI_API_KEY` / `CODEX_API_KEY` / `OPENAI_BASE_URL` style overrides and check `codex login status`.
+  - Keep the local Codex config pinned to ChatGPT login so accidental API-key login fails fast instead of silently burning API credits.
 
 - Nested repo handling:
   - `extensions/memory-maintenance/` remains outside the carried fork surface.
@@ -410,6 +433,8 @@ Primary seam files:
 - `src/config/zod-schema.providers-core.ts`
 - `extensions/discord/src/config-ui-hints.ts`
 - `src/config/bundled-channel-config-metadata.generated.ts`
+- `docs/channels/discord.md`
+- `docs/.generated/config-baseline.sha256`
 
 Primary seam tests:
 
@@ -432,6 +457,190 @@ Required invariants after rebase:
 - Discord thread contexts inherit the effective opt-in from the parent channel.
 - Generated config metadata and config docs still expose `copyMessageBodyToUntrustedContext`.
 
+### 6. Discord persistent ACP thread-binding seam
+
+Status: implemented
+
+Why this exists:
+
+- Discord persistent ACP bindings are commonly configured with raw Discord thread/channel ids, while OpenClaw channel plumbing can also surface the same target as `channel:<id>`.
+- Bound Discord thread messages must match the configured persistent ACP binding at the plugin binding seam before core tries to initialize or dispatch to ACP.
+- Parent-channel fallback must keep working for Discord threads without making the configured id form matter.
+
+Behavior carried by this fork:
+
+- Discord ACP binding compilation normalizes configured conversation ids through the same target-normalization helper used by inbound Discord targets.
+- Discord inbound ACP matching compares normalized binding, thread, and parent ids while returning the original inbound conversation id selected by the match.
+- Raw Discord ids and `channel:<id>` forms compare as the same target for both direct thread matches and parent fallback matches.
+
+Primary seam files:
+
+- `extensions/discord/src/channel.ts`
+
+Primary seam tests:
+
+- `extensions/discord/src/channel.test.ts`
+
+Rebase notes:
+
+- Keep this seam inside the Discord plugin binding adapter; do not teach generic ACP core about Discord id prefixes.
+- If upstream provides equivalent normalized channel/thread matching, delete the fork seam instead of layering another normalization path on top.
+
+Required invariants after rebase:
+
+- A configured Discord ACP binding with `channel:<thread-id>` matches an inbound raw thread id.
+- A configured Discord ACP binding with `channel:<parent-id>` still matches an inbound raw parent id for a thread message.
+- The match result keeps the inbound id that should be used for dispatch, rather than rewriting everything into the configured form.
+- Bound Discord thread messages reach persistent ACP dispatch after startup apply and after live binding/config mutation.
+
+### 7. ACP local cwd validation and persistent binding reset seam
+
+Status: implemented
+
+Why this exists:
+
+- ACP `cwd` is runtime state. For local `acpx`, it must be an absolute directory that exists on the current host.
+- Accepting a remote path as a local ACP cwd creates a configured persistent binding that looks correct in config but cannot initialize a usable ACP session.
+- Persistent bindings must discard stale runtime metadata when the binding backend/cwd/error state changes, otherwise a repaired config can keep reusing poisoned session state.
+
+Behavior carried by this fork:
+
+- `validateAcpRuntimeCwd(...)` validates that configured local ACP cwd values are non-empty absolute paths, exist on the current host, and point to directories.
+- Config validation rejects invalid `agents.list[].runtime.acp.cwd` and `bindings[].acp.cwd` values before the gateway starts with bad local runtime state.
+- ACP session init/load validates unmanaged local cwd values before calling the runtime.
+- Live ACP runtime-option mutation rejects missing/invalid cwd values with `ACP_INVALID_RUNTIME_OPTION` before persisting them.
+- Persistent configured ACP binding reconfiguration closes the old session with persistent state discarded and metadata cleared before reinitializing.
+
+Primary seam files:
+
+- `src/acp/runtime/cwd-validation.ts`
+- `src/config/validation.ts`
+- `src/acp/control-plane/manager.core.ts`
+- `src/acp/control-plane/manager.runtime-controls.ts`
+- `src/acp/persistent-bindings.lifecycle.ts`
+- `src/acp/runtime/types.ts`
+
+Primary seam tests:
+
+- `src/config/config.acp-cwd.validation.test.ts`
+- `src/acp/control-plane/manager.test.ts`
+- `src/acp/persistent-bindings.test.ts`
+
+Rebase notes:
+
+- Keep validation generic and backend-aware; do not special-case Discord, Orion, Cesium, or any particular host in core.
+- Do not validate backend-managed cwd values as local paths. That belongs to the backend that owns the mapping.
+- Keep persistent binding reconfigure cleanup destructive enough to remove stale runtime state; preserving bad metadata is the bug.
+
+Required invariants after rebase:
+
+- Config load rejects missing or non-directory local ACP cwd values for agent runtime config and persistent ACP binding config.
+- Local ACP session init/load rejects an invalid cwd before calling the runtime.
+- Live ACP cwd mutation rejects invalid local paths before persisting or applying the change.
+- Reconfiguring a persistent ACP binding across cwd/backend/error state closes the old session with persistent runtime state discarded and metadata cleared.
+- Backend-managed runtime option keys are normalized and exposed through ACP runtime capabilities.
+
+### 8. `acpx-remote` SSH ACP runtime support seam
+
+Status: implemented in this OpenClaw parent checkout; extension implementation lives in private nested repo `extensions/acpx-remote/`
+
+Why this exists:
+
+- Remote ACP work should not require OpenClaw core to learn per-host SSH behavior or force users to remember hidden local alias cwd paths.
+- The remote backend needs to let users configure the remote cwd they actually care about, while OpenClaw core still sees safe ACP runtime state and does not validate backend-owned remote paths as local directories.
+- The private `acpx-remote` extension folds the old external `remote-acp` helper into an extension-owned runtime backend. The OpenClaw parent carries the generic ACP and Discord seams that make that extension viable without hardcoding Orion, Cesium, SSH, or remote-host behavior into core.
+
+Behavior carried by this fork in the OpenClaw parent repo:
+
+- ACP runtime capabilities now include `managedRuntimeOptionKeys`, allowing a backend to declare that a runtime option such as `cwd` is owned internally.
+- The ACP session manager resolves backend capabilities before session init/load, omits backend-managed `cwd` values from local runtime validation, and refuses generic in-session mutation for managed keys with `ACP_INVALID_RUNTIME_OPTION`.
+- Local unmanaged ACP cwd values are validated at config load, session init/load, and live runtime-option mutation. Missing, relative, non-directory, or inaccessible local cwd values fail before a poisoned persistent session can be created.
+- Persistent configured ACP binding reconfiguration now closes the previous session with persistent state discarded and metadata cleared, so changing backend/cwd/error state does not keep reusing stale runtime metadata.
+- Discord persistent ACP matching normalizes raw Discord ids and `channel:<id>` ids at the plugin binding seam, so bound thread messages can actually reach the configured remote ACP session after startup apply and live mutation.
+- Local test routing knows that the private in-tree `extensions/acpx-remote/` checkout uses the ACPX Vitest config, but the extension source itself is excluded from the parent Git repo and committed separately.
+- Plugin SDK and config generated baselines are regenerated for the new `managedRuntimeOptionKeys` capability and Discord channel config metadata touched by this fork carry.
+
+Private extension behavior this parent seam supports:
+
+- `acpx-remote` registers ACP runtime backend id `acpx-remote`.
+- Plugin config maps per-agent remote targets, remote cwd values, commands, SSH options, remote environment allowlists, and private alias/state roots.
+- The extension creates private local alias directories under its configured alias root and injects that alias cwd into runtime `ensureSession` calls.
+- The SSH bridge starts the remote ACP command, rewrites ACP `cwd` fields from local alias paths to remote cwd paths, and forwards only the configured remote environment names.
+- The backend advertises `managedRuntimeOptionKeys: ["cwd"]`, so core does not validate the remote cwd as a local path and does not allow in-session cwd mutation through generic ACP controls.
+- Runtime handles returned through the delegate `acpx` backend are rebranded to `acpx-remote`, so persisted sessions do not collapse back to the wrong backend.
+
+OpenClaw parent seam files:
+
+- `src/acp/runtime/types.ts`
+- `src/acp/runtime/cwd-validation.ts`
+- `src/acp/control-plane/manager.core.ts`
+- `src/acp/control-plane/manager.runtime-controls.ts`
+- `src/acp/persistent-bindings.lifecycle.ts`
+- `src/config/validation.ts`
+- `src/config/zod-schema.providers-core.ts`
+- `extensions/discord/src/channel.ts`
+- `extensions/discord/src/config-ui-hints.ts`
+- `extensions/discord/src/monitor/allow-list.ts`
+- `extensions/discord/src/monitor/inbound-context.ts`
+- `test/vitest/vitest.extension-acpx-paths.mjs`
+- `docs/.generated/config-baseline.sha256`
+- `docs/.generated/plugin-sdk-api-baseline.sha256`
+
+Private nested extension repo files:
+
+- `extensions/acpx-remote/openclaw.plugin.json`
+- `extensions/acpx-remote/index.ts`
+- `extensions/acpx-remote/register.runtime.ts`
+- `extensions/acpx-remote/runtime-api.ts`
+- `extensions/acpx-remote/bridge.ts`
+- `extensions/acpx-remote/src/config-schema.ts`
+- `extensions/acpx-remote/src/config.ts`
+- `extensions/acpx-remote/src/path-utils.ts`
+- `extensions/acpx-remote/src/service.ts`
+- `extensions/acpx-remote/src/runtime.ts`
+- `extensions/acpx-remote/src/transport/bridge.ts`
+- `extensions/acpx-remote/src/transport/protocol.ts`
+- `extensions/acpx-remote/src/transport/ssh-config.ts`
+
+Primary OpenClaw parent tests:
+
+- `src/config/config.acp-cwd.validation.test.ts`
+- `src/acp/control-plane/manager.test.ts`
+- `src/acp/persistent-bindings.test.ts`
+- `extensions/discord/src/channel.test.ts`
+- `extensions/discord/src/monitor/inbound-context.test.ts`
+- `extensions/discord/src/monitor/message-handler.inbound-context.test.ts`
+
+Private extension tests:
+
+- `extensions/acpx-remote/index.test.ts`
+- `extensions/acpx-remote/src/config.test.ts`
+- `extensions/acpx-remote/src/runtime.test.ts`
+- `extensions/acpx-remote/src/service.test.ts`
+- `extensions/acpx-remote/src/transport/protocol.test.ts`
+- `extensions/acpx-remote/src/transport/ssh-config.test.ts`
+
+Rebase notes:
+
+- Keep SSH, remote cwd mapping, and remote environment policy extension-owned.
+- Keep parent-repo core changes limited to generic ACP runtime capability semantics that any backend can use.
+- Keep Discord id normalization inside the Discord plugin binding adapter; do not teach generic ACP core about Discord id prefixes.
+- Do not reintroduce a separate `remote-acp` appendix unless there is a concrete reason the extension boundary cannot own the behavior.
+- If upstream adds an equivalent remote ACP backend, compare lifecycle, cwd rewriting, backend identity, SSH config handling, backend-managed runtime options, and persistent binding behavior before dropping this carry.
+
+Required invariants after rebase:
+
+- `acpx-remote` registers as an ACP runtime backend through extension startup and unregisters cleanly on stop.
+- Per-agent remote cwd config is accepted as remote configuration, not validated as a local path by core.
+- Runtime `ensureSession` receives a private local alias cwd, and the bridge rewrites ACP cwd fields to the configured remote cwd before messages reach the remote process.
+- The backend reports `cwd` as managed, and generic ACP runtime-option mutation cannot change it in-session.
+- Local ACP backends still reject missing, relative, non-directory, or inaccessible cwd values before session init/load and live cwd mutation.
+- Persistent binding reconfiguration across backend/cwd/error state discards stale persistent runtime state and clears stale metadata.
+- Discord raw thread ids and `channel:<id>` ids continue to match the same persistent ACP binding target.
+- Persisted remote sessions keep backend id `acpx-remote`.
+- SSH config materialization preserves target host aliases, includes the user's SSH config when enabled, and writes temporary identity/cert/known-host material only when configured.
+- Real Discord persistent bindings for remote ACP continue to survive gateway restart and live binding mutation.
+
 ## Replay checklist
 
 When rebasing this fork onto a newer upstream base:
@@ -440,7 +649,9 @@ When rebasing this fork onto a newer upstream base:
 2. Run `pnpm install` immediately after branching.
 3. Replay only the active seams above.
 4. Prefer upstream behavior wherever it now overlaps, but explicitly re-prove Discord voice delivery on the routed outbound lane, the direct reply lane, and the native slash-command/interaction lane before dropping any Discord voice-note carry.
-5. After replay, remove stale tests and redundant fork code before calling it done.
+5. Re-prove Discord persistent ACP binding behavior separately from raw ACP session tests; the failure class lives at the channel binding/startup/live-mutation seam.
+6. Re-prove `acpx-remote` with both unit tests and at least one real persistent Discord binding before treating remote ACP as carried.
+7. After replay, remove stale tests and redundant fork code before calling it done.
 
 ## Narrow validation set
 
@@ -458,5 +669,8 @@ Run these after replaying the live seams:
 - `pnpm test src/agents/openclaw-tools.tts-scope.test.ts`
 - `pnpm test src/gateway/server-methods/talk.test.ts src/gateway/server.talk-config.test.ts`
 - `pnpm test ui/src/ui/views/chat.test.ts`
+- `pnpm test extensions/discord/src/channel.test.ts`
+- `pnpm test src/acp/control-plane/manager.test.ts src/acp/persistent-bindings.test.ts src/config/config.acp-cwd.validation.test.ts`
+- `pnpm test:extension acpx-remote`
 - `pnpm build`
 - `pnpm check`

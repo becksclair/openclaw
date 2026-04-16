@@ -1106,6 +1106,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     requireMention: {
                       type: "boolean",
                     },
+                    copyMessageBodyToUntrustedContext: {
+                      type: "boolean",
+                    },
                     ignoreOtherMentions: {
                       type: "boolean",
                     },
@@ -2270,6 +2273,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                           requireMention: {
                             type: "boolean",
                           },
+                          copyMessageBodyToUntrustedContext: {
+                            type: "boolean",
+                          },
                           ignoreOtherMentions: {
                             type: "boolean",
                           },
@@ -3122,6 +3128,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       allowBots: {
         label: "Discord Allow Bot Messages",
         help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
+      },
+      copyMessageBodyToUntrustedContext: {
+        label: "Discord Copy Message Body To Untrusted Context",
+        help: "Copy the live guild message body into UntrustedContext as wrapped external content (default: false). Set true on specific Discord channel entries that should be treated as untrusted; separate metadata such as the channel topic stays independent.",
       },
       token: {
         label: "Discord Bot Token",

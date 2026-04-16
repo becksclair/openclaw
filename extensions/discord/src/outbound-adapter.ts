@@ -1,5 +1,4 @@
 import {
-  attachChannelToResult,
   type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
@@ -70,6 +69,17 @@ function resolveDiscordOutboundTarget(params: {
     return params.to;
   }
   return `channel:${threadId}`;
+}
+
+function attachDiscordChannel(result: { messageId: string; channelId?: string }): {
+  channel: "discord";
+  messageId: string;
+  channelId?: string;
+} {
+  return {
+    ...result,
+    channel: "discord",
+  };
 }
 
 function resolveDiscordWebhookIdentity(params: {
@@ -155,7 +165,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       nextPayload: typeof payload,
     ): Promise<{ channel: "discord"; messageId: string; channelId?: string }> => {
       if (!componentSpec) {
-        return await sendTextMediaPayload({
+        const result = await sendTextMediaPayload({
           channel: "discord",
           ctx: {
             ...ctx,
@@ -163,6 +173,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
           },
           adapter: discordOutbound,
         });
+        return attachDiscordChannel(result);
       }
       const mediaUrls = resolvePayloadMediaUrls(nextPayload);
       const result = await sendPayloadMediaSequenceOrFallback({
@@ -202,7 +213,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
           });
         },
       });
-      return attachChannelToResult("discord", result);
+      return attachDiscordChannel(result);
     };
     const mediaUrls = resolvePayloadMediaUrls(payload);
     if (payload.audioAsVoice && mediaUrls.length > 0) {
@@ -219,7 +230,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
         silent: ctx.silent ?? undefined,
       });
       if (!payload.text?.trim() && mediaUrls.length === 1) {
-        return attachChannelToResult("discord", voiceResult);
+        return attachDiscordChannel(voiceResult);
       }
       return await sendStandardPayload({
         ...payload,

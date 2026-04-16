@@ -49,19 +49,23 @@ export function buildDiscordGroupSystemPrompt(
 
 export function buildDiscordUntrustedContext(params: {
   isGuild: boolean;
+  channelConfig?: DiscordChannelConfigResolved | null;
   channelTopic?: string;
   messageBody?: string;
 }): string[] | undefined {
   if (!params.isGuild) {
     return undefined;
   }
+  const shouldCopyMessageBody = params.channelConfig?.copyMessageBodyToUntrustedContext === true;
   const entries = [
     buildUntrustedChannelMetadata({
       source: "discord",
       label: "Discord channel topic",
       entries: [params.channelTopic],
     }),
-    typeof params.messageBody === "string" && params.messageBody.trim().length > 0
+    shouldCopyMessageBody &&
+    typeof params.messageBody === "string" &&
+    params.messageBody.trim().length > 0
       ? wrapExternalContent(`UNTRUSTED Discord message body\n${params.messageBody.trim()}`, {
           source: "unknown",
           includeWarning: false,
@@ -90,6 +94,7 @@ export function buildDiscordInboundAccessContext(params: {
       : undefined,
     untrustedContext: buildDiscordUntrustedContext({
       isGuild: params.isGuild,
+      channelConfig: params.channelConfig,
       channelTopic: params.channelTopic,
       messageBody: params.messageBody,
     }),

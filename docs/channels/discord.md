@@ -457,6 +457,7 @@ Example:
 
     `requireMention` is configured per guild/channel (`channels.discord.guilds...`).
     `ignoreOtherMentions` optionally drops messages that mention another user/role but not the bot (excluding @everyone/@here).
+    Guild message bodies stay out of `UntrustedContext` by default. To mark a specific untrusted channel so the live body is also wrapped there, set `copyMessageBodyToUntrustedContext: true` on that channel entry. Thread messages inherit the resolved parent-channel setting. Channel-specific overrides still live in `channels.discord.guilds.<guild>.channels`, so they follow the normal Discord channel-map behavior in `allowlist` mode.
 
     Group DMs:
 

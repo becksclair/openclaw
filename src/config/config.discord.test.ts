@@ -40,7 +40,11 @@ describe("config discord", () => {
           requireMention: false,
           users: ["steipete"],
           channels: {
-            general: { enabled: true, autoThread: true },
+            general: {
+              enabled: true,
+              autoThread: true,
+              copyMessageBodyToUntrustedContext: true,
+            },
           },
         },
       },
@@ -55,6 +59,7 @@ describe("config discord", () => {
     expect(cfg.guilds?.["123"]?.slug).toBe("friends-of-openclaw");
     expect(cfg.guilds?.["123"]?.channels?.general?.enabled).toBe(true);
     expect(cfg.guilds?.["123"]?.channels?.general?.autoThread).toBe(true);
+    expect(cfg.guilds?.["123"]?.channels?.general?.copyMessageBodyToUntrustedContext).toBe(true);
   });
 
   it("coerces safe-integer numeric discord allowlist entries to strings", () => {

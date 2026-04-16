@@ -255,6 +255,7 @@ describe("discordOutbound", () => {
     const result = await discordOutbound.sendPayload?.({
       cfg: {},
       to: "channel:123456",
+      text: "voice caption",
       payload: {
         text: "voice caption",
         mediaUrls: ["/tmp/voice.ogg", "/tmp/followup.png"],

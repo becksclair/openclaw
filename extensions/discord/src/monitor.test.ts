@@ -307,6 +307,7 @@ describe("discord guild/channel resolution", () => {
         help: {
           enabled: true,
           requireMention: true,
+          copyMessageBodyToUntrustedContext: false,
           skills: ["search"],
           users: ["123"],
           systemPrompt: "Use short answers.",
@@ -331,6 +332,7 @@ describe("discord guild/channel resolution", () => {
     });
     expect(help?.allowed).toBe(true);
     expect(help?.requireMention).toBe(true);
+    expect(help?.copyMessageBodyToUntrustedContext).toBe(false);
     expect(help?.skills).toEqual(["search"]);
     expect(help?.enabled).toBe(true);
     expect(help?.users).toEqual(["123"]);
@@ -370,7 +372,7 @@ describe("discord guild/channel resolution", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
         general: { enabled: true },
-        random: { enabled: false },
+        random: { enabled: false, copyMessageBodyToUntrustedContext: false },
       },
     };
     const thread = resolveDiscordChannelConfigWithFallback({
@@ -384,6 +386,7 @@ describe("discord guild/channel resolution", () => {
       scope: "thread",
     });
     expect(thread?.allowed).toBe(false);
+    expect(thread?.copyMessageBodyToUntrustedContext).toBe(false);
   });
 
   it("does not match thread name/slug when resolving allowlists", () => {

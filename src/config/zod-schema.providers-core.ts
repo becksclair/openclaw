@@ -433,6 +433,7 @@ export const DiscordDmSchema = z
 export const DiscordGuildChannelSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    copyMessageBodyToUntrustedContext: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,

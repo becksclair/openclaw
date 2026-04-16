@@ -1,4 +1,5 @@
 import path from "node:path";
+import { validateAcpRuntimeCwd } from "../acp/runtime/cwd-validation.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
@@ -566,6 +567,46 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function validateConfiguredAcpWorkingDirectories(config: OpenClawConfig): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+
+  for (const [index, entry] of (config.agents?.list ?? []).entries()) {
+    if (!entry || typeof entry !== "object" || entry.runtime?.type !== "acp") {
+      continue;
+    }
+    const cwd = entry.runtime.acp?.cwd;
+    if (typeof cwd !== "string" || !cwd.trim()) {
+      continue;
+    }
+    const validation = validateAcpRuntimeCwd(cwd);
+    if (!validation.ok) {
+      issues.push({
+        path: `agents.list.${index}.runtime.acp.cwd`,
+        message: validation.message,
+      });
+    }
+  }
+
+  for (const [index, binding] of (config.bindings ?? []).entries()) {
+    if (!binding || typeof binding !== "object" || binding.type !== "acp") {
+      continue;
+    }
+    const cwd = binding.acp?.cwd;
+    if (typeof cwd !== "string" || !cwd.trim()) {
+      continue;
+    }
+    const validation = validateAcpRuntimeCwd(cwd);
+    if (!validation.ok) {
+      issues.push({
+        path: `bindings.${index}.acp.cwd`,
+        message: validation.message,
+      });
+    }
+  }
+
+  return issues;
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -627,6 +668,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validatedConfig);
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
+  }
+  const acpCwdIssues = validateConfiguredAcpWorkingDirectories(validatedConfig);
+  if (acpCwdIssues.length > 0) {
+    return { ok: false, issues: acpCwdIssues };
   }
   return {
     ok: true,

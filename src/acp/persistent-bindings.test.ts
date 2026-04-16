@@ -391,6 +391,7 @@ function createDiscordPersistentSpec(overrides: Partial<BindingSpec> = {}): Bind
 function mockReadySession(params: {
   spec: BindingSpec;
   cwd: string;
+  backend?: string;
   state?: "idle" | "running" | "error";
 }) {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
@@ -398,7 +399,7 @@ function mockReadySession(params: {
     kind: "ready",
     sessionKey,
     meta: {
-      backend: "acpx",
+      backend: params.backend ?? "acpx",
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       runtimeSessionName: "existing",
       mode: params.spec.mode,
@@ -921,10 +922,45 @@ describe("ensureConfiguredAcpBindingSession", () => {
     expect(managerMocks.closeSession).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey,
-        clearMeta: false,
+        discardPersistentState: true,
+        clearMeta: true,
       }),
     );
     expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("reinitializes a ready session when binding config changes backend", async () => {
+    const spec = createDiscordPersistentSpec({
+      backend: "acpx-remote",
+    });
+    const sessionKey = mockReadySession({
+      spec,
+      backend: "acpx",
+      cwd: "/workspace/openclaw",
+    });
+
+    const ensured = await persistentBindings.ensureConfiguredAcpBindingSession({
+      cfg: baseCfg,
+      spec,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
+    expect(managerMocks.closeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        reason: "config-binding-reconfigure",
+        discardPersistentState: true,
+        clearMeta: true,
+      }),
+    );
+    expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
+    expect(managerMocks.initializeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        backendId: "acpx-remote",
+      }),
+    );
   });
 
   it("reinitializes a matching session when the stored ACP session is in error state", async () => {
@@ -944,6 +980,13 @@ describe("ensureConfiguredAcpBindingSession", () => {
 
     expect(ensured).toEqual({ ok: true, sessionKey });
     expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
+    expect(managerMocks.closeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        discardPersistentState: true,
+        clearMeta: true,
+      }),
+    );
     expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
   });
 

@@ -25,6 +25,7 @@ const DISCORD_OWNER_ALLOWLIST_PREFIXES = ["discord:", "user:", "pk:"];
 
 type DiscordChannelOverrideConfig = {
   requireMention?: boolean;
+  copyMessageBodyToUntrustedContext?: boolean;
   ignoreOtherMentions?: boolean;
   skills?: string[];
   enabled?: boolean;
@@ -398,6 +399,7 @@ function resolveDiscordChannelConfigEntry(
   const resolved: DiscordChannelConfigResolved = {
     allowed: entry.enabled !== false,
     requireMention: entry.requireMention,
+    copyMessageBodyToUntrustedContext: entry.copyMessageBodyToUntrustedContext,
     ignoreOtherMentions: entry.ignoreOtherMentions,
     skills: entry.skills,
     enabled: entry.enabled,
