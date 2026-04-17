@@ -19,7 +19,7 @@ import type {
 } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
-import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
+import { isVoiceCompatibleAudio, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import {
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
@@ -588,8 +588,12 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
 
 const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix", "discord"]);
 const TELEGRAM_STYLE_VOICE_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
-const DISCORD_NATIVE_VOICE_OUTPUT_FORMATS = new Set(["opus", "ogg", "oga"]);
-const DISCORD_NATIVE_VOICE_FILE_EXTENSIONS = new Set([".opus", ".ogg", ".oga"]);
+const OPUS_VOICE_OUTPUT_FORMATS = new Set(["opus", "ogg", "oga"]);
+const OPUS_VOICE_FILE_EXTENSIONS = new Set([".opus", ".ogg", ".oga"]);
+const OPUS_TRANSCODE_FILE_EXTENSION = ".opus";
+const OPUS_TRANSCODE_FORMAT = "opus";
+const OPUS_TRANSCODE_SAMPLE_RATE_HZ = 48_000;
+const OPUS_TRANSCODE_BITRATE = "64k";
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;
@@ -628,8 +632,8 @@ function resolveChannelVoiceCompatibility(params: {
   const outputFormat = normalizeOptionalLowercaseString(params.outputFormat);
   if (params.channelId === "discord") {
     return Boolean(
-      (fileExtension && DISCORD_NATIVE_VOICE_FILE_EXTENSIONS.has(fileExtension)) ||
-      (outputFormat && DISCORD_NATIVE_VOICE_OUTPUT_FORMATS.has(outputFormat)),
+      (fileExtension && OPUS_VOICE_FILE_EXTENSIONS.has(fileExtension)) ||
+      (outputFormat && OPUS_VOICE_OUTPUT_FORMATS.has(outputFormat)),
     );
   }
   if (TELEGRAM_STYLE_VOICE_CHANNELS.has(params.channelId)) {
@@ -644,6 +648,84 @@ function resolveChannelVoiceCompatibility(params: {
 function supportsNativeVoiceNoteTts(channel: string | undefined): boolean {
   const channelId = resolveChannelId(channel);
   return channelId !== null && OPUS_CHANNELS.has(channelId);
+}
+
+function isOpusVoiceNoteOutput(params: { outputFormat?: string; fileExtension?: string }): boolean {
+  const outputFormat = normalizeOptionalLowercaseString(params.outputFormat);
+  if (outputFormat && OPUS_VOICE_OUTPUT_FORMATS.has(outputFormat)) {
+    return true;
+  }
+  const fileExtension = normalizeOptionalLowercaseString(params.fileExtension);
+  return Boolean(fileExtension && OPUS_VOICE_FILE_EXTENSIONS.has(fileExtension));
+}
+
+async function ensureVoiceNoteCompatibleSynthesis(params: {
+  synthesis: TtsSynthesisResult;
+  channelId: ChannelId | null;
+}): Promise<TtsSynthesisResult> {
+  const synthesis = params.synthesis;
+  if (
+    !params.channelId ||
+    !OPUS_CHANNELS.has(params.channelId) ||
+    !synthesis.success ||
+    !synthesis.audioBuffer
+  ) {
+    return synthesis;
+  }
+
+  if (
+    isOpusVoiceNoteOutput({
+      outputFormat: synthesis.outputFormat,
+      fileExtension: synthesis.fileExtension,
+    })
+  ) {
+    return synthesis;
+  }
+
+  const tempRoot = resolvePreferredOpenClawTmpDir();
+  mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+  const tempDir = mkdtempSync(path.join(tempRoot, "tts-voice-note-"));
+  scheduleCleanup(tempDir);
+  const inputPath = path.join(tempDir, `input${synthesis.fileExtension ?? ".bin"}`);
+  const outputPath = path.join(tempDir, `voice${OPUS_TRANSCODE_FILE_EXTENSION}`);
+  writeFileSync(inputPath, synthesis.audioBuffer);
+
+  try {
+    await runFfmpeg([
+      "-y",
+      "-i",
+      inputPath,
+      "-vn",
+      "-sn",
+      "-dn",
+      "-ar",
+      String(OPUS_TRANSCODE_SAMPLE_RATE_HZ),
+      "-c:a",
+      "libopus",
+      "-b:a",
+      OPUS_TRANSCODE_BITRATE,
+      outputPath,
+    ]);
+    const transcoded = readFileSync(outputPath);
+    logVerbose(
+      `TTS: transcoded ${synthesis.outputFormat ?? synthesis.fileExtension ?? "audio"} to Opus for ${params.channelId} voice-note delivery.`,
+    );
+    return {
+      ...synthesis,
+      audioBuffer: transcoded,
+      outputFormat: OPUS_TRANSCODE_FORMAT,
+      fileExtension: OPUS_TRANSCODE_FILE_EXTENSION,
+      voiceCompatible: true,
+    };
+  } catch (err) {
+    logVerbose(
+      `TTS: failed to transcode ${synthesis.outputFormat ?? synthesis.fileExtension ?? "audio"} to Opus for ${params.channelId} (${sanitizeTtsErrorForLog(err)}); keeping original output as a regular audio attachment.`,
+    );
+    return {
+      ...synthesis,
+      voiceCompatible: false,
+    };
+  }
 }
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
@@ -900,23 +982,27 @@ export async function synthesizeSpeech(params: {
         reasonCode: "success",
         latencyMs,
       });
-      return {
-        success: true,
-        audioBuffer: synthesis.audioBuffer,
-        latencyMs,
-        provider,
-        fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
-        attemptedProviders,
-        attempts,
-        outputFormat: synthesis.outputFormat,
-        voiceCompatible: resolveChannelVoiceCompatibility({
-          channelId,
-          providerVoiceCompatible: synthesis.voiceCompatible,
+      const nextSynthesis = await ensureVoiceNoteCompatibleSynthesis({
+        synthesis: {
+          success: true,
+          audioBuffer: synthesis.audioBuffer,
+          latencyMs,
+          provider,
+          fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
+          attemptedProviders,
+          attempts,
           outputFormat: synthesis.outputFormat,
+          voiceCompatible: resolveChannelVoiceCompatibility({
+            channelId,
+            providerVoiceCompatible: synthesis.voiceCompatible,
+            outputFormat: synthesis.outputFormat,
+            fileExtension: synthesis.fileExtension,
+          }),
           fileExtension: synthesis.fileExtension,
-        }),
-        fileExtension: synthesis.fileExtension,
-      };
+        },
+        channelId,
+      });
+      return nextSynthesis;
     } catch (err) {
       const errorMsg = formatTtsProviderError(provider, err);
       const latencyMs = Date.now() - providerStart;

@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -18,8 +18,27 @@ const synthesizeMock = vi.hoisted(() =>
   ),
 );
 
+const runFfmpegMock = vi.hoisted(() => vi.fn());
+
 const listSpeechProvidersMock = vi.hoisted(() => vi.fn());
 const getSpeechProviderMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  runFfmpegMock.mockImplementation(async (args: string[]) => {
+    const outputPath = args.at(-1);
+    if (typeof outputPath === "string") {
+      writeFileSync(outputPath, Buffer.from("opus"));
+    }
+    return "";
+  });
+  return {
+    ...actual,
+    runFfmpeg: runFfmpegMock,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/channel-targets", () => ({
   normalizeChannelId: (channel: string | undefined) => channel?.trim().toLowerCase() ?? null,
@@ -69,6 +88,7 @@ function createTtsConfig(prefsName: string): OpenClawConfig {
 describe("speech-core native voice-note routing", () => {
   afterEach(() => {
     synthesizeMock.mockClear();
+    runFfmpegMock.mockClear();
   });
 
   it("keeps native voice-note channel support centralized", () => {
@@ -126,6 +146,85 @@ describe("speech-core native voice-note routing", () => {
 
     expect(result.success).toBe(true);
     expect(result.voiceCompatible).toBe(true);
+  });
+
+  it("transcodes non-compatible fallback audio to Opus for voice-note channels", async () => {
+    synthesizeMock.mockResolvedValueOnce({
+      audioBuffer: Buffer.from("voice"),
+      fileExtension: ".wav",
+      outputFormat: "wav",
+      voiceCompatible: false,
+    });
+
+    const result = await textToSpeech({
+      text: "A long enough message for fallback speech output.",
+      cfg: createTtsConfig("openclaw-speech-core-discord-transcode-test"),
+      channel: "discord",
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(runFfmpegMock).toHaveBeenCalledTimes(1);
+    expect(result.outputFormat).toBe("opus");
+    expect(result.voiceCompatible).toBe(true);
+    expect(result.audioPath).toMatch(/voice-\d+\.opus$/);
+
+    if (result.audioPath) {
+      rmSync(path.dirname(result.audioPath), { recursive: true, force: true });
+    }
+  });
+
+  it("transcodes Telegram voice outputs to Opus when the provider returns mp3", async () => {
+    synthesizeMock.mockResolvedValueOnce({
+      audioBuffer: Buffer.from("voice"),
+      fileExtension: ".mp3",
+      outputFormat: "mp3",
+      voiceCompatible: true,
+    });
+
+    const result = await textToSpeech({
+      text: "Telegram should still get Opus even when the provider hands back mp3.",
+      cfg: createTtsConfig("openclaw-speech-core-telegram-transcode-test"),
+      channel: "telegram",
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(runFfmpegMock).toHaveBeenCalledTimes(1);
+    expect(result.outputFormat).toBe("opus");
+    expect(result.voiceCompatible).toBe(true);
+    expect(result.audioPath).toMatch(/voice-\d+\.opus$/);
+
+    if (result.audioPath) {
+      rmSync(path.dirname(result.audioPath), { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to regular audio when Opus transcode fails", async () => {
+    runFfmpegMock.mockRejectedValueOnce(new Error("ffmpeg missing"));
+    synthesizeMock.mockResolvedValueOnce({
+      audioBuffer: Buffer.from("voice"),
+      fileExtension: ".mp3",
+      outputFormat: "mp3",
+      voiceCompatible: true,
+    });
+
+    const result = await textToSpeech({
+      text: "Telegram should not keep voice-note compatibility if Opus transcoding fails.",
+      cfg: createTtsConfig("openclaw-speech-core-telegram-transcode-fail-test"),
+      channel: "telegram",
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(runFfmpegMock).toHaveBeenCalledTimes(1);
+    expect(result.outputFormat).toBe("mp3");
+    expect(result.voiceCompatible).toBe(false);
+    expect(result.audioPath).toMatch(/voice-\d+\.mp3$/);
+
+    if (result.audioPath) {
+      rmSync(path.dirname(result.audioPath), { recursive: true, force: true });
+    }
   });
 
   it("marks Telegram auto TTS payloads as voice when the artifact is compatible even if provider metadata is false", async () => {

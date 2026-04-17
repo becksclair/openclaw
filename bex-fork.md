@@ -180,6 +180,17 @@ Verdicts for the previous fork-only commits:
     - live Discord slash-command smoke after rebuilding and restarting `openclaw-gateway.service`: in the Sky DM, `/think high` on the stale pre-restart gateway still produced the bad `.opus` attachment, while the fresh `/think low` run on the rebuilt gateway produced the ephemeral text acknowledgment plus a separate native voice-bubble style message with only playback controls (`Play`, playback speed, volume) and no attachment filename/download affordance.
   - Treat this as a replay-sensitive behavior seam. If upstream starts preserving `audioAsVoice` and voice-send media access through the Discord outbound/send/reply chain, delete the local carry and remove this entry.
 
+- 2026-04-17 voice-note Opus normalization seam — keep until upstream normalizes non-Opus fallback audio before channel delivery
+  - The live Google fallback investigation exposed a broader contract gap than Discord alone: fallback providers can succeed with `wav`, `mp3`, or other non-Opus audio even on channels where the fork wants consistent Opus voice-note behavior (`discord`, `telegram`, `whatsapp`, `feishu`, `matrix`).
+  - The fork carries a narrow post-synthesis seam in `extensions/speech-core/src/tts.ts`:
+    - after synthesis succeeds, but before any channel adapter sees the artifact, voice-note-sensitive channels now normalize any non-Opus output through local ffmpeg into `.opus`
+    - this applies generically to fallback providers instead of hard-coding Google-specific behavior
+    - if Opus normalization fails, the seam keeps the original audio as a regular attachment by clearing `voiceCompatible` instead of pretending voice-note delivery is still safe
+  - Proof on the source checkout:
+    - `pnpm test extensions/speech-core/src/tts.test.ts extensions/discord/src/outbound-adapter.test.ts extensions/telegram/src/voice.test.ts extensions/whatsapp/src/send.test.ts`
+    - `pnpm build`
+  - Treat this as part of the voice-routing carry, not a provider-specific patch. If upstream starts normalizing non-Opus voice-note output in the shared TTS path, delete the local seam and remove this entry.
+
 - 2026-04-16 Agent-scoped TTS session initialization fix — behavior correction to seam #3, keep as part of the agent-scoped Talk/TTS carry
   - **Root cause**: The 2026-04-15 replay of the Agent-scoped Talk/TTS seam (commit `3bc8c045a3`) added agent-scoped `tts.auto` config support but missed the session initialization path in `src/auto-reply/reply/session.ts`.
   - **Symptom**: New sessions for agents with `agents.list[].tts.auto: "always"` did not have their `ttsAuto` field initialized from the agent config, causing auto-TTS to fail on Discord DMs and other channels.
@@ -240,6 +251,7 @@ Why this exists:
 Behavior carried by this fork:
 
 - `extensions/speech-core/src/tts.ts` normalizes channel identity and infers voice compatibility from the synthesized artifact, not only provider metadata.
+- `extensions/speech-core/src/tts.ts` also normalizes non-Opus voice-note output to local `.opus` for `discord`, `telegram`, `whatsapp`, `feishu`, and `matrix` before outbound delivery, and falls back to regular audio attachments if that Opus transcode fails.
 - Shared final-mode auto-TTS in `src/auto-reply/reply/dispatch-from-config.ts` captures sanitized preview text during partial streaming and synthesizes a TTS-only final payload from that visible text when no final reply payload survives.
 - That same shared dispatch seam dedupes preview-fallback synthesis against the final reply's visible text so it does not emit a redundant second voice message when the final reply already resolves to the same user-visible text.
 - Discord routed outbound preserves `audioAsVoice` in `extensions/discord/src/outbound-adapter.ts` so voice-compatible TTS replies become native voice messages instead of plain audio attachments.
@@ -277,6 +289,7 @@ Primary seam tests:
 - `extensions/discord/src/monitor/native-command.status-direct.test.ts`
 - `extensions/telegram/src/outbound-adapter.test.ts`
 - `extensions/telegram/src/voice.test.ts`
+- `extensions/whatsapp/src/send.test.ts`
 - `src/infra/outbound/deliver.test.ts`
 - `src/agents/pi-embedded-subscribe.handlers.messages.test.ts`
 
