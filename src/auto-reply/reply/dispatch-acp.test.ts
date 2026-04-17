@@ -1088,6 +1088,63 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("uses agent-scoped TTS config for accumulated ACP final TTS", async () => {
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey,
+      meta: createAcpSessionMeta({ agent: "luke" }),
+    });
+    mockVisibleTextTurn("Voice me.");
+    const cfg = createAcpTestConfig({
+      messages: {
+        tts: {
+          provider: "openai",
+          providers: {
+            openai: {
+              voice: "her",
+              apiKey: "shared-key",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "luke",
+            tts: {
+              providers: {
+                openai: {
+                  voice: "henry2",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      cfg,
+      dispatcher: createDispatcher().dispatcher,
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          messages: expect.objectContaining({
+            tts: expect.objectContaining({
+              providers: expect.objectContaining({
+                openai: expect.objectContaining({ voice: "henry2", apiKey: "shared-key" }),
+              }),
+            }),
+          }),
+        }),
+        kind: "final",
+      }),
+    );
+  });
+
   it("does not deliver final fallback text when direct discord block text was already visible", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });

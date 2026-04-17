@@ -20,7 +20,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
-import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+import { resolveConfigWithAgentTts, resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { loadDispatchAcpMediaRuntime, resolveAcpAttachments } from "./dispatch-acp-attachments.js";
@@ -306,9 +306,17 @@ export async function tryDispatchAcpReply(params: {
   }
   const canonicalSessionKey = acpResolution.sessionKey;
 
+  const resolvedAcpAgent =
+    acpResolution.kind === "ready"
+      ? (normalizeOptionalString(acpResolution.meta.agent) ??
+        normalizeOptionalString(params.cfg.acp?.defaultAgent) ??
+        resolveAgentIdFromSessionKey(canonicalSessionKey))
+      : resolveAgentIdFromSessionKey(canonicalSessionKey);
+  const ttsScopedCfg = resolveConfigWithAgentTts(params.cfg, resolvedAcpAgent);
+
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
-    cfg: params.cfg,
+    cfg: ttsScopedCfg,
     ctx: params.ctx,
     dispatcher: params.dispatcher,
     inboundAudio: params.inboundAudio,
@@ -338,12 +346,6 @@ export async function tryDispatchAcpReply(params: {
         accountIdRaw: params.ctx.AccountId,
       })));
 
-  const resolvedAcpAgent =
-    acpResolution.kind === "ready"
-      ? (normalizeOptionalString(acpResolution.meta.agent) ??
-        normalizeOptionalString(params.cfg.acp?.defaultAgent) ??
-        resolveAgentIdFromSessionKey(canonicalSessionKey))
-      : resolveAgentIdFromSessionKey(canonicalSessionKey);
   const normalizedDispatchChannel = normalizeOptionalLowercaseString(
     params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
   );
@@ -442,7 +444,7 @@ export async function tryDispatchAcpReply(params: {
     await projector.flush(true);
     queuedFinal =
       (await finalizeAcpTurnOutput({
-        cfg: params.cfg,
+        cfg: ttsScopedCfg,
         sessionKey: canonicalSessionKey,
         delivery,
         inboundAudio: params.inboundAudio,

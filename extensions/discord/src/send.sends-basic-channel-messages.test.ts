@@ -2,7 +2,20 @@ import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10"
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordWebMediaMockFactory, makeDiscordRest } from "./send.test-harness.js";
 
+const ensureOggOpusMock = vi.hoisted(() => vi.fn());
+const getVoiceMessageMetadataMock = vi.hoisted(() => vi.fn());
+const sendDiscordVoiceMessageMock = vi.hoisted(() => vi.fn());
+
 vi.mock("openclaw/plugin-sdk/web-media", () => discordWebMediaMockFactory());
+vi.mock("./voice-message.js", async () => {
+  const actual = await vi.importActual<typeof import("./voice-message.js")>("./voice-message.js");
+  return {
+    ...actual,
+    ensureOggOpus: (...args: unknown[]) => ensureOggOpusMock(...args),
+    getVoiceMessageMetadata: (...args: unknown[]) => getVoiceMessageMetadataMock(...args),
+    sendDiscordVoiceMessage: (...args: unknown[]) => sendDiscordVoiceMessageMock(...args),
+  };
+});
 
 let deleteMessageDiscord: typeof import("./send.js").deleteMessageDiscord;
 let editMessageDiscord: typeof import("./send.js").editMessageDiscord;
@@ -15,8 +28,10 @@ let removeOwnReactionsDiscord: typeof import("./send.js").removeOwnReactionsDisc
 let removeReactionDiscord: typeof import("./send.js").removeReactionDiscord;
 let searchMessagesDiscord: typeof import("./send.js").searchMessagesDiscord;
 let sendMessageDiscord: typeof import("./send.js").sendMessageDiscord;
+let sendVoiceMessageDiscord: typeof import("./send.js").sendVoiceMessageDiscord;
 let unpinMessageDiscord: typeof import("./send.js").unpinMessageDiscord;
 let loadWebMedia: typeof import("openclaw/plugin-sdk/web-media").loadWebMedia;
+let loadWebMediaRaw: typeof import("openclaw/plugin-sdk/web-media").loadWebMediaRaw;
 let __resetDiscordDirectoryCacheForTest: typeof import("./directory-cache.js").__resetDiscordDirectoryCacheForTest;
 let rememberDiscordDirectoryUser: typeof import("./directory-cache.js").rememberDiscordDirectoryUser;
 
@@ -33,9 +48,10 @@ beforeAll(async () => {
     removeReactionDiscord,
     searchMessagesDiscord,
     sendMessageDiscord,
+    sendVoiceMessageDiscord,
     unpinMessageDiscord,
   } = await import("./send.js"));
-  ({ loadWebMedia } = await import("openclaw/plugin-sdk/web-media"));
+  ({ loadWebMedia, loadWebMediaRaw } = await import("openclaw/plugin-sdk/web-media"));
   ({ __resetDiscordDirectoryCacheForTest, rememberDiscordDirectoryUser } =
     await import("./directory-cache.js"));
 });
@@ -43,6 +59,18 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   __resetDiscordDirectoryCacheForTest();
+  ensureOggOpusMock.mockImplementation(async (inputPath: string) => ({
+    path: inputPath,
+    cleanup: false,
+  }));
+  getVoiceMessageMetadataMock.mockResolvedValue({
+    durationSecs: 1,
+    waveform: "AAAA",
+  });
+  sendDiscordVoiceMessageMock.mockResolvedValue({
+    id: "voice-msg-1",
+    channel_id: "789",
+  });
 });
 
 describe("sendMessageDiscord", () => {
@@ -362,6 +390,40 @@ describe("sendMessageDiscord", () => {
       "file:///tmp/photo.jpg",
       expect.objectContaining({ maxBytes: 32 * 1024 * 1024 }),
     );
+  });
+
+  it("passes trusted local-media access through voice sends", async () => {
+    const { rest } = makeDiscordRest();
+    const mediaReadFile = vi.fn(async () => Buffer.from("voice"));
+
+    const result = await sendVoiceMessageDiscord("channel:789", "/tmp/voice.mp3", {
+      rest,
+      token: "t",
+      mediaLocalRoots: ["/tmp/agent-root"],
+      mediaReadFile,
+    });
+
+    expect(loadWebMediaRaw).toHaveBeenCalledWith(
+      "/tmp/voice.mp3",
+      expect.objectContaining({
+        maxBytes: 16 * 1024 * 1024,
+        localRoots: ["/tmp/agent-root"],
+        readFile: mediaReadFile,
+        hostReadCapability: true,
+        optimizeImages: false,
+      }),
+    );
+    expect(sendDiscordVoiceMessageMock).toHaveBeenCalledWith(
+      rest,
+      "789",
+      expect.any(Buffer),
+      expect.objectContaining({ durationSecs: 1, waveform: "AAAA" }),
+      undefined,
+      expect.any(Function),
+      undefined,
+      "t",
+    );
+    expect(result).toEqual({ messageId: "voice-msg-1", channelId: "789" });
   });
 
   it("sends media with empty text without content field", async () => {

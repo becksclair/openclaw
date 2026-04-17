@@ -350,11 +350,16 @@ vi.mock("./dispatch-acp-session.runtime.js", () => ({
   readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
     acpMocks.readAcpSessionEntry(params),
 }));
-vi.mock("../../tts/tts-config.js", () => ({
-  normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
-  resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
-  shouldAttemptTtsPayload: () => true,
-}));
+vi.mock("../../tts/tts-config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../tts/tts-config.js")>("../../tts/tts-config.js");
+  return {
+    ...actual,
+    normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
+    resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
+    shouldAttemptTtsPayload: () => true,
+  };
+});
 
 const noAbortResult = { handled: false, aborted: false } as const;
 const emptyConfig = {} as OpenClawConfig;
@@ -1981,6 +1986,196 @@ describe("dispatchReplyFromConfig", () => {
       .calls[0]?.[0] as ReplyPayload | undefined;
     expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
     expect(finalPayload?.text).toBeUndefined();
+  });
+
+  it("uses cleaned preview text for final-mode TTS when partial streaming has no final payload", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:luke:session-1",
+      BodyForAgent: "stream this",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_msgCtx, options?: GetReplyOptions) => {
+        await options?.onPartialReply?.({
+          text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+        });
+        return undefined;
+      },
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "luke voice smoke pass" },
+      }),
+    );
+    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as ReplyPayload | undefined;
+    expect(finalPayload).toEqual(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+      }),
+    );
+    expect(finalPayload?.text).toBeUndefined();
+  });
+
+  it("does not retry preview fallback TTS when the final reply already resolves to the same visible text", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = false;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:luke:session-1",
+      BodyForAgent: "stream this",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_msgCtx, options?: GetReplyOptions) => {
+        await options?.onPartialReply?.({
+          text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+        });
+        return {
+          text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+        };
+      },
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: {
+          text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+        },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+      }),
+    );
+  });
+
+  it("preserves explicit inbound-audio detection for final TTS dispatch when body text is wrapped", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Body: "Conversation info\n\n[Audio]\nUser text:\n[Telegram test] hello\nTranscript:\nhello",
+      BodyForAgent: "hello",
+      BodyForCommands:
+        "Conversation info\n\n[Audio]\nUser text:\n[Telegram test] hello\nTranscript:\nhello",
+      InboundAudio: true,
+      MediaPath: undefined,
+      MediaUrl: undefined,
+      MediaType: undefined,
+      MediaPaths: undefined,
+      MediaUrls: undefined,
+      MediaTypes: undefined,
+      Provider: "telegram",
+      Surface: "telegram",
+      From: "telegram:123",
+      To: "telegram:123",
+      SessionKey: "agent:test:session",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "reply" }),
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inboundAudio: true,
+        kind: "final",
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+      }),
+    );
+  });
+
+  it("uses agent-scoped TTS config for final auto-TTS replies", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = false;
+    const dispatcher = createDispatcher();
+    const cfg = {
+      messages: {
+        tts: {
+          provider: "openai",
+          providers: {
+            openai: {
+              voice: "her",
+              apiKey: "shared-key",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "luke",
+            tts: {
+              providers: {
+                openai: {
+                  voice: "henry2",
+                },
+              },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      From: "telegram:123",
+      To: "telegram:123",
+      SessionKey: "agent:luke:session-1",
+      InboundAudio: true,
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver: async () => ({ text: "reply" }),
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          messages: expect.objectContaining({
+            tts: expect.objectContaining({
+              providers: expect.objectContaining({
+                openai: expect.objectContaining({ voice: "henry2", apiKey: "shared-key" }),
+              }),
+            }),
+          }),
+        }),
+        inboundAudio: true,
+        kind: "final",
+      }),
+    );
   });
 
   it("closes oneshot ACP sessions after the turn completes", async () => {

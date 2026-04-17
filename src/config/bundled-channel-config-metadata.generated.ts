@@ -1164,6 +1164,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     requireMention: {
                       type: "boolean",
                     },
+                    copyMessageBodyToUntrustedContext: {
+                      type: "boolean",
+                    },
                     ignoreOtherMentions: {
                       type: "boolean",
                     },
@@ -2328,6 +2331,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                           requireMention: {
                             type: "boolean",
                           },
+                          copyMessageBodyToUntrustedContext: {
+                            type: "boolean",
+                          },
                           ignoreOtherMentions: {
                             type: "boolean",
                           },
@@ -3180,6 +3186,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       allowBots: {
         label: "Discord Allow Bot Messages",
         help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
+      },
+      copyMessageBodyToUntrustedContext: {
+        label: "Discord Treat Channel As Untrusted",
+        help: "Treat this Discord guild channel as untrusted for inbound context (default: false). When enabled, OpenClaw wraps both the channel topic metadata and the live guild message body into UntrustedContext for that channel and inherited threads.",
       },
       token: {
         label: "Discord Bot Token",

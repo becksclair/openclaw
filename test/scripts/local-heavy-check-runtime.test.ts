@@ -25,6 +25,8 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
   return {
     ...process.env,
     OPENCLAW_LOCAL_CHECK: "1",
+    GOGC: undefined,
+    GOMEMLIMIT: undefined,
     ...overrides,
   };
 }

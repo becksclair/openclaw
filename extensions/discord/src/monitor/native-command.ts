@@ -55,6 +55,7 @@ import {
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
+import { sendVoiceMessageDiscord } from "../send.js";
 import {
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
@@ -124,6 +125,11 @@ export const __testing = {
     const previous = resolveDiscordNativeInteractionRouteStateImpl;
     resolveDiscordNativeInteractionRouteStateImpl = next;
     return previous;
+  },
+  async deliverDiscordInteractionReply(
+    ...args: Parameters<typeof deliverDiscordInteractionReply>
+  ): Promise<Awaited<ReturnType<typeof deliverDiscordInteractionReply>>> {
+    return await deliverDiscordInteractionReply(...args);
   },
 };
 
@@ -1050,6 +1056,7 @@ async function dispatchDiscordCommandInteraction(params: {
     const threadParentId =
       !isDirectMessage && isThreadChannel ? (interaction.channel.parentId ?? undefined) : undefined;
     const { effectiveRoute } = await getNativeRouteState();
+    const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
     const pluginReply = await executePluginCommandImpl({
       command: pluginMatch.command,
       args: pluginMatch.args,
@@ -1066,7 +1073,7 @@ async function dispatchDiscordCommandInteraction(params: {
           ? `discord:group:${channelId}`
           : `discord:channel:${channelId}`,
       to: `slash:${user.id}`,
-      accountId,
+      accountId: effectiveRoute.accountId,
       messageThreadId,
       threadParentId,
     });
@@ -1077,12 +1084,19 @@ async function dispatchDiscordCommandInteraction(params: {
     await deliverDiscordInteractionReply({
       interaction,
       payload: pluginReply,
-      textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
+      cfg,
+      accountId: effectiveRoute.accountId,
+      mediaLocalRoots,
+      textLimit: resolveTextChunkLimit(cfg, "discord", effectiveRoute.accountId, {
         fallbackLimit: 2000,
       }),
-      maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
+      maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({
+        cfg,
+        discordConfig,
+        accountId: effectiveRoute.accountId,
+      }),
       preferFollowUp,
-      chunkMode: resolveChunkMode(cfg, "discord", accountId),
+      chunkMode: resolveChunkMode(cfg, "discord", effectiveRoute.accountId),
     });
     return;
   }
@@ -1092,12 +1106,13 @@ async function dispatchDiscordCommandInteraction(params: {
     commandArgs,
   });
   if (pickerCommandContext) {
+    const { effectiveRoute } = await getNativeRouteState();
     await replyWithDiscordModelPickerProviders({
       interaction,
       cfg,
       command: pickerCommandContext,
       userId: user.id,
-      accountId,
+      accountId: effectiveRoute.accountId,
       threadBindings,
       preferFollowUp,
       safeInteractionCall: safeDiscordInteractionCall,
@@ -1145,13 +1160,19 @@ async function dispatchDiscordCommandInteraction(params: {
       await deliverDiscordInteractionReply({
         interaction,
         payload: statusReply,
+        cfg,
+        accountId: effectiveRoute.accountId,
         mediaLocalRoots,
-        textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
+        textLimit: resolveTextChunkLimit(cfg, "discord", effectiveRoute.accountId, {
           fallbackLimit: 2000,
         }),
-        maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
+        maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({
+          cfg,
+          discordConfig,
+          accountId: effectiveRoute.accountId,
+        }),
         preferFollowUp,
-        chunkMode: resolveChunkMode(cfg, "discord", accountId),
+        chunkMode: resolveChunkMode(cfg, "discord", effectiveRoute.accountId),
       });
       return;
     }
@@ -1208,13 +1229,19 @@ async function dispatchDiscordCommandInteraction(params: {
           await deliverDiscordInteractionReply({
             interaction,
             payload,
+            cfg,
+            accountId: effectiveRoute.accountId,
             mediaLocalRoots,
-            textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
+            textLimit: resolveTextChunkLimit(cfg, "discord", effectiveRoute.accountId, {
               fallbackLimit: 2000,
             }),
-            maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
+            maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({
+              cfg,
+              discordConfig,
+              accountId: effectiveRoute.accountId,
+            }),
             preferFollowUp: preferFollowUp || didReply,
-            chunkMode: resolveChunkMode(cfg, "discord", accountId),
+            chunkMode: resolveChunkMode(cfg, "discord", effectiveRoute.accountId),
           });
         } catch (error) {
           if (isDiscordUnknownInteraction(error)) {
@@ -1291,13 +1318,24 @@ export function createDiscordModelPickerFallbackSelect(
 async function deliverDiscordInteractionReply(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   payload: ReplyPayload;
+  cfg: ReturnType<typeof loadConfig>;
+  accountId?: string;
   mediaLocalRoots?: readonly string[];
   textLimit: number;
   maxLinesPerMessage?: number;
   preferFollowUp: boolean;
   chunkMode: "length" | "newline";
 }) {
-  const { interaction, payload, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
+  const {
+    interaction,
+    payload,
+    cfg,
+    accountId,
+    textLimit,
+    maxLinesPerMessage,
+    preferFollowUp,
+    chunkMode,
+  } = params;
   const reply = resolveSendableOutboundReplyParts(payload);
   const discordData = payload.channelData?.discord as
     | { components?: TopLevelComponents[] }
@@ -1343,9 +1381,38 @@ async function deliverDiscordInteractionReply(params: {
     });
   };
 
-  if (reply.hasMedia) {
+  let remainingText = reply.text;
+  let remainingMediaUrls = [...reply.mediaUrls];
+
+  if (payload.audioAsVoice && remainingMediaUrls.length > 0 && interaction.channel?.id) {
+    const [voiceMediaUrl, ...restMediaUrls] = remainingMediaUrls;
+    await sendVoiceMessageDiscord(`channel:${interaction.channel.id}`, voiceMediaUrl, {
+      cfg,
+      accountId,
+      mediaLocalRoots: params.mediaLocalRoots,
+    });
+    remainingMediaUrls = restMediaUrls;
+    if (!remainingText && remainingMediaUrls.length === 0 && !firstMessageComponents) {
+      await safeDiscordInteractionCall("interaction voice ack", async () => {
+        const ackPayload = {
+          content: "✓",
+          ephemeral: true,
+        };
+        if (!preferFollowUp && !hasReplied) {
+          await interaction.reply(ackPayload);
+          hasReplied = true;
+          return;
+        }
+        await interaction.followUp(ackPayload);
+        hasReplied = true;
+      });
+      return;
+    }
+  }
+
+  if (remainingMediaUrls.length > 0) {
     const media = await Promise.all(
-      reply.mediaUrls.map(async (url) => {
+      remainingMediaUrls.map(async (url) => {
         const loaded = await loadWebMedia(url, {
           localRoots: params.mediaLocalRoots,
         });
@@ -1356,8 +1423,8 @@ async function deliverDiscordInteractionReply(params: {
       }),
     );
     const chunks = resolveTextChunksWithFallback(
-      reply.text,
-      chunkDiscordTextWithMode(reply.text, {
+      remainingText,
+      chunkDiscordTextWithMode(remainingText, {
         maxChars: textLimit,
         maxLines: maxLinesPerMessage,
         chunkMode,
@@ -1374,14 +1441,14 @@ async function deliverDiscordInteractionReply(params: {
     return;
   }
 
-  if (!reply.hasText && !firstMessageComponents) {
+  if (!remainingText && !firstMessageComponents) {
     return;
   }
   const chunks =
-    reply.text || firstMessageComponents
+    remainingText || firstMessageComponents
       ? resolveTextChunksWithFallback(
-          reply.text,
-          chunkDiscordTextWithMode(reply.text, {
+          remainingText,
+          chunkDiscordTextWithMode(remainingText, {
             maxChars: textLimit,
             maxLines: maxLinesPerMessage,
             chunkMode,

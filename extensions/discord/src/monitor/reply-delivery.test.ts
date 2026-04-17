@@ -140,6 +140,7 @@ describe("deliverDiscordReply", () => {
   });
 
   it("routes audioAsVoice payloads through the voice API and sends text separately", async () => {
+    const mediaLocalRoots = ["/tmp/workspace-agent"] as const;
     await deliverDiscordReply({
       replies: [
         {
@@ -154,13 +155,14 @@ describe("deliverDiscordReply", () => {
       cfg,
       textLimit: 2000,
       replyToId: "reply-1",
+      mediaLocalRoots,
     });
 
     expect(sendVoiceMessageDiscordMock).toHaveBeenCalledTimes(1);
     expect(sendVoiceMessageDiscordMock).toHaveBeenCalledWith(
       "channel:123",
       "https://example.com/voice.ogg",
-      expect.objectContaining({ token: "token", replyTo: "reply-1" }),
+      expect.objectContaining({ token: "token", replyTo: "reply-1", mediaLocalRoots }),
     );
 
     expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);

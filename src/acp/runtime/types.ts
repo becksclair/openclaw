@@ -61,6 +61,12 @@ export type AcpRuntimeCapabilities = {
    * Empty/undefined means "backend accepts keys, but did not advertise a strict list".
    */
   configOptionKeys?: string[];
+  /**
+   * Optional backend-managed runtime option keys.
+   * Managed keys cannot be changed through OpenClaw session runtime-option mutation
+   * and may be resolved internally by the backend during ensureSession.
+   */
+  managedRuntimeOptionKeys?: string[];
 };
 
 export type AcpRuntimeStatus = {

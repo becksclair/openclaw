@@ -22,6 +22,7 @@ import {
 } from "./app-render.helpers.ts";
 import { warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import { resolveReadAloudAgentId } from "./chat/read-aloud-agent.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
@@ -754,6 +755,7 @@ export function renderApp(state: AppViewState) {
     null;
   const resolvedAgentId = resolveSelectedAgentId();
   const activeSessionAgentId = resolveAgentIdFromSessionKey(state.sessionKey);
+  const readAloudAgentId = resolveReadAloudAgentId(state, resolvedAgentId);
   const toolsPanelUsesActiveSession = Boolean(
     resolvedAgentId && activeSessionAgentId && resolvedAgentId === activeSessionAgentId,
   );
@@ -2213,6 +2215,7 @@ export function renderApp(state: AppViewState) {
               stream: state.chatStream,
               streamStartedAt: state.chatStreamStartedAt,
               draft: state.chatMessage,
+              client: state.client,
               queue: state.chatQueue,
               connected: state.connected,
               canSend: state.connected,
@@ -2265,7 +2268,7 @@ export function renderApp(state: AppViewState) {
                 }
               },
               agentsList: state.agentsList,
-              currentAgentId: resolvedAgentId ?? "main",
+              currentAgentId: readAloudAgentId,
               onAgentChange: (agentId: string) => {
                 switchChatSession(state, buildAgentMainSessionKey({ agentId }));
               },

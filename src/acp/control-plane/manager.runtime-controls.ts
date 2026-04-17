@@ -12,7 +12,7 @@ import {
 
 export async function resolveManagerRuntimeCapabilities(params: {
   runtime: AcpRuntime;
-  handle: AcpRuntimeHandle;
+  handle?: AcpRuntimeHandle;
 }): Promise<AcpRuntimeCapabilities> {
   let reported: AcpRuntimeCapabilities | undefined;
   if (params.runtime.getCapabilities) {
@@ -35,9 +35,15 @@ export async function resolveManagerRuntimeCapabilities(params: {
   const normalizedKeys = (reported?.configOptionKeys ?? [])
     .map((entry) => normalizeText(entry))
     .filter(Boolean) as string[];
+  const normalizedManagedKeys = (reported?.managedRuntimeOptionKeys ?? [])
+    .map((entry) => normalizeText(entry))
+    .filter(Boolean) as string[];
   return {
     controls: [...controls].toSorted(),
     ...(normalizedKeys.length > 0 ? { configOptionKeys: normalizedKeys } : {}),
+    ...(normalizedManagedKeys.length > 0
+      ? { managedRuntimeOptionKeys: normalizedManagedKeys.toSorted() }
+      : {}),
   };
 }
 

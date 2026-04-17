@@ -7,10 +7,10 @@ import { ChannelType, type Client, ReadyListener } from "@buape/carbon";
 import type { VoicePlugin } from "@buape/carbon/voice";
 import {
   agentCommandFromIngress,
-  getTtsProvider,
+  mergeTtsConfig,
   resolveAgentDir,
+  resolveConfigWithAgentTts,
   resolveTtsConfig,
-  resolveTtsPrefsPath,
   type ResolvedTtsConfig,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -95,50 +95,23 @@ type VoiceSessionEntry = {
   stop: () => void;
 };
 
-function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
-  if (!override) {
-    return base;
-  }
-  const baseProviders = base.providers ?? {};
-  const overrideProviders = override.providers ?? {};
-  const mergedProviders = Object.fromEntries(
-    [...new Set([...Object.keys(baseProviders), ...Object.keys(overrideProviders)])].map(
-      (providerId) => {
-        const baseProvider = baseProviders[providerId] ?? {};
-        const overrideProvider = overrideProviders[providerId] ?? {};
-        return [
-          providerId,
-          {
-            ...baseProvider,
-            ...overrideProvider,
-          },
-        ];
-      },
-    ),
-  );
-  return {
-    ...base,
-    ...override,
-    modelOverrides: {
-      ...base.modelOverrides,
-      ...override.modelOverrides,
-    },
-    ...(Object.keys(mergedProviders).length === 0 ? {} : { providers: mergedProviders }),
-  };
-}
-
-function resolveVoiceTtsConfig(params: { cfg: OpenClawConfig; override?: TtsConfig }): {
+function resolveVoiceTtsConfig(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  override?: TtsConfig;
+}): {
   cfg: OpenClawConfig;
   resolved: ResolvedTtsConfig;
 } {
+  const scopedCfg = resolveConfigWithAgentTts(params.cfg, params.agentId);
   if (!params.override) {
-    return { cfg: params.cfg, resolved: resolveTtsConfig(params.cfg) };
+    return { cfg: scopedCfg, resolved: resolveTtsConfig(scopedCfg) };
   }
-  const base = params.cfg.messages?.tts ?? {};
+  const base = scopedCfg.messages?.tts ?? {};
   const merged = mergeTtsConfig(base, params.override);
-  const messages = params.cfg.messages ?? {};
+  const messages = scopedCfg.messages ?? {};
   const cfg = {
-    ...params.cfg,
+    ...scopedCfg,
     messages: {
       ...messages,
       tts: merged,
@@ -809,12 +782,12 @@ export class DiscordVoiceManager {
 
     const { cfg: ttsCfg, resolved: ttsConfig } = resolveVoiceTtsConfig({
       cfg: this.params.cfg,
+      agentId: entry.route.agentId,
       override: this.params.discordConfig.voice?.tts,
     });
     const directive = parseTtsDirectives(replyText, ttsConfig.modelOverrides, {
       cfg: ttsCfg,
       providerConfigs: ttsConfig.providerConfigs,
-      preferredProviderId: getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig)),
     });
     const rawSpeakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
     const speakText = sanitizeVoiceReplyTextForSpeech(rawSpeakText, speaker.label);

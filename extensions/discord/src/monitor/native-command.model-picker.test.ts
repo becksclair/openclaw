@@ -9,7 +9,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
+import * as nativeCommandRouteModule from "./native-command-route.js";
 import {
+  createDiscordCommandArgFallbackButton,
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
   replyWithDiscordModelPickerProviders,
@@ -18,12 +20,16 @@ import {
 import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thread-bindings.js";
 
 type ModelPickerContext = Parameters<typeof createDiscordModelPickerFallbackButton>[0]["ctx"];
+type CommandArgContext = Parameters<typeof createDiscordCommandArgFallbackButton>[0]["ctx"];
 type PickerButton = ReturnType<typeof createDiscordModelPickerFallbackButton>;
 type PickerSelect = ReturnType<typeof createDiscordModelPickerFallbackSelect>;
+type CommandArgButton = ReturnType<typeof createDiscordCommandArgFallbackButton>;
 type PickerButtonInteraction = Parameters<PickerButton["run"]>[0];
 type PickerButtonData = Parameters<PickerButton["run"]>[1];
 type PickerSelectInteraction = Parameters<PickerSelect["run"]>[0];
 type PickerSelectData = Parameters<PickerSelect["run"]>[1];
+type CommandArgButtonInteraction = Parameters<CommandArgButton["run"]>[0];
+type CommandArgButtonData = Parameters<CommandArgButton["run"]>[1];
 
 type MockInteraction = {
   user: { id: string; username: string; globalName: string };
@@ -76,6 +82,38 @@ function createModelPickerContext(): ModelPickerContext {
     sessionPrefix: "discord:slash",
     threadBindings: createNoopThreadBindingManager("default"),
   };
+}
+
+function createRouteState(params?: { accountId?: string; sessionKey?: string; agentId?: string }) {
+  const accountId = params?.accountId ?? "default";
+  const agentId = params?.agentId ?? "main";
+  const sessionKey = params?.sessionKey ?? `agent:${agentId}:discord:dm:owner`;
+  return {
+    route: {
+      agentId,
+      channel: "discord",
+      accountId,
+      sessionKey,
+      mainSessionKey: `agent:${agentId}:main`,
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    },
+    effectiveRoute: {
+      agentId,
+      channel: "discord",
+      accountId,
+      sessionKey,
+      mainSessionKey: `agent:${agentId}:main`,
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    },
+    boundSessionKey: undefined,
+    configuredRoute: null,
+    configuredBinding: null,
+    bindingReadiness: null,
+  } satisfies Awaited<
+    ReturnType<typeof nativeCommandRouteModule.resolveDiscordNativeInteractionRouteState>
+  >;
 }
 
 function createInteraction(params?: { userId?: string; values?: string[] }): MockInteraction {
@@ -178,6 +216,17 @@ function createModelPickerFallbackSelect(
   dispatchCommandInteraction: DispatchDiscordCommandInteraction = createDispatchSpy(),
 ) {
   return createDiscordModelPickerFallbackSelect({
+    ctx: context,
+    safeInteractionCall,
+    dispatchCommandInteraction,
+  });
+}
+
+function createCommandArgFallbackButton(
+  context: CommandArgContext,
+  dispatchCommandInteraction: DispatchDiscordCommandInteraction = createDispatchSpy(),
+) {
+  return createDiscordCommandArgFallbackButton({
     ctx: context,
     safeInteractionCall,
     dispatchCommandInteraction,
@@ -513,5 +562,123 @@ describe("Discord model picker interactions", () => {
     });
 
     expect(loadSpy).toHaveBeenCalledWith(context.cfg, "worker");
+  });
+
+  it("uses the effective routed account for direct model picker recents scope", async () => {
+    const context = createModelPickerContext();
+    const recentsSpy = vi
+      .spyOn(modelPickerPreferencesModule, "readDiscordModelPickerRecentModels")
+      .mockResolvedValue([]);
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(
+      createDefaultModelPickerData(),
+    );
+    vi.spyOn(
+      nativeCommandRouteModule,
+      "resolveDiscordNativeInteractionRouteState",
+    ).mockResolvedValue(createRouteState({ accountId: "alt", agentId: "worker" }));
+    const interaction = createInteraction({ userId: "owner" });
+
+    await replyWithDiscordModelPickerProviders({
+      interaction: interaction as never,
+      cfg: context.cfg,
+      command: "model",
+      userId: "owner",
+      accountId: context.accountId,
+      threadBindings: context.threadBindings,
+      preferFollowUp: false,
+      safeInteractionCall: async (_label, fn) => await fn(),
+    });
+
+    expect(recentsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: expect.objectContaining({
+          accountId: "alt",
+        }),
+      }),
+    );
+  });
+
+  it("uses the effective routed account for model picker submit dispatch", async () => {
+    const context = createModelPickerContext();
+    const pickerData = createDefaultModelPickerData();
+    const modelCommand = createModelCommandDefinition();
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    vi.spyOn(modelPickerPreferencesModule, "readDiscordModelPickerRecentModels").mockResolvedValue(
+      [],
+    );
+    vi.spyOn(
+      nativeCommandRouteModule,
+      "resolveDiscordNativeInteractionRouteState",
+    ).mockResolvedValue(createRouteState({ accountId: "alt", agentId: "worker" }));
+    mockModelCommandPipeline(modelCommand);
+
+    const dispatchSpy = createDispatchSpy();
+
+    await runModelSelect({
+      context,
+      dispatchCommandInteraction: dispatchSpy,
+    });
+
+    await runSubmitButton({
+      context,
+      data: createModelsViewSubmitData(),
+      dispatchCommandInteraction: dispatchSpy,
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "alt",
+      }),
+    );
+  });
+
+  it("uses the effective routed account for command-arg dispatch", async () => {
+    const context = createModelPickerContext();
+    const dispatchSpy = createDispatchSpy();
+    const commandDefinition: ChatCommandDefinition = {
+      key: "think",
+      nativeName: "think",
+      description: "Set thinking level",
+      textAliases: ["/think"],
+      acceptsArgs: true,
+      argsParsing: "none" as CommandArgsParsing,
+      scope: "native",
+      args: [
+        {
+          name: "level",
+          description: "Thinking level",
+          type: "string",
+          required: true,
+        },
+      ],
+    };
+    vi.spyOn(commandRegistryModule, "findCommandByNativeName").mockImplementation((name) =>
+      name === "think" ? commandDefinition : undefined,
+    );
+    vi.spyOn(commandRegistryModule, "listChatCommands").mockReturnValue([commandDefinition]);
+    vi.spyOn(
+      nativeCommandRouteModule,
+      "resolveDiscordNativeInteractionRouteState",
+    ).mockResolvedValue(createRouteState({ accountId: "alt", agentId: "worker" }));
+
+    const interaction = createInteraction({ userId: "owner" });
+    const button = createCommandArgFallbackButton(context, dispatchSpy);
+
+    await button.run(
+      interaction as unknown as CommandArgButtonInteraction,
+      {
+        command: "think",
+        arg: "level",
+        value: "high",
+        user: "owner",
+      } as CommandArgButtonData,
+    );
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "alt",
+      }),
+    );
   });
 });

@@ -9,6 +9,15 @@ import * as sendModule from "./send.js";
 let discordPlugin: typeof import("./channel.js").discordPlugin;
 let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 
+const testDiscordAcpBinding = {
+  type: "acp",
+  agentId: "codex",
+  match: {
+    channel: "discord",
+    peer: { kind: "channel", id: "channel:thread-42" },
+  },
+} as const;
+
 const probeDiscordMock = vi.hoisted(() => vi.fn());
 const monitorDiscordProviderMock = vi.hoisted(() => vi.fn());
 const auditDiscordChannelPermissionsMock = vi.hoisted(() => vi.fn());
@@ -406,6 +415,44 @@ describe("discordPlugin bindings", () => {
     expect(result).toEqual({
       conversationId: "thread-42",
       parentConversationId: "channel:parent-9",
+    });
+  });
+
+  it("matches channel-prefixed configured ACP thread ids against raw inbound thread ids", () => {
+    const compiled = discordPlugin.bindings?.compileConfiguredBinding?.({
+      binding: testDiscordAcpBinding,
+      conversationId: "channel:thread-42",
+    });
+
+    const result = discordPlugin.bindings?.matchInboundConversation?.({
+      binding: testDiscordAcpBinding,
+      compiledBinding: compiled!,
+      conversationId: "thread-42",
+      parentConversationId: "parent-9",
+    });
+
+    expect(result).toEqual({
+      conversationId: "thread-42",
+      matchPriority: 2,
+    });
+  });
+
+  it("matches channel-prefixed configured ACP parent ids against raw inbound thread parents", () => {
+    const compiled = discordPlugin.bindings?.compileConfiguredBinding?.({
+      binding: testDiscordAcpBinding,
+      conversationId: "channel:parent-9",
+    });
+
+    const result = discordPlugin.bindings?.matchInboundConversation?.({
+      binding: testDiscordAcpBinding,
+      compiledBinding: compiled!,
+      conversationId: "thread-42",
+      parentConversationId: "parent-9",
+    });
+
+    expect(result).toEqual({
+      conversationId: "parent-9",
+      matchPriority: 1,
     });
   });
 });

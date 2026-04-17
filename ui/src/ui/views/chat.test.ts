@@ -12,6 +12,7 @@ import {
 } from "../chat-model.test-helpers.ts";
 import { resetAssistantAttachmentAvailabilityCacheForTest } from "../chat/grouped-render.ts";
 import { normalizeMessage } from "../chat/message-normalizer.ts";
+import { resolveReadAloudAgentId } from "../chat/read-aloud-agent.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
@@ -916,6 +917,57 @@ describe("chat view", () => {
     );
     expect(modelSelect).not.toBeNull();
     expect(modelSelect?.disabled).toBe(true);
+  });
+
+  it("uses the configured default agent for read-aloud on the main session alias", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.hello = {
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "pi",
+          mainKey: "main",
+          mainSessionKey: "main",
+        },
+      },
+    } as AppViewState["hello"];
+    state.agentsList = {
+      defaultId: "pi",
+      mainKey: "main",
+      scope: "agents",
+      agents: [
+        { id: "pi", name: "Pi" },
+        { id: "luke", name: "Luke" },
+      ],
+    } as AppViewState["agentsList"];
+    state.agentsSelectedId = "luke";
+
+    expect(resolveReadAloudAgentId(state, state.agentsSelectedId)).toBe("pi");
+  });
+
+  it("keeps explicit agent sessions pinned to that agent for read-aloud", () => {
+    const { state } = createChatHeaderState({ omitSessionFromList: true });
+    state.sessionKey = "agent:luke:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.hello = {
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "pi",
+          mainKey: "main",
+          mainSessionKey: "main",
+        },
+      },
+    } as AppViewState["hello"];
+    state.agentsList = {
+      defaultId: "pi",
+      mainKey: "main",
+      scope: "agents",
+      agents: [
+        { id: "pi", name: "Pi" },
+        { id: "luke", name: "Luke" },
+      ],
+    } as AppViewState["agentsList"];
+
+    expect(resolveReadAloudAgentId(state, "pi")).toBe("luke");
   });
 
   it("keeps the selected model visible when the active session is absent from sessions.list", async () => {
