@@ -56,16 +56,17 @@ export function buildDiscordUntrustedContext(params: {
   if (!params.isGuild) {
     return undefined;
   }
-  const shouldCopyMessageBody = params.channelConfig?.copyMessageBodyToUntrustedContext === true;
+  const isUntrustedChannel = params.channelConfig?.copyMessageBodyToUntrustedContext === true;
+  if (!isUntrustedChannel) {
+    return undefined;
+  }
   const entries = [
     buildUntrustedChannelMetadata({
       source: "discord",
       label: "Discord channel topic",
       entries: [params.channelTopic],
     }),
-    shouldCopyMessageBody &&
-    typeof params.messageBody === "string" &&
-    params.messageBody.trim().length > 0
+    typeof params.messageBody === "string" && params.messageBody.trim().length > 0
       ? wrapExternalContent(`UNTRUSTED Discord message body\n${params.messageBody.trim()}`, {
           source: "unknown",
           includeWarning: false,

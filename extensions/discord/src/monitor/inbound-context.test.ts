@@ -7,7 +7,7 @@ import {
 } from "./inbound-context.js";
 
 describe("Discord inbound context helpers", () => {
-  it("builds guild access context without duplicating the live body by default", () => {
+  it("keeps trusted guild channels out of untrusted context by default", () => {
     expect(
       buildDiscordInboundAccessContext({
         channelConfig: {
@@ -27,7 +27,7 @@ describe("Discord inbound context helpers", () => {
       }),
     ).toEqual({
       groupSystemPrompt: "Use the runbook.",
-      untrustedContext: [expect.stringContaining("Production alerts only")],
+      untrustedContext: undefined,
       ownerAllowFrom: ["user-1"],
     });
   });
@@ -57,10 +57,10 @@ describe("Discord inbound context helpers", () => {
         channelTopic: "topic",
         messageBody: "hello",
       }),
-    ).toEqual([expect.stringContaining("topic")]);
+    ).toBeUndefined();
   });
 
-  it("does not copy the live body when guild config leaves the knob off", () => {
+  it("keeps guild channels trusted when the untrusted-channel knob is off", () => {
     expect(
       buildDiscordInboundAccessContext({
         channelConfig: null,
@@ -76,12 +76,12 @@ describe("Discord inbound context helpers", () => {
       }),
     ).toEqual({
       groupSystemPrompt: undefined,
-      untrustedContext: [expect.stringContaining("Production alerts only")],
+      untrustedContext: undefined,
       ownerAllowFrom: undefined,
     });
   });
 
-  it("lets channel config opt a specific channel into message body copying", () => {
+  it("treats explicitly flagged channels as untrusted and appends metadata plus body", () => {
     expect(
       buildDiscordInboundAccessContext({
         channelConfig: {

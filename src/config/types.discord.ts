@@ -39,8 +39,9 @@ export type DiscordDmConfig = {
 export type DiscordGuildChannelConfig = {
   requireMention?: boolean;
   /**
-   * If true, copy the live guild message body into UntrustedContext as external content.
-   * Default: false.
+   * If true, treat this guild channel as untrusted for inbound Discord context:
+   * copy channel topic metadata and the live guild message body into
+   * UntrustedContext as wrapped external content. Default: false (trusted).
    */
   copyMessageBodyToUntrustedContext?: boolean;
   /**

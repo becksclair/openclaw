@@ -40,7 +40,7 @@ describe("buildDiscordNativeCommandContext", () => {
     expect(ctx.Timestamp).toBe(123);
   });
 
-  it("builds guild slash command context with owner allowlist and channel metadata", () => {
+  it("builds guild slash command context with owner allowlist and trusted channels staying metadata-free", () => {
     const ctx = buildDiscordNativeCommandContext({
       prompt: "/status",
       commandArgs: { values: { model: "gpt-5.2" } },
@@ -87,9 +87,7 @@ describe("buildDiscordNativeCommandContext", () => {
     expect(ctx.MessageThreadId).toBe("chan-1");
     expect(ctx.ThreadParentId).toBe("parent-1");
     expect(ctx.OriginatingTo).toBe("channel:chan-1");
-    expect(ctx.UntrustedContext).toEqual([
-      expect.stringContaining("Discord channel topic:\nProduction alerts only"),
-    ]);
+    expect(ctx.UntrustedContext).toBeUndefined();
     expect(ctx.Timestamp).toBe(456);
   });
 });
