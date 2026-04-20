@@ -202,6 +202,26 @@ Verdicts for the previous fork-only commits:
   - **Test gap**: The original seam validation (lines 71-76) did not include `src/auto-reply/reply/session.test.ts`; this file should be added to the Agent-scoped Talk/TTS seam test coverage.
   - Treat this as an essential correction to the Agent-scoped Talk/TTS seam; do not drop it during replay even though the delta is small.
 
+- 2026-04-20 gateway `tts.convert` agent-scope correction — behavior correction to seam #3, keep as part of the agent-scoped Talk/TTS carry
+  - **Root cause**: The fork already widened the internal agent-aware TTS lanes, but `src/gateway/server-methods/tts.ts` still resolved explicit overrides and synthesis from the raw global config even when callers supplied `agentId`.
+  - **Symptom**: Gateway `tts.convert` requests could ignore agent-specific provider, voice, and provider-owned TTS options, so conversions fell back to global defaults instead of matching the speaking agent.
+  - **Fix**: `tts.convert` now resolves `resolveConfigWithAgentTts(cfg, agentId)` before explicit override resolution and synthesis, so gateway conversion follows the same effective TTS seam as Talk, reply dispatch, and other agent-aware lanes.
+  - **Verification**: `src/gateway/server-methods/tts.test.ts` now proves that `tts.convert` passes the scoped config into both explicit-override resolution and `textToSpeech(...)`.
+  - Treat this as a seam-accuracy correction, not a new standalone feature. If upstream makes `tts.convert` agent-aware through the same merge seam, fold back to upstream and delete this entry.
+
+- 2026-04-20 Google Gemini TTS prompt-steering seam — keep until upstream exposes an equivalent transcript-safe delivery-guidance surface
+  - The fork wants Google Gemini TTS to accept expressive delivery guidance without polluting the spoken transcript itself.
+  - The carry lives in `extensions/google/speech-provider.ts`:
+    - `messages.tts.providers.google` and `talk.providers.google` now accept Google-owned prompt-steering fields: `scene`, `style`, `pace`, and `sampleContext`
+    - when any of those fields are present, Google TTS builds a deterministic prompt wrapper with explicit `SCENE`, `DIRECTOR'S NOTES`, `SAMPLE CONTEXT`, and `TRANSCRIPT` sections so Gemini only speaks the transcript section verbatim
+    - the same wrapper applies to both normal synthesis and telephony synthesis, and Talk overrides can selectively replace or inherit those Google-owned fields
+  - This seam depends on agent-aware TTS routing when an agent-specific Google voice/style is requested through gateway `tts.convert`; keep the agent-scope correction above aligned with this feature.
+  - Proof on the source checkout:
+    - `pnpm test extensions/google/speech-provider.test.ts`
+    - `pnpm test src/gateway/server-methods/tts.test.ts`
+  - Docs for this carry live in `docs/providers/google.md` and `docs/tools/tts.md`; keep them aligned with the actual Google-owned fields and deterministic prompt shape.
+  - Treat this as a provider-owned product seam. If upstream adds equivalent Google TTS prompt-steering fields with the same transcript-safe behavior, collapse back to upstream and remove this entry.
+
 - 2026-04-16 safe-bin canonical-path trust seam — keep until upstream trusts canonical system-bin realpaths
   - The node-host/system-run allowlist lane correctly unwraps transparent `env` wrappers such as `env tr a b`, but the safe-bin trust check was still evaluating the discovered symlink path instead of the canonical executable path.
   - On this host `tr` resolves as `/usr/sbin/tr` with realpath `/usr/bin/tr`; the default trusted safe-bin dirs include `/usr/bin` but not `/usr/sbin`, so allowlist-mode system-run and adjacent safe-bin callers failed closed with `SYSTEM_RUN_DENIED: allowlist miss` even though the real binary was one of the default safe bins.
@@ -377,8 +397,9 @@ Behavior carried by this fork:
 - `talk.speak` and `talk.config` both accept `agentId` and resolve through the same seam.
 - Internal agent-aware TTS paths scope `messages.tts` through that same merge seam before they inspect mode, prefs, provider config, or synthesize audio.
   - This includes generic reply dispatch, ACP reply dispatch, `/tts` commands, the shipped TTS agent tool, and Discord voice-manager synthesis when those lanes already know which agent is speaking.
+  - `tts.convert` now also resolves through the effective agent-scoped config when `agentId` is provided, so gateway conversion uses the same provider/voice/options seam before explicit override resolution and synthesis.
   - Generic reply dispatch also keeps final-mode auto-TTS alive through partial streaming by capturing sanitized preview text when no final reply payload survives, while deduping that fallback against the final reply's visible text when one does arrive.
-  - Standalone gateway `tts.*` RPCs and direct CLI/local conversion remain intentionally global in this pass.
+  - The other standalone gateway `tts.*` RPCs and direct CLI/local conversion remain intentionally global in this pass.
 
 Primary seam files:
 
@@ -393,6 +414,7 @@ Primary seam files:
 - `src/auto-reply/reply/dispatch-from-config.ts`
 - `src/gateway/protocol/schema/channels.ts`
 - `src/gateway/talk-agent-config.ts`
+- `src/gateway/server-methods/tts.ts`
 - `src/gateway/server-methods/talk.ts`
 - `extensions/discord/src/voice/manager.ts`
 
@@ -406,18 +428,21 @@ Primary seam tests:
 - `src/tts/tts-config.test.ts`
 - `src/gateway/talk-agent-config.test.ts`
 - `src/gateway/server-methods/talk.test.ts`
+- `src/gateway/server-methods/tts.test.ts`
 - `src/gateway/server.talk-config.test.ts`
 
 Rebase notes:
 
 - Keep generic agent-level TTS merging out of Talk-specific helpers.
 - Keep Talk-specific provider synthesis out of generic TTS helpers.
+- Keep gateway `tts.convert` agent-aware by resolving scoped config through `src/tts/tts-config.ts`; do not duplicate provider/voice selection logic inside the RPC handler.
 - If upstream adds native agent-scoped TTS or Talk seams, collapse back to upstream instead of carrying parallel local abstractions.
 
 Required invariants after rebase:
 
 - Agent-specific TTS overrides win over global defaults for that agent only.
 - Internal agent-aware TTS lanes use the effective agent-scoped `messages.tts` config before mode, status, prefs, and provider decisions, not only at the final synth call.
+- `tts.convert` uses the effective agent-scoped config when `agentId` is provided, before explicit override resolution and synthesis.
 - Generic reply dispatch keeps final-mode auto-TTS working for agent-bound partial-streaming replies even when the final visible text only existed in preview payloads, and it does not duplicate voice output when the final reply already resolves to the same visible text.
 - `talk.speak` and `talk.config` both see the effective agent-scoped provider and voice.
 - Talk only points at a provider it can actually resolve, and it stays on a working provider if the selected one cannot materialize a valid Talk config.
@@ -698,6 +723,48 @@ Required invariants after rebase:
 - SSH config materialization preserves target host aliases, includes the user's SSH config when enabled, and writes temporary identity/cert/known-host material only when configured.
 - Real Discord persistent bindings for remote ACP continue to survive gateway restart and live binding mutation.
 
+### 9. Google Gemini TTS prompt-steering seam
+
+Status: implemented
+
+Why this exists:
+
+- The fork wants Google Gemini TTS to accept delivery guidance such as scene, tone, pacing, and setup context without leaking that guidance into the spoken transcript.
+- The same Google-owned guidance should work for both `messages.tts.providers.google` and Talk-mode `talk.providers.google`, so agent-specific or Talk-specific Google voices can keep their own delivery shape.
+
+Behavior carried by this fork:
+
+- `extensions/google/speech-provider.ts` accepts Google-owned prompt-steering fields `scene`, `style`, `pace`, and `sampleContext` alongside the existing model/voice config.
+- When any prompt-steering field is present, Google synthesis wraps the request in a deterministic prompt with explicit `SCENE`, `DIRECTOR'S NOTES`, `SAMPLE CONTEXT`, and `TRANSCRIPT` sections, and Gemini is told to speak only the transcript section verbatim.
+- Normal synthesis and telephony synthesis both use that same transcript-safe prompt wrapper.
+- Talk-mode Google overrides can selectively replace or inherit those prompt-steering fields on top of the base Google TTS config.
+- Repo docs expose the feature in `docs/providers/google.md` and `docs/tools/tts.md` so operators know these are OpenClaw-owned prompt-steering helpers, not native Gemini `SpeechConfig` JSON keys.
+
+Primary seam files:
+
+- `extensions/google/speech-provider.ts`
+- `docs/providers/google.md`
+- `docs/tools/tts.md`
+
+Primary seam tests:
+
+- `extensions/google/speech-provider.test.ts`
+
+Rebase notes:
+
+- Keep this seam Google-local; do not widen it into a generic cross-provider prompt-wrapper abstraction unless another provider truly needs the same contract.
+- Preserve the transcript-safe behavior: guidance sections shape delivery, but the transcript remains the only spoken content.
+- Keep Talk inheritance/override behavior inside the Google speech provider seam rather than spreading Google-specific rules into generic Talk helpers.
+- If upstream adds equivalent Google TTS guidance fields with deterministic transcript-safe synthesis, delete this seam and collapse back to upstream.
+
+Required invariants after rebase:
+
+- Google TTS prompt-steering fields remain `scene`, `style`, `pace`, and `sampleContext`.
+- Google synthesis only wraps the request when at least one prompt-steering field is present; plain transcript-only requests stay plain.
+- The prompt wrapper keeps the transcript isolated in its own section so Gemini only speaks the intended transcript text.
+- Talk-mode Google overrides can inherit the base Google prompt-steering fields and selectively replace any subset of them.
+- Docs still describe these fields as OpenClaw prompt-steering helpers rather than native Gemini `SpeechConfig` keys.
+
 ## Replay checklist
 
 When rebasing this fork onto a newer upstream base:
@@ -721,6 +788,7 @@ Run these after replaying the live seams:
 - `pnpm test src/infra/outbound/deliver.test.ts`
 - `pnpm test src/agents/pi-embedded-subscribe.handlers.messages.test.ts`
 - `pnpm test src/tts/tts-config.test.ts src/gateway/talk-agent-config.test.ts`
+- `pnpm test extensions/google/speech-provider.test.ts src/gateway/server-methods/tts.test.ts`
 - `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/reply/dispatch-from-config.reply-dispatch.test.ts`
 - `pnpm test src/auto-reply/reply/dispatch-acp.test.ts`
 - `pnpm test src/auto-reply/reply/commands-tts.test.ts`

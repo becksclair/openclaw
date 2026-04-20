@@ -256,12 +256,28 @@ To use Google as the default TTS provider:
         google: {
           model: "gemini-3.1-flash-tts-preview",
           voiceName: "Kore",
+          scene: "A late-night campfire story under a clear sky.",
+          style: "Warm, intimate, and slightly suspenseful.",
+          pace: "Slow and deliberate.",
+          sampleContext: "The listener is already leaning in, waiting for the reveal.",
         },
       },
     },
   },
 }
 ```
+
+The extra Google fields above are prompt-steering helpers, not native
+`SpeechConfig` JSON fields in the Gemini API. OpenClaw folds them into a
+deterministic Gemini TTS prompt wrapper:
+
+- `scene`: physical environment or overall vibe
+- `style`: delivery/tone notes
+- `pace`: pacing guidance in natural language
+- `sampleContext`: contextual setup text that helps the model enter the scene
+
+OpenClaw keeps the actual spoken text in a dedicated transcript section so the
+steering context guides delivery without becoming the transcript itself.
 
 Gemini API TTS accepts expressive square-bracket audio tags in the text, such as
 `[whispers]` or `[laughs]`. To keep tags out of the visible chat reply while
@@ -271,6 +287,26 @@ sending them to TTS, put them inside a `[[tts:text]]...[[/tts:text]]` block:
 Here is the clean reply text.
 
 [[tts:text]][whispers] Here is the spoken version.[[/tts:text]]
+```
+
+Talk mode can use the same Google-owned prompt steering under
+`talk.providers.google`:
+
+```json5
+{
+  talk: {
+    provider: "google",
+    providers: {
+      google: {
+        voiceId: "Kore",
+        scene: "A bright morning radio studio.",
+        style: "Cheerful and reassuring.",
+        pace: "Conversational and steady.",
+        sampleContext: "The host is welcoming sleepy commuters into the day.",
+      },
+    },
+  },
+}
 ```
 
 <Note>
