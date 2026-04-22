@@ -156,12 +156,14 @@ describe("scripts/test-extension.mjs", () => {
   });
 
   it("resolves memory extensions onto the memory vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "memory-core", cwd: process.cwd() });
+    for (const extensionId of ["memory-core", "memory-maintenance"]) {
+      const plan = resolveExtensionTestPlan({ targetArg: extensionId, cwd: process.cwd() });
 
-    expect(plan.extensionId).toBe("memory-core");
-    expect(plan.config).toBe("test/vitest/vitest.extension-memory.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("memory-core"));
-    expect(plan.hasTests).toBe(true);
+      expect(plan.extensionId).toBe(extensionId);
+      expect(plan.config).toBe("test/vitest/vitest.extension-memory.config.ts");
+      expect(plan.roots).toContain(bundledPluginRoot(extensionId));
+      expect(plan.hasTests).toBe(true);
+    }
   });
 
   it("resolves msteams onto the msteams vitest config", () => {
@@ -269,6 +271,7 @@ describe("scripts/test-extension.mjs", () => {
         "zalo",
         "zalouser",
         "memory-core",
+        "memory-maintenance",
         "msteams",
         "feishu",
         "irc",
@@ -293,6 +296,7 @@ describe("scripts/test-extension.mjs", () => {
       "matrix",
       "mattermost",
       "memory-core",
+      "memory-maintenance",
       "msteams",
       "openai",
       "qa-lab",
@@ -378,8 +382,8 @@ describe("scripts/test-extension.mjs", () => {
       {
         config: "test/vitest/vitest.extension-memory.config.ts",
         estimatedCost: expect.any(Number),
-        extensionIds: ["memory-core"],
-        roots: [bundledPluginRoot("memory-core")],
+        extensionIds: ["memory-core", "memory-maintenance"],
+        roots: [bundledPluginRoot("memory-core"), bundledPluginRoot("memory-maintenance")],
         testFileCount: expect.any(Number),
       },
       {
