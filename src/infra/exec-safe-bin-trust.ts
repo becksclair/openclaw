@@ -12,6 +12,7 @@ type TrustedSafeBinDirsParams = {
 
 type TrustedSafeBinPathParams = {
   resolvedPath: string;
+  resolvedRealPath?: string;
   trustedDirs?: ReadonlySet<string>;
 };
 
@@ -92,6 +93,10 @@ export function getTrustedSafeBinDirs(
 
 export function isTrustedSafeBinPath(params: TrustedSafeBinPathParams): boolean {
   const trustedDirs = params.trustedDirs ?? getTrustedSafeBinDirs();
+  if (params.resolvedRealPath) {
+    const resolvedRealDir = path.dirname(path.resolve(params.resolvedRealPath));
+    return trustedDirs.has(resolvedRealDir);
+  }
   const resolvedDir = path.dirname(path.resolve(params.resolvedPath));
   return trustedDirs.has(resolvedDir);
 }
