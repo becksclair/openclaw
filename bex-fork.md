@@ -71,6 +71,11 @@ reimplemented on this branch.
   - seam 1: Discord native slash-command and interaction replies preserve `audioAsVoice`, routed-account text policy, and voice-only cleanup semantics in `extensions/discord/src/monitor/native-command.ts` and `extensions/discord/src/monitor/native-command-ui.ts`
   - seam 1: Discord direct reply callers preserve trusted local-media roots in `extensions/discord/src/monitor/reply-delivery.ts` and `extensions/discord/src/actions/runtime.messaging.ts`
   - seam 1: Telegram outbound preserves `audioAsVoice` in `extensions/telegram/src/outbound-adapter.ts`
+- Wave 3 Control UI Talk read-aloud seam is reimplemented upstream-first on this branch:
+  - seam 5: Control UI read-aloud now routes through gateway Talk in `ui/src/ui/chat/talk-tts.ts` instead of browser speech synthesis
+  - seam 5: read-aloud agent selection now lives in `ui/src/ui/chat/read-aloud-agent.ts` and pins explicit agent sessions while resolving the default configured agent for the `main` session alias
+  - seam 5: chat message-group rendering only exposes read-aloud when a gateway client is available, and passes read-aloud errors and agent identity through `ui/src/ui/chat/grouped-render.ts` and `ui/src/ui/views/chat.ts`
+  - seam 5: app render resolves the effective read-aloud agent from live session state and passes the gateway client into chat rendering in `ui/src/ui/app-render.ts`
 - Focused Wave 1 proof completed on this branch:
   - `pnpm test src/tts/tts-config.test.ts src/gateway/talk-agent-config.test.ts`
   - `pnpm test src/gateway/server-methods/tts.test.ts src/gateway/server-methods/talk.test.ts src/gateway/server.talk-config.test.ts`
@@ -91,10 +96,14 @@ reimplemented on this branch.
   - `pnpm test extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts extensions/discord/src/monitor/native-command.model-picker.test.ts extensions/discord/src/monitor/native-command.status-direct.test.ts extensions/discord/src/actions/runtime.test.ts extensions/discord/src/monitor/reply-delivery.test.ts extensions/discord/src/send.sends-basic-channel-messages.test.ts`
   - `pnpm test extensions/telegram/src/outbound-adapter.test.ts`
   - `pnpm build`
+- Focused Wave 3 Control UI read-aloud proof completed on this branch:
+  - `pnpm test ui/src/ui/views/chat.test.ts`
+  - `pnpm build`
 - In this branch, `src/auto-reply/reply/dispatch-from-config.ts` currently
   carries both the seam 3 agent-scoped config resolution and the seam 1 shared
   preview-text fallback/dedupe behavior. The remaining major replay work now
-  sits outside the Discord/Telegram voice-routing lane.
+  sits outside the Discord/Telegram voice-routing lane and the Control UI Talk
+  read-aloud path.
 
 ## Replay impact snapshot: 2026-04-15 onto upstream/main `d7cc6f7643`
 
