@@ -1,6 +1,7 @@
 export const memoryExtensionTestRoots = [
   "extensions/memory-core",
   "extensions/memory-lancedb",
+  "extensions/memory-maintenance",
   "extensions/memory-wiki",
 ];
 
