@@ -45,7 +45,7 @@ function buildTtsParams(
       commandBodyNormalized,
       isAuthorizedSender: true,
       senderId: "owner",
-      channel: "forum",
+      channel: "telegram",
     },
   } as unknown as Parameters<typeof handleTtsCommands>[0];
 }
@@ -188,5 +188,134 @@ describe("handleTtsCommands status fallback reporting", () => {
     );
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("TTS status");
+  });
+
+  it("uses agent-scoped config for /tts audio and /tts status", async () => {
+    const cfg = {
+      messages: {
+        tts: {
+          provider: "openai",
+          providers: {
+            openai: {
+              voice: "her",
+              apiKey: "shared-key",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "luke",
+            tts: {
+              providers: {
+                openai: {
+                  voice: "henry2",
+                },
+              },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    ttsMocks.textToSpeech.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/luke.ogg",
+      provider: PRIMARY_TTS_PROVIDER,
+      voiceCompatible: true,
+    });
+
+    const params = {
+      ...buildTtsParams("/tts audio hello world", cfg),
+      sessionKey: "agent:luke:session-1",
+      agentId: "luke",
+    } as Parameters<typeof handleTtsCommands>[0];
+    await handleTtsCommands(params, true);
+
+    expect(ttsMocks.textToSpeech).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          messages: expect.objectContaining({
+            tts: expect.objectContaining({
+              providers: expect.objectContaining({
+                openai: expect.objectContaining({ voice: "henry2", apiKey: "shared-key" }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
+
+    await handleTtsCommands(
+      {
+        ...buildTtsParams("/tts status", cfg),
+        sessionKey: "agent:luke:session-1",
+        agentId: "luke",
+      } as Parameters<typeof handleTtsCommands>[0],
+      true,
+    );
+
+    expect(ttsMocks.resolveTtsConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages: expect.objectContaining({
+          tts: expect.objectContaining({
+            providers: expect.objectContaining({
+              openai: expect.objectContaining({ voice: "henry2", apiKey: "shared-key" }),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("prefers explicit agentId when the session key is not agent-scoped", async () => {
+    const cfg = {
+      messages: {
+        tts: {
+          provider: "openai",
+          providers: {
+            openai: {
+              voice: "her",
+              apiKey: "shared-key",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "luke",
+            tts: {
+              providers: {
+                openai: {
+                  voice: "henry2",
+                },
+              },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    await handleTtsCommands(
+      {
+        ...buildTtsParams("/tts status", cfg),
+        sessionKey: "main",
+        agentId: "luke",
+      } as Parameters<typeof handleTtsCommands>[0],
+      true,
+    );
+
+    expect(ttsMocks.resolveTtsConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        messages: expect.objectContaining({
+          tts: expect.objectContaining({
+            providers: expect.objectContaining({
+              openai: expect.objectContaining({ voice: "henry2", apiKey: "shared-key" }),
+            }),
+          }),
+        }),
+      }),
+    );
   });
 });

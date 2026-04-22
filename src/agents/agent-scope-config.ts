@@ -30,6 +30,7 @@ export type ResolvedAgentConfig = {
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
+  tts?: AgentEntry["tts"];
   subagents?: AgentEntry["subagents"];
   embeddedPi?: AgentEntry["embeddedPi"];
   sandbox?: AgentEntry["sandbox"];
@@ -127,6 +128,7 @@ export function resolveAgentConfig(
     heartbeat: entry.heartbeat,
     identity: entry.identity,
     groupChat: entry.groupChat,
+    tts: entry.tts,
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
     embeddedPi:
       typeof entry.embeddedPi === "object" && entry.embeddedPi ? entry.embeddedPi : undefined,
