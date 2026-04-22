@@ -368,6 +368,7 @@ export async function buildTelegramInboundContextPayload(params: {
     MediaUrl: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
     MediaPaths: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
     MediaUrls: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
+    InboundAudio: currentMediaForContext.some((media) => media.contentType?.startsWith("audio/")),
     MediaTypes:
       contextMedia.length > 0
         ? (contextMedia.map((m) => m.contentType).filter(Boolean) as string[])

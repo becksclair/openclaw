@@ -506,7 +506,7 @@ Required invariants after rebase:
 
 ### 4. Telegram inbound-audio auto-TTS seam
 
-Status: implemented
+Status: implemented in the source checkout; reimplemented on the 2026-04-22 replay branch
 
 Why this exists:
 
@@ -531,6 +531,12 @@ Primary seam tests:
 - `extensions/telegram/src/bot-message-context.audio-transcript.test.ts`
 - `src/auto-reply/reply/dispatch-from-config.reply-dispatch.test.ts`
 - `src/auto-reply/reply/dispatch-from-config.test.ts`
+
+Replay proof on the 2026-04-22 branch:
+
+- `pnpm test extensions/telegram/src/bot-message-context.audio-transcript.test.ts src/auto-reply/reply/dispatch-from-config.reply-dispatch.test.ts src/auto-reply/reply/dispatch-from-config.test.ts`
+- `pnpm test src/auto-reply/reply/dispatch-from-config.acp-abort.test.ts`
+- `pnpm build`
 
 Rebase notes:
 
