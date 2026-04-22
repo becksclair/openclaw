@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordOutboundHoisted,
   expectDiscordThreadBotSend,
@@ -278,6 +278,63 @@ describe("discordOutbound", () => {
       expect.objectContaining({ accountId: "default" }),
     );
     expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+  });
+
+  it("routes audioAsVoice payloads through Discord voice sends before follow-up content", async () => {
+    hoisted.sendVoiceMessageDiscordMock.mockResolvedValueOnce({
+      messageId: "voice-1",
+      channelId: "ch-1",
+    });
+    hoisted.sendMessageDiscordMock.mockResolvedValueOnce({
+      messageId: "msg-2",
+      channelId: "ch-1",
+    });
+
+    const mediaReadFile = vi.fn(async () => Buffer.from("voice"));
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "voice caption",
+      payload: {
+        text: "voice caption",
+        mediaUrls: ["/tmp/voice.ogg", "/tmp/followup.png"],
+        audioAsVoice: true,
+      },
+      accountId: "default",
+      mediaLocalRoots: ["/tmp/media"],
+      mediaReadFile,
+      replyToId: "reply-1",
+      silent: true,
+    });
+
+    expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:123456",
+      "/tmp/voice.ogg",
+      expect.objectContaining({
+        accountId: "default",
+        mediaLocalRoots: ["/tmp/media"],
+        mediaReadFile,
+        replyTo: "reply-1",
+        silent: true,
+      }),
+    );
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:123456",
+      "voice caption",
+      expect.objectContaining({
+        mediaUrl: "/tmp/followup.png",
+        mediaLocalRoots: ["/tmp/media"],
+        mediaReadFile,
+        accountId: "default",
+        replyTo: "reply-1",
+        silent: true,
+      }),
+    );
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "msg-2",
+      channelId: "ch-1",
+    });
   });
 
   it("neutralizes approval mentions only for approval payloads", async () => {
