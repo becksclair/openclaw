@@ -63,6 +63,11 @@ reimplemented on this branch.
 - Wave 1 is reimplemented upstream-first on this branch:
   - seam 3: Agent-scoped Talk/TTS
   - seam 9: Google Gemini TTS prompt-steering
+- Wave 2 first slice is reimplemented upstream-first on this branch:
+  - seam 1: shared preview-text fallback/dedupe in `src/auto-reply/reply/dispatch-from-config.ts`
+  - seam 1 / voice-note carry: Opus compatibility normalization in `extensions/speech-core/src/tts.ts`
+  - seam 1: routed `audioAsVoice` payloads stay on channel `sendPayload` in `src/infra/outbound/deliver.ts`
+  - seam 1: Discord outbound routed voice sends preserve the native voice path in `extensions/discord/src/outbound-adapter.ts` and `extensions/discord/src/send.outbound.ts`
 - Focused Wave 1 proof completed on this branch:
   - `pnpm test src/tts/tts-config.test.ts src/gateway/talk-agent-config.test.ts`
   - `pnpm test src/gateway/server-methods/tts.test.ts src/gateway/server-methods/talk.test.ts src/gateway/server.talk-config.test.ts`
@@ -73,10 +78,16 @@ reimplemented on this branch.
   - `pnpm config:docs:gen`
   - `pnpm config:schema:gen`
   - `pnpm build`
+- Focused Wave 2 first-slice proof completed on this branch:
+  - `pnpm test extensions/speech-core/src/tts.test.ts`
+  - `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/reply/dispatch-from-config.reply-dispatch.test.ts`
+  - `pnpm test src/infra/outbound/deliver.test.ts`
+  - `pnpm test extensions/discord/src/outbound-adapter.test.ts`
+  - `pnpm build`
 - In this branch, `src/auto-reply/reply/dispatch-from-config.ts` currently
   carries only the agent-scoped config resolution needed for seam 3. The
-  preview-text fallback/dedupe behavior remains part of seam 1 and is still
-  pending the Wave 2 voice-routing replay.
+  remaining seam 1 work is the Discord native-command / interaction lane and
+  any Telegram-specific follow-on that still depends on the shared voice path.
 
 ## Replay impact snapshot: 2026-04-15 onto upstream/main `d7cc6f7643`
 

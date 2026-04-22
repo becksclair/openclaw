@@ -842,15 +842,17 @@ async function deliverOutboundPayloadsCore(
         forceDocument: params.forceDocument,
       };
       const deliveryTarget = handler.buildTargetRef({ threadId: sendOverrides.threadId });
-      if (
+      const shouldUsePayloadSender =
         handler.sendPayload &&
-        hasReplyPayloadContent({
+        (hasReplyPayloadContent({
           presentation: effectivePayload.presentation,
           interactive: effectivePayload.interactive,
           channelData: effectivePayload.channelData,
-        })
-      ) {
-        const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
+        }) ||
+          (effectivePayload.audioAsVoice === true && payloadSummary.mediaUrls.length > 0));
+      const payloadSender = shouldUsePayloadSender ? handler.sendPayload : undefined;
+      if (payloadSender) {
+        const delivery = await payloadSender(effectivePayload, sendOverrides);
         results.push(delivery);
         await maybePinDeliveredMessage({
           handler,
