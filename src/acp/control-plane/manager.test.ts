@@ -2867,6 +2867,53 @@ describe("AcpSessionManager", () => {
     });
   });
 
+  it("skips capability lookup when initializeSession does not request cwd", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        sessionKey: string;
+        mutate: (current: SessionAcpMeta | undefined) => SessionAcpMeta | null | undefined;
+      };
+      const nextMeta = params.mutate(undefined);
+      if (nextMeta === null) {
+        return null;
+      }
+      return {
+        sessionKey: params.sessionKey,
+        storeSessionKey: params.sessionKey,
+        acp: nextMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+
+    await expect(
+      manager.initializeSession({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:init-no-cwd",
+        agent: "codex",
+        backendId: "acpx",
+        mode: "persistent",
+      }),
+    ).resolves.toMatchObject({
+      handle: expect.objectContaining({
+        sessionKey: "agent:codex:acp:init-no-cwd",
+      }),
+    });
+
+    expect(runtimeState.getCapabilities).not.toHaveBeenCalled();
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex:acp:init-no-cwd",
+        cwd: undefined,
+      }),
+    );
+  });
+
   it("can close and clear metadata when backend is unavailable", async () => {
     hoisted.readAcpSessionEntryMock.mockReturnValue({
       sessionKey: "agent:codex:acp:session-1",

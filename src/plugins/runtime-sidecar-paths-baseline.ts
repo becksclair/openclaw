@@ -1,58 +1,23 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 
 const NON_PACKAGED_RUNTIME_SIDECAR_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
 
-const trackedBundledPluginDirCache = new Map<string, ReadonlySet<string> | null>();
-
 function buildBundledDistArtifactPath(dirName: string, artifact: string): string {
   return ["dist", "extensions", dirName, artifact].join("/");
 }
 
-function listTrackedBundledPluginDirs(rootDir: string): ReadonlySet<string> | null {
-  const normalizedRoot = path.resolve(rootDir);
-  if (trackedBundledPluginDirCache.has(normalizedRoot)) {
-    return trackedBundledPluginDirCache.get(normalizedRoot) ?? null;
-  }
-  try {
-    const output = execFileSync(
-      "git",
-      ["-C", normalizedRoot, "ls-files", "-z", "--", "extensions"],
-      {
-        encoding: "utf8",
-      },
-    );
-    const trackedDirs = new Set<string>();
-    for (const entry of output.split("\0")) {
-      const normalized = entry.trim();
-      if (!normalized.startsWith("extensions/")) {
-        continue;
-      }
-      const [, dirName] = normalized.split("/", 3);
-      if (dirName) {
-        trackedDirs.add(dirName);
-      }
-    }
-    trackedBundledPluginDirCache.set(normalizedRoot, trackedDirs);
-    return trackedDirs;
-  } catch {
-    trackedBundledPluginDirCache.set(normalizedRoot, null);
-    return null;
-  }
-}
-
 export function collectBundledRuntimeSidecarPaths(params?: {
   rootDir?: string;
+  trackedDirNames?: ReadonlySet<string> | null;
 }): readonly string[] {
   const rootDir = path.resolve(params?.rootDir ?? process.cwd());
-  const trackedDirs = listTrackedBundledPluginDirs(rootDir);
   return listBundledPluginMetadata({
     rootDir,
     includeChannelConfigs: false,
   })
-    .filter((entry) => trackedDirs?.has(entry.dirName) ?? true)
+    .filter((entry) => params?.trackedDirNames?.has(entry.dirName) ?? true)
     .filter((entry) => !NON_PACKAGED_RUNTIME_SIDECAR_PLUGIN_DIRS.has(entry.dirName))
     .flatMap((entry) =>
       (entry.runtimeSidecarArtifacts ?? []).map((artifact) =>
@@ -65,6 +30,7 @@ export function collectBundledRuntimeSidecarPaths(params?: {
 export async function writeBundledRuntimeSidecarPathBaseline(params: {
   repoRoot: string;
   check: boolean;
+  trackedDirNames?: ReadonlySet<string> | null;
 }): Promise<{ changed: boolean; jsonPath: string }> {
   const jsonPath = path.join(
     params.repoRoot,
@@ -73,7 +39,10 @@ export async function writeBundledRuntimeSidecarPathBaseline(params: {
     "bundled-runtime-sidecar-paths.json",
   );
   const expectedJson = `${JSON.stringify(
-    collectBundledRuntimeSidecarPaths({ rootDir: params.repoRoot }),
+    collectBundledRuntimeSidecarPaths({
+      rootDir: params.repoRoot,
+      trackedDirNames: params.trackedDirNames,
+    }),
     null,
     2,
   )}\n`;
