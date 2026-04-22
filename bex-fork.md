@@ -595,7 +595,7 @@ Required invariants after rebase:
 
 ### 6. Discord persistent ACP thread-binding seam
 
-Status: implemented
+Status: implemented in the source checkout; reimplemented on the 2026-04-22 replay branch
 
 Why this exists:
 
@@ -617,6 +617,10 @@ Primary seam tests:
 
 - `extensions/discord/src/channel.test.ts`
 
+Replay proof on the 2026-04-22 branch:
+
+- `pnpm test extensions/discord/src/channel.test.ts`
+
 Rebase notes:
 
 - Keep this seam inside the Discord plugin binding adapter; do not teach generic ACP core about Discord id prefixes.
@@ -632,7 +636,7 @@ Required invariants after rebase:
 
 ### 7. ACP local cwd validation and persistent binding reset seam
 
-Status: implemented
+Status: implemented in the source checkout; reimplemented on the 2026-04-22 replay branch
 
 Why this exists:
 
@@ -663,6 +667,11 @@ Primary seam tests:
 - `src/acp/control-plane/manager.test.ts`
 - `src/acp/persistent-bindings.test.ts`
 
+Replay proof on the 2026-04-22 branch:
+
+- `pnpm test src/config/config.acp-cwd.validation.test.ts src/acp/control-plane/manager.test.ts src/acp/persistent-bindings.test.ts`
+- `pnpm build`
+
 Rebase notes:
 
 - Keep validation generic and backend-aware; do not special-case Discord, Orion, Cesium, or any particular host in core.
@@ -679,7 +688,7 @@ Required invariants after rebase:
 
 ### 8. `acpx-remote` SSH ACP runtime support seam
 
-Status: implemented in this OpenClaw parent checkout; extension implementation lives in private nested repo `extensions/acpx-remote/`
+Status: implemented in the source checkout and reimplemented in the 2026-04-22 replay branch for the OpenClaw parent checkout; extension implementation lives in private nested repo `extensions/acpx-remote/`
 
 Why this exists:
 
@@ -747,6 +756,11 @@ Primary OpenClaw parent tests:
 - `extensions/discord/src/channel.test.ts`
 - `extensions/discord/src/monitor/inbound-context.test.ts`
 - `extensions/discord/src/monitor/message-handler.inbound-context.test.ts`
+
+Replay proof on the 2026-04-22 branch:
+
+- `pnpm test src/config/config.acp-cwd.validation.test.ts src/acp/control-plane/manager.test.ts src/acp/persistent-bindings.test.ts extensions/discord/src/channel.test.ts`
+- `pnpm build`
 
 Private extension tests:
 

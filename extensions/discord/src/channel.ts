@@ -246,8 +246,13 @@ const resolveDiscordAllowlistNames = createAccountScopedAllowlistNameResolver({
 });
 
 function normalizeDiscordAcpConversationId(conversationId: string) {
-  const normalized = conversationId.trim();
+  const normalized = normalizeDiscordAcpInboundConversationId(conversationId);
   return normalized ? { conversationId: normalized } : null;
+}
+
+function normalizeDiscordAcpInboundConversationId(raw?: string) {
+  const normalized = normalizeOptionalString(raw);
+  return normalizeDiscordMessagingTarget(normalized ?? "") ?? normalized;
 }
 
 function matchDiscordAcpConversation(params: {
@@ -255,13 +260,24 @@ function matchDiscordAcpConversation(params: {
   conversationId: string;
   parentConversationId?: string;
 }) {
-  if (params.bindingConversationId === params.conversationId) {
+  const bindingConversationId = normalizeDiscordAcpInboundConversationId(
+    params.bindingConversationId,
+  );
+  const conversationId = normalizeDiscordAcpInboundConversationId(params.conversationId);
+  const parentConversationId = normalizeDiscordAcpInboundConversationId(
+    params.parentConversationId,
+  );
+  if (!bindingConversationId || !conversationId) {
+    return null;
+  }
+  if (bindingConversationId === conversationId) {
     return { conversationId: params.conversationId, matchPriority: 2 };
   }
   if (
     params.parentConversationId &&
-    params.parentConversationId !== params.conversationId &&
-    params.bindingConversationId === params.parentConversationId
+    parentConversationId &&
+    parentConversationId !== conversationId &&
+    bindingConversationId === parentConversationId
   ) {
     return {
       conversationId: params.parentConversationId,
