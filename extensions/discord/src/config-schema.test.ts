@@ -113,6 +113,22 @@ describe("discord config schema", () => {
     expect(cfg.guilds?.["123"]?.channels?.general?.autoThread).toBe(true);
   });
 
+  it("accepts copyMessageBodyToUntrustedContext on guild channel config", () => {
+    const cfg = expectValidDiscordConfig({
+      guilds: {
+        "123": {
+          channels: {
+            general: {
+              copyMessageBodyToUntrustedContext: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(cfg.guilds?.["123"]?.channels?.general?.copyMessageBodyToUntrustedContext).toBe(true);
+  });
+
   it("coerces safe-integer numeric allowlist entries to strings", () => {
     const cfg = expectValidDiscordConfig({
       allowFrom: [123],

@@ -460,6 +460,7 @@ Example:
 
     `requireMention` is configured per guild/channel (`channels.discord.guilds...`).
     `ignoreOtherMentions` optionally drops messages that mention another user/role but not the bot (excluding @everyone/@here).
+    Discord guild channels are trusted by default, so OpenClaw does not append Discord `UntrustedContext` metadata for them unless you opt a channel into untrusted handling. To mark a specific untrusted channel, set `copyMessageBodyToUntrustedContext: true` on that channel entry; OpenClaw then wraps both the channel topic metadata and the live message body into `UntrustedContext` for that channel and its inherited threads. Channel-specific overrides still live in `channels.discord.guilds.<guild>.channels`, so they follow the normal Discord channel-map behavior in `allowlist` mode.
 
     Group DMs:
 

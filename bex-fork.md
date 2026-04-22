@@ -553,7 +553,7 @@ Required invariants after rebase:
 
 ### 5. Discord inbound untrusted-context opt-in seam
 
-Status: implemented
+Status: implemented in the source checkout; reimplemented on the 2026-04-22 replay branch
 
 Why this exists:
 
@@ -584,7 +584,14 @@ Primary seam tests:
 - `extensions/discord/src/monitor/inbound-context.test.ts`
 - `extensions/discord/src/monitor/message-handler.inbound-context.test.ts`
 - `extensions/discord/src/monitor/native-command-context.test.ts`
-- `src/config/config.discord.test.ts`
+- `extensions/discord/src/config-schema.test.ts`
+
+Replay proof on the 2026-04-22 branch:
+
+- `pnpm test extensions/discord/src/monitor/inbound-context.test.ts extensions/discord/src/monitor/message-handler.inbound-context.test.ts extensions/discord/src/monitor/native-command-context.test.ts extensions/discord/src/config-schema.test.ts`
+- `pnpm config:docs:gen`
+- `node --import tsx scripts/generate-bundled-channel-config-metadata.ts --write`
+- `pnpm build`
 
 Rebase notes:
 
