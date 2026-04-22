@@ -8,6 +8,7 @@ import type { VoicePlugin } from "@buape/carbon/voice";
 import {
   agentCommandFromIngress,
   getTtsProvider,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveTtsConfig,
   resolveTtsPrefsPath,
@@ -127,14 +128,21 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
   };
 }
 
-function resolveVoiceTtsConfig(params: { cfg: OpenClawConfig; override?: TtsConfig }): {
+function resolveVoiceTtsConfig(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  override?: TtsConfig;
+}): {
   cfg: OpenClawConfig;
   resolved: ResolvedTtsConfig;
 } {
-  if (!params.override) {
+  if (!params.agentId && !params.override) {
     return { cfg: params.cfg, resolved: resolveTtsConfig(params.cfg) };
   }
-  const base = params.cfg.messages?.tts ?? {};
+  const agentOverride = params.agentId
+    ? resolveAgentConfig(params.cfg, params.agentId)?.tts
+    : undefined;
+  const base = mergeTtsConfig(params.cfg.messages?.tts ?? {}, agentOverride);
   const merged = mergeTtsConfig(base, params.override);
   const messages = params.cfg.messages ?? {};
   const cfg = {
@@ -809,6 +817,7 @@ export class DiscordVoiceManager {
 
     const { cfg: ttsCfg, resolved: ttsConfig } = resolveVoiceTtsConfig({
       cfg: this.params.cfg,
+      agentId: entry.route.agentId,
       override: this.params.discordConfig.voice?.tts,
     });
     const directive = parseTtsDirectives(replyText, ttsConfig.modelOverrides, {

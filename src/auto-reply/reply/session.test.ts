@@ -2926,6 +2926,44 @@ describe("initSessionState stale threadId fallback", () => {
   });
 });
 
+describe("initSessionState agent-scoped TTS defaults", () => {
+  it("inherits agent tts.auto for a new session", async () => {
+    const storePath = await makeStorePath("openclaw-session-agent-tts-auto-");
+    const agentId = "luke";
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "Hello there",
+        Body: "Hello there",
+        BodyForAgent: "Hello there",
+        Provider: "telegram",
+        Surface: "telegram",
+        SenderId: "12345",
+        From: "telegram:12345",
+        To: "telegram:chat-1",
+        SessionKey: `agent:${agentId}:session-1`,
+      },
+      cfg: {
+        session: { store: storePath },
+        agents: {
+          list: [
+            {
+              id: agentId,
+              tts: {
+                auto: "inbound",
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.ttsAuto).toBe("inbound");
+    expect(result.sessionStore[result.sessionKey]?.ttsAuto).toBe("inbound");
+  });
+});
+
 describe("initSessionState dmScope delivery migration", () => {
   it("retires stale main-session delivery route when dmScope uses per-channel DM keys", async () => {
     const storePath = await createStorePath("dm-scope-retire-main-route-");

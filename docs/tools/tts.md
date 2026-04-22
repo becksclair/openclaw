@@ -186,6 +186,10 @@ Full schema is in [Gateway configuration](/gateway/configuration).
           apiKey: "gemini_api_key",
           model: "gemini-3.1-flash-tts-preview",
           voiceName: "Kore",
+          scene: "A cozy bedtime story in a dark room.",
+          style: "Gentle and soothing.",
+          pace: "Slow and calm.",
+          sampleContext: "The listener is winding down and ready to drift off.",
         },
       },
     },
@@ -198,6 +202,10 @@ restricted to the Gemini API is valid here, and it is the same style of key used
 by the bundled Google image-generation provider. Resolution order is
 `messages.tts.providers.google.apiKey` -> `models.providers.google.apiKey` ->
 `GEMINI_API_KEY` -> `GOOGLE_API_KEY`.
+
+`scene`, `style`, `pace`, and `sampleContext` are Google-specific prompt-steering
+fields. OpenClaw uses them to build a deterministic Gemini TTS prompt wrapper;
+they are not native `SpeechConfig` JSON fields in the Gemini API.
 
 ### xAI primary
 
@@ -326,6 +334,10 @@ Then run:
 - `providers.minimax.pitch`: pitch shift `-12..12` (default 0).
 - `providers.google.model`: Gemini TTS model (default `gemini-3.1-flash-tts-preview`).
 - `providers.google.voiceName`: Gemini prebuilt voice name (default `Kore`; `voice` is also accepted).
+- `providers.google.scene`: Google prompt-steering scene/vibe text.
+- `providers.google.style`: Google prompt-steering delivery notes.
+- `providers.google.pace`: Google prompt-steering pacing notes.
+- `providers.google.sampleContext`: Google prompt-steering setup/context text.
 - `providers.google.baseUrl`: override the Gemini API base URL. Only `https://generativelanguage.googleapis.com` is accepted.
   - If `messages.tts.providers.google.apiKey` is omitted, TTS can reuse `models.providers.google.apiKey` before env fallback.
 - `providers.xai.apiKey`: xAI TTS API key (env: `XAI_API_KEY`).
@@ -334,6 +346,7 @@ Then run:
 - `providers.xai.language`: BCP-47 language code or `auto` (default `en`).
 - `providers.xai.responseFormat`: `mp3`, `wav`, `pcm`, `mulaw`, or `alaw` (default `mp3`).
 - `providers.xai.speed`: provider-native speed override.
+- `talk.providers.google.scene|style|pace|sampleContext`: Talk-mode overrides for the same Google prompt-steering fields.
 - `providers.microsoft.enabled`: allow Microsoft speech usage (default `true`; no API key).
 - `providers.microsoft.voice`: Microsoft neural voice name (e.g. `en-US-MichelleNeural`).
 - `providers.microsoft.lang`: language code (e.g. `en-US`).

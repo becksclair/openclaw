@@ -331,4 +331,189 @@ describe("gateway talk.config", () => {
       });
     });
   });
+
+  it("returns synthesized agent-scoped Talk config when only messages.tts is configured", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      messages: {
+        tts: {
+          provider: GENERIC_TALK_PROVIDER_ID,
+          providers: {
+            [GENERIC_TALK_PROVIDER_ID]: {
+              voice: "base-voice",
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "luke",
+            tts: {
+              providers: {
+                [GENERIC_TALK_PROVIDER_ID]: {
+                  voice: "agent-voice",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    await withSpeechProviders(
+      [
+        {
+          pluginId: "acme-agent-talk-config-test",
+          source: "test",
+          provider: {
+            id: GENERIC_TALK_PROVIDER_ID,
+            label: "Acme Speech",
+            isConfigured: () => true,
+            resolveTalkConfig: ({ talkProviderConfig }) => talkProviderConfig,
+            synthesize: async () => ({
+              audioBuffer: Buffer.from([1]),
+              outputFormat: "mp3",
+              fileExtension: ".mp3",
+              voiceCompatible: false,
+            }),
+          },
+        },
+      ],
+      async () => {
+        await withTalkConfigConnection(["operator.read"], async (ws) => {
+          const res = await fetchTalkConfig(ws, { agentId: "luke" });
+          expect(res.ok, JSON.stringify(res.error)).toBe(true);
+          expect(res.payload?.config?.talk?.providers?.[GENERIC_TALK_PROVIDER_ID]?.voiceId).toBe(
+            "agent-voice",
+          );
+          expect(res.payload?.config?.talk?.resolved?.provider).toBe(GENERIC_TALK_PROVIDER_ID);
+          expect(res.payload?.config?.talk?.resolved?.config?.voiceId).toBe("agent-voice");
+        });
+      },
+    );
+  });
+
+  it("keeps agent-scoped talk.config on the selected TTS provider when provider defaults synthesize the config", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      talk: {
+        provider: "legacy",
+        providers: {
+          legacy: {
+            voiceId: "legacy-voice",
+          },
+        },
+      },
+      messages: {
+        tts: {
+          provider: GENERIC_TALK_PROVIDER_ID,
+          timeoutMs: 45_000,
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "luke",
+            tts: {
+              timeoutMs: 60_000,
+            },
+          },
+        ],
+      },
+    });
+
+    await withSpeechProviders(
+      [
+        {
+          pluginId: "acme-agent-talk-defaults-test",
+          source: "test",
+          provider: {
+            id: GENERIC_TALK_PROVIDER_ID,
+            label: "Acme Speech",
+            isConfigured: () => true,
+            resolveTalkConfig: ({ baseTtsConfig }) => ({
+              voiceId:
+                typeof baseTtsConfig.timeoutMs === "number" ? "voice-from-defaults" : "missing",
+            }),
+            synthesize: async () => ({
+              audioBuffer: Buffer.from([1]),
+              outputFormat: "mp3",
+              fileExtension: ".mp3",
+              voiceCompatible: false,
+            }),
+          },
+        },
+      ],
+      async () => {
+        await withTalkConfigConnection(["operator.read"], async (ws) => {
+          const res = await fetchTalkConfig(ws, { agentId: "luke" });
+          expect(res.ok, JSON.stringify(res.error)).toBe(true);
+          expect(res.payload?.config?.talk?.provider).toBe(GENERIC_TALK_PROVIDER_ID);
+          expect(res.payload?.config?.talk?.resolved?.provider).toBe(GENERIC_TALK_PROVIDER_ID);
+          expect(res.payload?.config?.talk?.resolved?.config?.voiceId).toBe("voice-from-defaults");
+        });
+      },
+    );
+  });
+
+  it("keeps agent-scoped talk.config on the selected TTS provider when Talk resolves to an empty config", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      talk: {
+        provider: "legacy",
+        providers: {
+          legacy: {
+            voiceId: "legacy-voice",
+          },
+        },
+      },
+      messages: {
+        tts: {
+          provider: GENERIC_TALK_PROVIDER_ID,
+          timeoutMs: 45_000,
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "luke",
+            tts: {
+              timeoutMs: 60_000,
+            },
+          },
+        ],
+      },
+    });
+
+    await withSpeechProviders(
+      [
+        {
+          pluginId: "acme-agent-talk-empty-config-test",
+          source: "test",
+          provider: {
+            id: GENERIC_TALK_PROVIDER_ID,
+            label: "Acme Speech",
+            isConfigured: () => true,
+            resolveTalkConfig: () => ({}),
+            synthesize: async () => ({
+              audioBuffer: Buffer.from([1]),
+              outputFormat: "mp3",
+              fileExtension: ".mp3",
+              voiceCompatible: false,
+            }),
+          },
+        },
+      ],
+      async () => {
+        await withTalkConfigConnection(["operator.read"], async (ws) => {
+          const res = await fetchTalkConfig(ws, { agentId: "luke" });
+          expect(res.ok, JSON.stringify(res.error)).toBe(true);
+          expect(res.payload?.config?.talk?.provider).toBe(GENERIC_TALK_PROVIDER_ID);
+          expect(res.payload?.config?.talk?.resolved?.provider).toBe(GENERIC_TALK_PROVIDER_ID);
+          expect(res.payload?.config?.talk?.resolved?.config).toEqual({});
+        });
+      },
+    );
+  });
 });
