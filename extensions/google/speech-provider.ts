@@ -55,6 +55,10 @@ type GoogleTtsProviderConfig = {
   baseUrl?: string;
   model: string;
   voiceName: string;
+  scene?: string;
+  style?: string;
+  pace?: string;
+  sampleContext?: string;
 };
 
 type GoogleTtsProviderOverrides = {
@@ -93,6 +97,21 @@ function normalizeGoogleTtsModel(model: unknown): string {
 
 function normalizeGoogleTtsVoiceName(voiceName: unknown): string {
   return normalizeOptionalString(voiceName) ?? DEFAULT_GOOGLE_TTS_VOICE;
+}
+
+function normalizeGoogleTtsPromptField(value: unknown): string | undefined {
+  return normalizeOptionalString(value);
+}
+
+function resolveGoogleTtsPromptFields(
+  raw: Partial<Record<"scene" | "style" | "pace" | "sampleContext", unknown>>,
+): Pick<GoogleTtsProviderConfig, "scene" | "style" | "pace" | "sampleContext"> {
+  return {
+    scene: normalizeGoogleTtsPromptField(raw.scene),
+    style: normalizeGoogleTtsPromptField(raw.style),
+    pace: normalizeGoogleTtsPromptField(raw.pace),
+    sampleContext: normalizeGoogleTtsPromptField(raw.sampleContext),
+  };
 }
 
 function resolveGoogleTtsEnvApiKey(): string | undefined {
@@ -148,11 +167,23 @@ function normalizeGoogleTtsProviderConfig(
     baseUrl: trimToUndefined(raw?.baseUrl),
     model: normalizeGoogleTtsModel(raw?.model),
     voiceName: normalizeGoogleTtsVoiceName(raw?.voiceName ?? raw?.voice),
+    ...resolveGoogleTtsPromptFields({
+      scene: raw?.scene,
+      style: raw?.style,
+      pace: raw?.pace,
+      sampleContext: raw?.sampleContext,
+    }),
   };
 }
 
 function readGoogleTtsProviderConfig(config: SpeechProviderConfig): GoogleTtsProviderConfig {
   const normalized = normalizeGoogleTtsProviderConfig({});
+  const promptFields = resolveGoogleTtsPromptFields({
+    scene: config.scene,
+    style: config.style,
+    pace: config.pace,
+    sampleContext: config.sampleContext,
+  });
   return {
     apiKey: trimToUndefined(config.apiKey) ?? normalized.apiKey,
     baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
@@ -160,6 +191,10 @@ function readGoogleTtsProviderConfig(config: SpeechProviderConfig): GoogleTtsPro
     voiceName: normalizeGoogleTtsVoiceName(
       config.voiceName ?? config.voice ?? normalized.voiceName,
     ),
+    scene: promptFields.scene ?? normalized.scene,
+    style: promptFields.style ?? normalized.style,
+    pace: promptFields.pace ?? normalized.pace,
+    sampleContext: promptFields.sampleContext ?? normalized.sampleContext,
   };
 }
 
@@ -236,6 +271,32 @@ function wrapPcm16MonoToWav(pcm: Buffer, sampleRate = GOOGLE_TTS_SAMPLE_RATE): B
   return Buffer.concat([header, pcm]);
 }
 
+function buildGoogleTtsPrompt(config: GoogleTtsProviderConfig, transcript: string): string {
+  if (!config.scene && !config.style && !config.pace && !config.sampleContext) {
+    return transcript;
+  }
+  const sections = [
+    "You are performing text-to-speech.",
+    "Speak only the text in the TRANSCRIPT section exactly as written.",
+    "Use the other sections only to guide delivery, tone, pacing, and vibe.",
+  ];
+  if (config.scene) {
+    sections.push(`# SCENE\n${config.scene}`);
+  }
+  const directorsNotes = [
+    config.style ? `Style: ${config.style}` : undefined,
+    config.pace ? `Pace: ${config.pace}` : undefined,
+  ].filter((value): value is string => value != null);
+  if (directorsNotes.length > 0) {
+    sections.push(`# DIRECTOR'S NOTES\n${directorsNotes.join("\n")}`);
+  }
+  if (config.sampleContext) {
+    sections.push(`# SAMPLE CONTEXT\n${config.sampleContext}`);
+  }
+  sections.push(`# TRANSCRIPT\n${transcript}`);
+  return sections.join("\n\n");
+}
+
 async function synthesizeGoogleTtsPcm(params: {
   text: string;
   apiKey: string;
@@ -299,6 +360,12 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeGoogleTtsProviderConfig(baseTtsConfig);
+      const talkPromptFields = resolveGoogleTtsPromptFields({
+        scene: talkProviderConfig.scene,
+        style: talkProviderConfig.style,
+        pace: talkProviderConfig.pace,
+        sampleContext: talkProviderConfig.sampleContext,
+      });
       return {
         ...base,
         ...(talkProviderConfig.apiKey === undefined
@@ -318,6 +385,12 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
         ...(trimToUndefined(talkProviderConfig.voiceId) == null
           ? {}
           : { voiceName: normalizeGoogleTtsVoiceName(talkProviderConfig.voiceId) }),
+        ...(talkPromptFields.scene == null ? {} : { scene: talkPromptFields.scene }),
+        ...(talkPromptFields.style == null ? {} : { style: talkPromptFields.style }),
+        ...(talkPromptFields.pace == null ? {} : { pace: talkPromptFields.pace }),
+        ...(talkPromptFields.sampleContext == null
+          ? {}
+          : { sampleContext: talkPromptFields.sampleContext }),
       };
     },
     resolveTalkOverrides: ({ params }) => ({
@@ -341,8 +414,9 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
       if (!apiKey) {
         throw new Error("Google API key missing");
       }
+      const prompt = buildGoogleTtsPrompt(config, req.text);
       const pcm = await synthesizeGoogleTtsPcm({
-        text: req.text,
+        text: prompt,
         apiKey,
         baseUrl: resolveGoogleTtsBaseUrl({ cfg: req.cfg, providerConfig: config }),
         model: normalizeGoogleTtsModel(overrides.model ?? config.model),
@@ -365,8 +439,9 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
       if (!apiKey) {
         throw new Error("Google API key missing");
       }
+      const prompt = buildGoogleTtsPrompt(config, req.text);
       const pcm = await synthesizeGoogleTtsPcm({
-        text: req.text,
+        text: prompt,
         apiKey,
         baseUrl: resolveGoogleTtsBaseUrl({ cfg: req.cfg, providerConfig: config }),
         model: config.model,
@@ -386,6 +461,7 @@ export const __testing = {
   DEFAULT_GOOGLE_TTS_MODEL,
   DEFAULT_GOOGLE_TTS_VOICE,
   GOOGLE_TTS_SAMPLE_RATE,
+  buildGoogleTtsPrompt,
   normalizeGoogleTtsModel,
   wrapPcm16MonoToWav,
 };

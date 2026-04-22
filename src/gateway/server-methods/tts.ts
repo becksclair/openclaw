@@ -5,6 +5,7 @@ import {
   getSpeechProvider,
   listSpeechProviders,
 } from "../../tts/provider-registry.js";
+import { resolveConfigWithAgentTts } from "../../tts/tts-config.js";
 import {
   getResolvedSpeechProviderConfig,
   getTtsProvider,
@@ -90,6 +91,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = loadConfig();
+      const agentId = normalizeOptionalString(params.agentId);
+      const scopedCfg = resolveConfigWithAgentTts(cfg, agentId);
       const channel = normalizeOptionalString(params.channel);
       const providerRaw = normalizeOptionalString(params.provider);
       const modelId = normalizeOptionalString(params.modelId);
@@ -97,7 +100,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       let overrides;
       try {
         overrides = resolveExplicitTtsOverrides({
-          cfg,
+          cfg: scopedCfg,
           provider: providerRaw,
           modelId,
           voiceId,
@@ -108,7 +111,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       }
       const result = await textToSpeech({
         text,
-        cfg,
+        cfg: scopedCfg,
         channel,
         overrides,
         disableFallback: Boolean(overrides.provider || modelId || voiceId),

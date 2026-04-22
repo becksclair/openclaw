@@ -3,6 +3,7 @@ import { ErrorCodes } from "../protocol/index.js";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
+  resolveConfigWithAgentTts: vi.fn((cfg) => cfg),
   resolveExplicitTtsOverrides: vi.fn(() => ({})),
   textToSpeech: vi.fn(async () => ({
     success: true,
@@ -15,6 +16,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: mocks.loadConfig as typeof import("../../config/config.js").loadConfig,
+}));
+
+vi.mock("../../tts/tts-config.js", () => ({
+  resolveConfigWithAgentTts:
+    mocks.resolveConfigWithAgentTts as typeof import("../../tts/tts-config.js").resolveConfigWithAgentTts,
 }));
 
 vi.mock("../../tts/provider-registry.js", () => ({
@@ -43,6 +49,8 @@ describe("ttsHandlers", () => {
   beforeEach(() => {
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({});
+    mocks.resolveConfigWithAgentTts.mockReset();
+    mocks.resolveConfigWithAgentTts.mockImplementation((cfg) => cfg);
     mocks.resolveExplicitTtsOverrides.mockReset();
     mocks.resolveExplicitTtsOverrides.mockReturnValue({});
     mocks.textToSpeech.mockReset();
@@ -80,5 +88,52 @@ describe("ttsHandlers", () => {
       }),
     );
     expect(mocks.textToSpeech).not.toHaveBeenCalled();
+  });
+
+  it("applies agent-scoped TTS config before resolving overrides and synthesis", async () => {
+    const baseCfg = { messages: { tts: { providers: { google: { voice: "Sulafat" } } } } };
+    const scopedCfg = {
+      messages: {
+        tts: {
+          providers: {
+            google: {
+              voice: "Alnilam",
+              scene: "sharper luke",
+            },
+          },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(baseCfg);
+    mocks.resolveConfigWithAgentTts.mockReturnValue(scopedCfg);
+
+    const { ttsHandlers } = await import("./tts.js");
+    const respond = vi.fn();
+
+    await ttsHandlers["tts.convert"]({
+      params: {
+        text: "hello",
+        agentId: "luke",
+      },
+      respond,
+    } as never);
+
+    expect(mocks.resolveConfigWithAgentTts).toHaveBeenCalledWith(baseCfg, "luke");
+    expect(mocks.resolveExplicitTtsOverrides).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: scopedCfg,
+      }),
+    );
+    expect(mocks.textToSpeech).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: scopedCfg,
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(true, {
+      audioPath: "/tmp/tts.mp3",
+      provider: "openai",
+      outputFormat: "mp3",
+      voiceCompatible: false,
+    });
   });
 });

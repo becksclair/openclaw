@@ -25,6 +25,27 @@ function installGoogleTtsFetchMock(pcm = Buffer.from([1, 0, 2, 0])) {
   return fetchMock;
 }
 
+function buildExpectedGoogleTtsRequestBody(params: { prompt: string; voiceName: string }) {
+  return JSON.stringify({
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: params.prompt }],
+      },
+    ],
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: {
+            voiceName: params.voiceName,
+          },
+        },
+      },
+    },
+  });
+}
+
 describe("Google speech provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -52,23 +73,9 @@ describe("Google speech provider", () => {
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: "[whispers] The door is open." }],
-            },
-          ],
-          generationConfig: {
-            responseModalities: ["AUDIO"],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: {
-                  voiceName: "Puck",
-                },
-              },
-            },
-          },
+        body: buildExpectedGoogleTtsRequestBody({
+          prompt: "[whispers] The door is open.",
+          voiceName: "Puck",
         }),
       }),
     );
@@ -81,6 +88,48 @@ describe("Google speech provider", () => {
     expect(result.audioBuffer.subarray(8, 12).toString("ascii")).toBe("WAVE");
     expect(result.audioBuffer.readUInt32LE(24)).toBe(__testing.GOOGLE_TTS_SAMPLE_RATE);
     expect(result.audioBuffer.subarray(44)).toEqual(Buffer.from([1, 0, 2, 0]));
+  });
+
+  it("wraps the transcript in a deterministic prompt when Google prompt-steering fields are configured", async () => {
+    const fetchMock = installGoogleTtsFetchMock();
+    const provider = buildGoogleSpeechProvider();
+
+    await provider.synthesize({
+      text: "[whispers] The door is open.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "google-test-key",
+        model: "google/gemini-3.1-flash-tts",
+        voiceName: "Puck",
+        scene: "A late-night ghost story by candlelight.",
+        style: "Warm, hushed, and suspenseful.",
+        pace: "Slow and deliberate.",
+        sampleContext: "The listener is already leaning in, waiting for the reveal.",
+      },
+      target: "audio-file",
+      timeoutMs: 12_345,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
+      expect.objectContaining({
+        method: "POST",
+        body: buildExpectedGoogleTtsRequestBody({
+          prompt: __testing.buildGoogleTtsPrompt(
+            {
+              model: "gemini-3.1-flash-tts-preview",
+              voiceName: "Puck",
+              scene: "A late-night ghost story by candlelight.",
+              style: "Warm, hushed, and suspenseful.",
+              pace: "Slow and deliberate.",
+              sampleContext: "The listener is already leaning in, waiting for the reveal.",
+            },
+            "[whispers] The door is open.",
+          ),
+          voiceName: "Puck",
+        }),
+      }),
+    );
   });
 
   it("falls back to GEMINI_API_KEY and configured Google API base URL", async () => {
@@ -146,7 +195,7 @@ describe("Google speech provider", () => {
 
   it("returns Gemini PCM directly for telephony synthesis", async () => {
     const pcm = Buffer.from([3, 0, 4, 0]);
-    installGoogleTtsFetchMock(pcm);
+    const fetchMock = installGoogleTtsFetchMock(pcm);
     const provider = buildGoogleSpeechProvider();
 
     const result = await provider.synthesizeTelephony?.({
@@ -155,10 +204,30 @@ describe("Google speech provider", () => {
       providerConfig: {
         apiKey: "google-test-key",
         voice: "Kore",
+        scene: "A late-night support line.",
+        style: "Calm and reassuring.",
       },
       timeoutMs: 5_000,
     });
 
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
+      expect.objectContaining({
+        method: "POST",
+        body: buildExpectedGoogleTtsRequestBody({
+          prompt: __testing.buildGoogleTtsPrompt(
+            {
+              model: "gemini-3.1-flash-tts-preview",
+              voiceName: "Kore",
+              scene: "A late-night support line.",
+              style: "Calm and reassuring.",
+            },
+            "Phone call audio.",
+          ),
+          voiceName: "Kore",
+        }),
+      }),
+    );
     expect(result).toEqual({
       audioBuffer: pcm,
       outputFormat: "pcm",
@@ -178,6 +247,10 @@ describe("Google speech provider", () => {
               apiKey: "configured-key",
               model: "google/gemini-3.1-flash-tts-preview",
               voice: "Leda",
+              scene: "Rain on a train window.",
+              style: "Reflective and soft-spoken.",
+              pace: "Unhurried.",
+              sampleContext: "The speaker is recording a quiet midnight diary entry.",
             },
           },
         },
@@ -188,6 +261,10 @@ describe("Google speech provider", () => {
       baseUrl: undefined,
       model: "gemini-3.1-flash-tts-preview",
       voiceName: "Leda",
+      scene: "Rain on a train window.",
+      style: "Reflective and soft-spoken.",
+      pace: "Unhurried.",
+      sampleContext: "The speaker is recording a quiet midnight diary entry.",
     });
 
     expect(
@@ -233,6 +310,64 @@ describe("Google speech provider", () => {
         model: "gemini-3.1-flash-tts-preview",
       },
     });
+  });
+
+  it("merges Google prompt-steering fields into Talk config overrides", () => {
+    const provider = buildGoogleSpeechProvider();
+
+    expect(
+      provider.resolveTalkConfig?.({
+        cfg: {},
+        baseTtsConfig: {
+          providers: {
+            google: {
+              scene: "A small stage with a velvet curtain.",
+              style: "Theatrical and playful.",
+              pace: "Brisk.",
+              sampleContext: "The audience is ready for the punchline.",
+            },
+          },
+        },
+        talkProviderConfig: {
+          voiceId: "Aoede",
+          scene: "A tiny radio booth at sunrise.",
+          sampleContext: "The host is greeting early commuters.",
+        },
+        timeoutMs: 1,
+      }),
+    ).toEqual({
+      apiKey: undefined,
+      baseUrl: undefined,
+      model: "gemini-3.1-flash-tts-preview",
+      voiceName: "Aoede",
+      scene: "A tiny radio booth at sunrise.",
+      style: "Theatrical and playful.",
+      pace: "Brisk.",
+      sampleContext: "The host is greeting early commuters.",
+    });
+  });
+
+  it("builds the prompt only when Google steering fields are present", () => {
+    expect(
+      __testing.buildGoogleTtsPrompt(
+        {
+          model: "gemini-3.1-flash-tts-preview",
+          voiceName: "Kore",
+        },
+        "Say this plainly.",
+      ),
+    ).toBe("Say this plainly.");
+
+    expect(
+      __testing.buildGoogleTtsPrompt(
+        {
+          model: "gemini-3.1-flash-tts-preview",
+          voiceName: "Kore",
+          style: "Cheerful and buoyant.",
+        },
+        "Say this plainly.",
+      ),
+    ).toContain("# DIRECTOR'S NOTES\nStyle: Cheerful and buoyant.");
   });
 
   it("lists Gemini prebuilt TTS voices", async () => {
