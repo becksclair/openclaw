@@ -90,8 +90,8 @@ describe("discord command argument fallback", () => {
     expect(dispatchSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: "/think high",
-        responseEphemeral: false,
       }),
     );
+    expect(dispatchSpy.mock.calls[0]?.[0]).not.toHaveProperty("responseEphemeral");
   });
 });

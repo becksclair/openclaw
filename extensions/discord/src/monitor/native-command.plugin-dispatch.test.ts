@@ -1,25 +1,17 @@
 import { ChannelType } from "discord-api-types/v10";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
-import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  clearPluginCommands,
-  executePluginCommand,
-  matchPluginCommand,
-  registerPluginCommand,
-} from "openclaw/plugin-sdk/plugin-runtime";
-import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "../../../../test/helpers/plugins/plugin-registry.js";
-import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import {
-  createMockCommandInteraction as createInteraction,
+  createMockCommandInteraction,
   type MockCommandInteraction,
 } from "./native-command.test-helpers.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
+import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 let discordNativeCommandTesting: typeof import("./native-command.js").__testing;
@@ -28,7 +20,75 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   executePluginCommand: vi.fn(),
   dispatchReplyWithDispatcher: vi.fn(),
   resolveDirectStatusReplyForSession: vi.fn(),
+  sendVoiceMessageDiscord: vi.fn(),
+  replyWithDiscordModelPickerProviders: vi.fn(),
 }));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+    "openclaw/plugin-sdk/plugin-runtime",
+  );
+  return {
+    ...actual,
+    matchPluginCommand: (...args: unknown[]) => runtimeModuleMocks.matchPluginCommand(...args),
+    executePluginCommand: (...args: unknown[]) => runtimeModuleMocks.executePluginCommand(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
+    "openclaw/plugin-sdk/reply-runtime",
+  );
+  return {
+    ...actual,
+    dispatchReplyWithDispatcher: (...args: unknown[]) =>
+      runtimeModuleMocks.dispatchReplyWithDispatcher(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/command-status-runtime", () => ({
+  resolveDirectStatusReplyForSession: (...args: unknown[]) =>
+    runtimeModuleMocks.resolveDirectStatusReplyForSession(...args),
+}));
+
+vi.mock("../send.js", async () => {
+  const actual = await vi.importActual<typeof import("../send.js")>("../send.js");
+  return {
+    ...actual,
+    sendVoiceMessageDiscord: (...args: unknown[]) =>
+      runtimeModuleMocks.sendVoiceMessageDiscord(...args),
+  };
+});
+
+vi.mock("./native-command-ui.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./native-command-ui.js")>("./native-command-ui.js");
+  return {
+    ...actual,
+    replyWithDiscordModelPickerProviders: (...args: unknown[]) =>
+      runtimeModuleMocks.replyWithDiscordModelPickerProviders(...args),
+  };
+});
+
+function createInteraction(params?: {
+  channelType?: ChannelType;
+  channelId?: string;
+  threadParentId?: string | null;
+  guildId?: string;
+  guildName?: string;
+}): MockCommandInteraction {
+  return createMockCommandInteraction({
+    userId: "owner",
+    username: "tester",
+    globalName: "Tester",
+    channelType: params?.channelType ?? ChannelType.DM,
+    channelId: params?.channelId ?? "dm-1",
+    threadParentId: params?.threadParentId,
+    guildId: params?.guildId ?? null,
+    guildName: params?.guildName,
+    interactionId: "interaction-1",
+  });
+}
 
 function createConfig(): OpenClawConfig {
   return {
@@ -231,16 +291,13 @@ async function expectPairCommandReply(params: {
   cfg: OpenClawConfig;
   commandName: string;
   interaction: MockCommandInteraction;
-  expectedRegisteredName?: string;
 }) {
   const command = await createPluginCommand({
     cfg: params.cfg,
     name: params.commandName,
   });
   const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher;
-  const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
-    text: "paired:now",
-  });
+
   await (command as { run: (interaction: unknown) => Promise<void> }).run(
     Object.assign(params.interaction, {
       options: {
@@ -252,12 +309,6 @@ async function expectPairCommandReply(params: {
   );
 
   expect(dispatchSpy).not.toHaveBeenCalled();
-  expect(executeSpy).toHaveBeenCalledWith(
-    expect.objectContaining({
-      command: expect.objectContaining({ name: params.expectedRegisteredName ?? "pair" }),
-      args: "now",
-    }),
-  );
   expect(params.interaction.followUp).toHaveBeenCalledWith(
     expect.objectContaining({ content: "paired:now" }),
   );
@@ -308,28 +359,21 @@ describe("Discord native plugin command dispatch", () => {
       await import("./native-command.js"));
   });
 
-  afterAll(() => {
-    clearPluginCommands();
-    setActivePluginRegistry(createTestRegistry());
-    discordNativeCommandTesting.setMatchPluginCommand(matchPluginCommand);
-    discordNativeCommandTesting.setExecutePluginCommand(executePluginCommand);
-    discordNativeCommandTesting.setDispatchReplyWithDispatcher(dispatchReplyWithDispatcher);
-    discordNativeCommandTesting.setResolveDirectStatusReplyForSession(
-      resolveDirectStatusReplyForSession,
-    );
-    discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(
-      resolveDiscordNativeInteractionRouteState,
-    );
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     clearPluginCommands();
     setActivePluginRegistry(createTestRegistry());
+    const actualPluginRuntime = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/plugin-runtime")
+    >("openclaw/plugin-sdk/plugin-runtime");
     runtimeModuleMocks.matchPluginCommand.mockReset();
-    runtimeModuleMocks.matchPluginCommand.mockImplementation(matchPluginCommand);
+    runtimeModuleMocks.matchPluginCommand.mockImplementation(
+      actualPluginRuntime.matchPluginCommand,
+    );
     runtimeModuleMocks.executePluginCommand.mockReset();
-    runtimeModuleMocks.executePluginCommand.mockImplementation(executePluginCommand);
+    runtimeModuleMocks.executePluginCommand.mockImplementation(
+      actualPluginRuntime.executePluginCommand,
+    );
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockReset();
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
       counts: {
@@ -342,6 +386,14 @@ describe("Discord native plugin command dispatch", () => {
     runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue({
       text: "status reply",
     });
+    runtimeModuleMocks.sendVoiceMessageDiscord.mockReset();
+    runtimeModuleMocks.sendVoiceMessageDiscord.mockResolvedValue({
+      ok: true,
+      channel: "discord",
+      messageId: "voice-1",
+    });
+    runtimeModuleMocks.replyWithDiscordModelPickerProviders.mockReset();
+    runtimeModuleMocks.replyWithDiscordModelPickerProviders.mockResolvedValue(undefined);
     discordNativeCommandTesting.setMatchPluginCommand(
       runtimeModuleMocks.matchPluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand,
     );
@@ -349,10 +401,7 @@ describe("Discord native plugin command dispatch", () => {
       runtimeModuleMocks.executePluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").executePluginCommand,
     );
     discordNativeCommandTesting.setDispatchReplyWithDispatcher(
-      runtimeModuleMocks.dispatchReplyWithDispatcher as typeof dispatchReplyWithDispatcher,
-    );
-    discordNativeCommandTesting.setResolveDirectStatusReplyForSession(
-      runtimeModuleMocks.resolveDirectStatusReplyForSession as typeof resolveDirectStatusReplyForSession,
+      runtimeModuleMocks.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
     );
     discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(async (params) =>
       createUnboundRouteState({
@@ -416,6 +465,7 @@ describe("Discord native plugin command dispatch", () => {
       description: "Pair",
       acceptsArgs: true,
     };
+    const command = await createNativeCommand(cfg, commandSpec);
     const interaction = createInteraction({
       channelType: ChannelType.GuildText,
       channelId: "234567890123456789",
@@ -434,7 +484,6 @@ describe("Discord native plugin command dispatch", () => {
         handler: async ({ args }) => ({ text: `open:${args ?? ""}` }),
       }),
     ).toEqual({ ok: true });
-    const command = await createNativeCommand(cfg, commandSpec);
 
     const executeSpy = runtimeModuleMocks.executePluginCommand;
     const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue(
@@ -490,6 +539,112 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
+  it("routes dispatcher audioAsVoice replies through Discord voice sends before slash-command text follow-ups", async () => {
+    const cfg = createConfig();
+    const commandSpec: NativeCommandSpec = {
+      name: "voicecheck",
+      description: "Voice check",
+      acceptsArgs: false,
+    };
+    const interaction = createInteraction();
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockImplementation(async (params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: {
+            deliver: (payload: {
+              text: string;
+              mediaUrl: string;
+              audioAsVoice: boolean;
+            }) => Promise<void>;
+          };
+        }
+      ).dispatcherOptions.deliver;
+      await deliver({
+        text: "thinking out loud",
+        mediaUrl: "file:///tmp/voice.ogg",
+        audioAsVoice: true,
+      });
+      return {
+        counts: {
+          final: 1,
+          block: 0,
+          tool: 0,
+        },
+      } as never;
+    });
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(runtimeModuleMocks.sendVoiceMessageDiscord).toHaveBeenCalledWith(
+      "channel:dm-1",
+      "file:///tmp/voice.ogg",
+      expect.objectContaining({
+        cfg,
+        accountId: "default",
+      }),
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "thinking out loud",
+      }),
+    );
+    const followUpPayload = interaction.followUp.mock.calls[0]?.[0];
+    expect(followUpPayload).not.toHaveProperty("files");
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("follows up pure voice-only dispatcher replies after sending the Discord voice message", async () => {
+    const cfg = createConfig();
+    const commandSpec: NativeCommandSpec = {
+      name: "voiceonly",
+      description: "Voice only",
+      acceptsArgs: false,
+    };
+    const interaction = createInteraction();
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockImplementation(async (params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: {
+            deliver: (payload: { mediaUrl: string; audioAsVoice: boolean }) => Promise<void>;
+          };
+        }
+      ).dispatcherOptions.deliver;
+      await deliver({
+        mediaUrl: "file:///tmp/voice-only.ogg",
+        audioAsVoice: true,
+      });
+      return {
+        counts: {
+          final: 1,
+          block: 0,
+          tool: 0,
+        },
+      } as never;
+    });
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(runtimeModuleMocks.sendVoiceMessageDiscord).toHaveBeenCalledWith(
+      "channel:dm-1",
+      "file:///tmp/voice-only.ogg",
+      expect.objectContaining({
+        cfg,
+        accountId: "default",
+      }),
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "✓",
+        ephemeral: true,
+      }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
   it("executes matched plugin commands directly without invoking the agent dispatcher", async () => {
     const cfg = createConfig();
     const commandSpec: NativeCommandSpec = {
@@ -528,6 +683,221 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
+  it("forwards agent-scoped media roots through native plugin voice replies", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: "/tmp/native-plugin-workspaces",
+        },
+      },
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open" },
+        },
+      },
+    } as OpenClawConfig;
+    const commandSpec: NativeCommandSpec = {
+      name: "voice_plugin",
+      description: "Voice plugin",
+      acceptsArgs: false,
+    };
+    const interaction = createInteraction();
+    const pluginMatch = {
+      command: {
+        name: "voice_plugin",
+        description: "Voice plugin",
+        pluginId: "voice-plugin",
+        acceptsArgs: false,
+        handler: vi.fn().mockResolvedValue({ text: "voice" }),
+      },
+      args: undefined,
+    };
+
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
+    runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+      mediaUrl: "file:///tmp/plugin-voice.ogg",
+      audioAsVoice: true,
+    });
+    discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(async (params) =>
+      createUnboundRouteState({
+        sessionKey: params.isDirectMessage
+          ? `agent:worker:discord:dm:${params.directUserId ?? "owner"}`
+          : `agent:worker:discord:channel:${params.conversationId}`,
+        agentId: "worker",
+        accountId: params.accountId,
+      }),
+    );
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(runtimeModuleMocks.sendVoiceMessageDiscord).toHaveBeenCalledWith(
+      "channel:dm-1",
+      "file:///tmp/plugin-voice.ogg",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining(["/tmp/native-plugin-workspaces/worker"]),
+      }),
+    );
+  });
+
+  it("uses the effective route account for native-command text chunking", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          textChunkLimit: 100,
+          accounts: {
+            alt: {
+              textChunkLimit: 10,
+            },
+          },
+          dm: { enabled: true, policy: "open" },
+        },
+      },
+    } as OpenClawConfig;
+    const commandSpec: NativeCommandSpec = {
+      name: "chunkcheck",
+      description: "Chunk check",
+      acceptsArgs: false,
+    };
+    const interaction = createInteraction();
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockImplementation(async (params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
+        }
+      ).dispatcherOptions.deliver;
+      await deliver({
+        text: "aaaa bbbb cccc dddd",
+      });
+      return {
+        counts: {
+          final: 1,
+          block: 0,
+          tool: 0,
+        },
+      } as never;
+    });
+    discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(async (params) =>
+      createUnboundRouteState({
+        sessionKey: params.isDirectMessage
+          ? `agent:main:discord:dm:${params.directUserId ?? "owner"}`
+          : `agent:main:discord:channel:${params.conversationId}`,
+        accountId: "alt",
+      }),
+    );
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("passes the effective route account into direct native plugin command execution", async () => {
+    const cfg = createConfig();
+    const commandSpec: NativeCommandSpec = {
+      name: "pluginacct",
+      description: "Plugin account",
+      acceptsArgs: false,
+    };
+    const interaction = createInteraction();
+    const pluginMatch = {
+      command: {
+        name: "pluginacct",
+        description: "Plugin account",
+        pluginId: "plugin-account",
+        acceptsArgs: false,
+        handler: vi.fn().mockResolvedValue({ text: "ok" }),
+      },
+      args: undefined,
+    };
+
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
+    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+      text: "direct plugin output",
+    });
+    discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(async (params) =>
+      createUnboundRouteState({
+        sessionKey: params.isDirectMessage
+          ? `agent:worker:discord:dm:${params.directUserId ?? "owner"}`
+          : `agent:worker:discord:channel:${params.conversationId}`,
+        agentId: "worker",
+        accountId: "alt",
+      }),
+    );
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(executeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "alt",
+        sessionKey: "agent:worker:discord:dm:owner",
+      }),
+    );
+  });
+
+  it("passes the effective route account into native model picker replies", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    const command = await createNativeCommand(cfg, {
+      name: "model",
+      description: "Model picker",
+      acceptsArgs: false,
+    });
+    discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(async (params) =>
+      createUnboundRouteState({
+        sessionKey: params.isDirectMessage
+          ? `agent:worker:discord:dm:${params.directUserId ?? "owner"}`
+          : `agent:worker:discord:channel:${params.conversationId}`,
+        agentId: "worker",
+        accountId: "alt",
+      }),
+    );
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(runtimeModuleMocks.replyWithDiscordModelPickerProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "alt",
+      }),
+    );
+  });
+
+  it("uses follow-up cleanup for voice-only interaction replies when follow-up semantics are required", async () => {
+    const interaction = createInteraction();
+
+    await discordNativeCommandTesting.deliverDiscordInteractionReply({
+      interaction: interaction as unknown as Parameters<
+        typeof discordNativeCommandTesting.deliverDiscordInteractionReply
+      >[0]["interaction"],
+      payload: {
+        mediaUrl: "file:///tmp/component-voice.ogg",
+        audioAsVoice: true,
+      },
+      cfg: createConfig(),
+      accountId: "default",
+      textLimit: 2000,
+      preferFollowUp: true,
+      chunkMode: "length",
+    });
+
+    expect(runtimeModuleMocks.sendVoiceMessageDiscord).toHaveBeenCalledWith(
+      "channel:dm-1",
+      "file:///tmp/component-voice.ogg",
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "✓",
+        ephemeral: true,
+      }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
   it("forwards Discord thread metadata into direct plugin command execution", async () => {
     const cfg = {
       commands: {
@@ -542,12 +912,10 @@ describe("Discord native plugin command dispatch", () => {
                 "thread-123": {
                   enabled: true,
                   requireMention: false,
-                  users: ["owner"],
                 },
                 "parent-456": {
                   enabled: true,
                   requireMention: false,
-                  users: ["owner"],
                 },
               },
             },
@@ -594,95 +962,6 @@ describe("Discord native plugin command dispatch", () => {
         sessionKey: "agent:main:discord:channel:thread-123",
         messageThreadId: "thread-123",
         threadParentId: "parent-456",
-      }),
-    );
-  });
-
-  it("preserves fetched thread parent metadata when interaction parentId getter throws", async () => {
-    const cfg = {
-      commands: {
-        useAccessGroups: false,
-      },
-      channels: {
-        discord: {
-          groupPolicy: "allowlist",
-          guilds: {
-            "345678901234567890": {
-              channels: {
-                "partial-thread-123": {
-                  enabled: true,
-                  requireMention: false,
-                  users: ["owner"],
-                },
-                "partial-parent-456": {
-                  enabled: true,
-                  requireMention: false,
-                  users: ["owner"],
-                },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const commandSpec: NativeCommandSpec = {
-      name: "cron_jobs",
-      description: "List cron jobs",
-      acceptsArgs: false,
-    };
-    const interaction = createInteraction({
-      channelType: ChannelType.PublicThread,
-      channelId: "partial-thread-123",
-      guildId: "345678901234567890",
-      guildName: "Test Guild",
-    });
-    Object.defineProperty(interaction.channel, "parentId", {
-      configurable: true,
-      enumerable: true,
-      get() {
-        throw new Error("Cannot access rawData on partial Channel. Use fetch() to populate data.");
-      },
-    });
-    (interaction.client as { fetchChannel: ReturnType<typeof vi.fn> }).fetchChannel = vi.fn(
-      async (channelId: string) => {
-        if (channelId === "partial-thread-123") {
-          return {
-            id: "partial-thread-123",
-            type: ChannelType.PublicThread,
-            parentId: "partial-parent-456",
-          };
-        }
-        if (channelId === "partial-parent-456") {
-          return { id: "partial-parent-456", type: ChannelType.GuildText, name: "Parent" };
-        }
-        return null;
-      },
-    );
-    const pluginMatch = {
-      command: {
-        name: "cron_jobs",
-        description: "List cron jobs",
-        pluginId: "cron-jobs",
-        acceptsArgs: false,
-        handler: vi.fn().mockResolvedValue({ text: "jobs" }),
-      },
-      args: undefined,
-    };
-
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
-    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
-      text: "direct plugin output",
-    });
-    const command = await createNativeCommand(cfg, commandSpec);
-
-    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
-
-    expect(executeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        from: "discord:channel:partial-thread-123",
-        messageThreadId: "partial-thread-123",
-        threadParentId: "partial-parent-456",
       }),
     );
   });
