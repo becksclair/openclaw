@@ -64,6 +64,28 @@ describe("exec safe bin trust", () => {
     ).toBe(false);
   });
 
+  it("trusts canonical realpaths when callers supply them", () => {
+    const trusted = new Set([path.resolve("/usr/bin")]);
+    expect(
+      isTrustedSafeBinPath({
+        resolvedPath: "/usr/sbin/tr",
+        resolvedRealPath: "/usr/bin/tr",
+        trustedDirs: trusted,
+      }),
+    ).toBe(true);
+  });
+
+  it("fails closed when a trusted-dir symlink resolves outside trusted dirs", () => {
+    const trusted = new Set([path.resolve("/usr/bin")]);
+    expect(
+      isTrustedSafeBinPath({
+        resolvedPath: "/usr/bin/tr",
+        resolvedRealPath: "/tmp/evil/tr",
+        trustedDirs: trusted,
+      }),
+    ).toBe(false);
+  });
+
   it("does not trust PATH entries by default", () => {
     const injected = `/tmp/openclaw-path-injected-${Date.now()}`;
 

@@ -308,6 +308,42 @@ describe("exec approvals safe bins", () => {
     expect(ok).toBe(true);
   });
 
+  it("trusts safe-bin realpaths when callers provide canonical executable paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const ok = isSafeBinUsage({
+      argv: ["tr", "a", "b"],
+      resolution: {
+        rawExecutable: "tr",
+        resolvedPath: "/usr/sbin/tr",
+        resolvedRealPath: "/usr/bin/tr",
+        executableName: "tr",
+      },
+      safeBins: normalizeSafeBins(["tr"]),
+      trustedSafeBinDirs: new Set(["/usr/bin"]),
+    });
+    expect(ok).toBe(true);
+  });
+
+  it("fails closed when a trusted-dir symlink resolves outside trusted dirs", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const ok = isSafeBinUsage({
+      argv: ["tr", "a", "b"],
+      resolution: {
+        rawExecutable: "tr",
+        resolvedPath: "/usr/bin/tr",
+        resolvedRealPath: "/tmp/evil/tr",
+        executableName: "tr",
+      },
+      safeBins: normalizeSafeBins(["tr"]),
+      trustedSafeBinDirs: new Set(["/usr/bin"]),
+    });
+    expect(ok).toBe(false);
+  });
+
   it("supports injected platform for deterministic safe-bin checks", () => {
     const ok = isSafeBinUsage({
       argv: ["jq", ".foo"],

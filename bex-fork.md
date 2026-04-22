@@ -145,13 +145,11 @@ Verdicts for the previous fork-only commits:
 - `bf5068a111` — drop
   - `CONTINUITY.md` ignore hygiene was not carried in this replay pass because the user asked to carry only the active seams from this ledger.
 
-- `ddf51b11d9` — partial keep
-  - The daemon install env-isolation fix is still required.
-  - Proof: on a clean fresh worktree from `upstream/main`, `pnpm test src/commands/daemon-install-helpers.test.ts` failed until the tests passed isolated `HOME` / `OPENAI_API_KEY` input explicitly.
-  - The global-skills half is still required, but in a reduced upstream-shaped form.
-  - Proof:
-    - `pnpm test src/agents/skills.agents-skills-directory.test.ts` passed on clean upstream.
-    - `pnpm test src/agents/skills.build-workspace-skills-prompt.prefers-workspace-skills-managed-skills.test.ts src/agents/skills.build-workspace-skills-prompt.syncs-merged-skills-into-target-workspace.test.ts` failed on clean upstream until `src/agents/skills/workspace.ts` was switched back to the env-scoped OS-home seam.
+- `ddf51b11d9` — drop
+  - On the 2026-04-22 replay branch, neither half re-proved itself.
+  - Proof on the clean replay branch:
+    - `pnpm test src/commands/daemon-install-helpers.test.ts` passed without carrying a daemon-install env-isolation patch.
+    - `pnpm test src/agents/skills.build-workspace-skills-prompt.prefers-workspace-skills-managed-skills.test.ts src/agents/skills.build-workspace-skills-prompt.syncs-merged-skills-into-target-workspace.test.ts` passed without reintroducing the old env-scoped OS-home seam in `src/agents/skills/workspace.ts`.
 
 - `90e5779609` — drop
   - The Firecrawl-specific secrets runtime test-support change did not re-prove itself.
@@ -286,15 +284,22 @@ Verdicts for the previous fork-only commits:
   - The fork carries a minimal trust fix:
     - `src/infra/exec-safe-bin-trust.ts` now accepts an optional `resolvedRealPath` and, when present, trusts the canonical realpath dir instead of the discovered symlink dir so trusted-dir symlinks cannot escape into untrusted targets.
     - `src/infra/exec-approvals-allowlist.ts` threads `resolution.resolvedRealPath` into that trust check so safe-bin evaluation follows the canonical executable when available.
-  - Proof on the source checkout:
+  - Proof on the 2026-04-22 replay branch:
     - `pnpm test src/infra/exec-safe-bin-trust.test.ts src/infra/exec-approvals-safe-bins.test.ts src/node-host/invoke-system-run.test.ts -t "trusts canonical realpaths|fails closed when a trusted-dir symlink resolves outside trusted dirs|trusts safe-bin realpaths|handles transparent env wrappers in allowlist mode"`
-    - same follow-up pass also reconciled the now-intentional generated/baseline drift around `acpx-remote` and local heavy-check env handling:
-      - regenerated `src/config/schema.base.generated.ts`
-      - updated `scripts/lib/bundled-runtime-sidecar-paths.json`
-      - updated `test/vitest-scoped-config.test.ts`
-      - updated `test/scripts/local-heavy-check-runtime.test.ts`
     - keep the proof commands above as the seam-local bar; do not leave a lingering "current full gates are green" claim here unless you have just re-proved `pnpm test`, `pnpm check`, and `pnpm build` on the exact pending tree.
   - Treat this as a narrow execution-policy carry. If upstream starts canonicalizing trusted safe-bin paths before trust evaluation, delete the local patch and remove this entry.
+
+- 2026-04-22 tracked bundled-runtime sidecar baseline filtering + ACPX test-root routing — keep while replay worktrees carry excluded private extensions
+  - With `extensions/acpx-remote/` copied into the replay worktree but excluded from parent git status, the unpatched bundled-runtime sidecar baseline collector still treated that private nested checkout as a parent bundled plugin and leaked `dist/extensions/acpx-remote/runtime-api.js` into the parent baseline.
+  - The ACPX scoped Vitest root list also still omitted `extensions/acpx-remote`, so extension-acpx scoped test routing did not cover the private nested checkout even when it was intentionally present for replay proof.
+  - The replay branch carries two narrow support fixes:
+    - `src/plugins/runtime-sidecar-paths-baseline.ts` filters bundled runtime sidecar collection to tracked bundled plugin dirs only, so locally excluded nested repos do not pollute the parent baseline.
+    - `test/vitest/vitest.extension-acpx-paths.mjs` and `test/vitest-scoped-config.test.ts` include `extensions/acpx-remote` in the ACPX scoped test roots when the nested checkout is present in-tree.
+  - Proof on the 2026-04-22 replay branch:
+    - direct repro before patch: `collectBundledRuntimeSidecarPaths({ rootDir: process.cwd() })` included `"dist/extensions/acpx-remote/runtime-api.js"`
+    - `pnpm test src/plugins/bundled-plugin-metadata.test.ts -t "matches the checked-in runtime sidecar path baseline"`
+    - `pnpm test test/vitest-scoped-config.test.ts -t "normalizes acpx extension include patterns relative to the scoped dir"`
+  - Keep this as replay/hygiene support only. If the private nested extensions are absent from the worktree, this carry should stay inert.
 
 ## Local workflow notes
 

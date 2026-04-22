@@ -377,7 +377,10 @@ describe("scoped vitest configs", () => {
 
   it("normalizes acpx extension include patterns relative to the scoped dir", () => {
     expect(defaultExtensionAcpxConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionAcpxConfig.test?.include).toEqual(["acpx/**/*.test.ts"]);
+    expect(defaultExtensionAcpxConfig.test?.include).toEqual([
+      "acpx/**/*.test.ts",
+      "acpx-remote/**/*.test.ts",
+    ]);
   });
 
   it("normalizes diffs extension include patterns relative to the scoped dir", () => {
