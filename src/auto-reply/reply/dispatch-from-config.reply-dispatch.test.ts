@@ -120,6 +120,43 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       counts: { tool: 1, block: 2, final: 3 },
     });
   });
+
+  it("treats explicit inbound-audio context as audio even when body is wrapped text", async () => {
+    hookMocks.runner.runReplyDispatch.mockResolvedValue({
+      handled: true,
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Body: "Conversation info\\n\\n[Audio]\\nUser text:\\n[Telegram test] hello\\nTranscript:\\nhello",
+        BodyForAgent: "hello",
+        BodyForCommands:
+          "Conversation info\\n\\n[Audio]\\nUser text:\\n[Telegram test] hello\\nTranscript:\\nhello",
+        InboundAudio: true,
+        MediaType: undefined,
+        MediaTypes: undefined,
+        Surface: "telegram",
+        Provider: "telegram",
+        ChatType: "direct",
+        From: "telegram:123",
+        To: "telegram:123",
+        SessionKey: "agent:test:session",
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => ({ text: "model reply" }),
+    });
+
+    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inboundAudio: true,
+      }),
+      expect.anything(),
+    );
+  });
+
   it("still applies send-policy deny after an unhandled plugin dispatch", async () => {
     hookMocks.runner.runReplyDispatch.mockResolvedValue({
       handled: false,
