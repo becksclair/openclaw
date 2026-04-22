@@ -139,6 +139,10 @@ const normalizeMediaType = (value: string): string =>
   normalizeOptionalLowercaseString(value.split(";")[0]) ?? "";
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
+  if (ctx.InboundAudio === true) {
+    return true;
+  }
+
   const rawTypes = [
     typeof ctx.MediaType === "string" ? ctx.MediaType : undefined,
     ...(Array.isArray(ctx.MediaTypes) ? ctx.MediaTypes : []),
