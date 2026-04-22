@@ -1,5 +1,6 @@
 import {
   Button,
+  ChannelType,
   Container,
   Row,
   StringSelectMenu,
@@ -33,7 +34,8 @@ import {
   normalizeOptionalString,
   withTimeout,
 } from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordSlashCommandConfig } from "./commands.js";
+import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
+import { resolveDiscordChannelInfo } from "./message-utils.js";
 import {
   readDiscordModelPickerRecentModels,
   recordDiscordModelPickerRecentModel,
@@ -50,12 +52,23 @@ import {
   type DiscordModelPickerCommandContext,
 } from "./model-picker.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
-import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
+import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 
 const DISCORD_COMMAND_ARG_CUSTOM_ID_KEY = "cmdarg";
+
+function resolveDiscordInteractionMemberRoleIds(interaction: {
+  rawData?: { member?: { roles?: unknown } } | null;
+}): string[] {
+  try {
+    const roles = interaction.rawData?.member?.roles;
+    return Array.isArray(roles) ? roles.map((roleId) => String(roleId)) : [];
+  } catch {
+    return [];
+  }
+}
 
 export type DiscordCommandArgContext = {
   cfg: ReturnType<typeof loadConfig>;
@@ -78,7 +91,6 @@ export type DispatchDiscordCommandInteractionParams = {
   sessionPrefix: string;
   preferFollowUp: boolean;
   threadBindings: ThreadBindingManager;
-  responseEphemeral?: boolean;
   suppressReplies?: boolean;
 };
 
@@ -235,16 +247,32 @@ async function resolveDiscordModelPickerRouteState(params: {
   enforceConfiguredBindingReadiness?: boolean;
 }) {
   const { interaction, cfg, accountId } = params;
-  const { isDirectMessage, isGroupDm, isThreadChannel, rawChannelId, threadParentId } =
-    await resolveDiscordNativeInteractionChannelContext({
-      channel: interaction.channel,
+  const channel = interaction.channel;
+  const safeChannelInfo = resolveDiscordChannelInfoSafe(channel);
+  const channelType = safeChannelInfo.type;
+  const isDirectMessage = channelType === ChannelType.DM;
+  const isGroupDm = channelType === ChannelType.GroupDM;
+  const isThreadChannel =
+    channelType === ChannelType.PublicThread ||
+    channelType === ChannelType.PrivateThread ||
+    channelType === ChannelType.AnnouncementThread;
+  const rawChannelId = channel?.id ?? "unknown";
+  const memberRoleIds = resolveDiscordInteractionMemberRoleIds(interaction);
+  let threadParentId: string | undefined;
+  if (interaction.guild && channel && isThreadChannel && rawChannelId) {
+    const channelInfo = await resolveDiscordChannelInfo(interaction.client, rawChannelId);
+    const parentInfo = await resolveDiscordThreadParentInfo({
       client: interaction.client,
-      hasGuild: Boolean(interaction.guild),
-      channelIdFallback: "unknown",
+      threadChannel: {
+        id: rawChannelId,
+        name: safeChannelInfo.name,
+        parentId: safeChannelInfo.parentId,
+        parent: undefined,
+      },
+      channelInfo,
     });
-  const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.map((roleId: string) => roleId)
-    : [];
+    threadParentId = parentInfo.id;
+  }
 
   const threadBinding = isThreadChannel
     ? params.threadBindings.getByThreadId(rawChannelId)
@@ -385,7 +413,7 @@ export async function replyWithDiscordModelPickerProviders(params: {
   const quickModels = await readDiscordModelPickerRecentModels({
     scope: resolveDiscordModelPickerPreferenceScope({
       interaction: params.interaction,
-      accountId: params.accountId,
+      accountId: route.accountId,
       userId: params.userId,
     }),
     allowedModelRefs: buildDiscordModelPickerAllowedModelRefs(data),
@@ -549,7 +577,7 @@ export async function handleDiscordModelPickerInteraction(params: {
   const allowedModelRefs = buildDiscordModelPickerAllowedModelRefs(pickerData);
   const preferenceScope = resolveDiscordModelPickerPreferenceScope({
     interaction,
-    accountId: ctx.accountId,
+    accountId: route.accountId,
     userId: parsed.userId,
   });
   const quickModels = await readDiscordModelPickerRecentModels({
@@ -761,7 +789,7 @@ export async function handleDiscordModelPickerInteraction(params: {
           commandArgs: selectionCommand.args,
           cfg: ctx.cfg,
           discordConfig: ctx.discordConfig,
-          accountId: ctx.accountId,
+          accountId: route.accountId,
           sessionPrefix: ctx.sessionPrefix,
           preferFollowUp: true,
           threadBindings: ctx.threadBindings,
@@ -889,6 +917,12 @@ export async function handleDiscordCommandArgInteraction(params: {
     raw: serializeCommandArgs(commandDefinition, commandArgs),
   };
   const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
+  const route = await resolveDiscordModelPickerRoute({
+    interaction,
+    cfg: ctx.cfg,
+    accountId: ctx.accountId,
+    threadBindings: ctx.threadBindings,
+  });
   await params.dispatchCommandInteraction({
     interaction,
     prompt,
@@ -896,11 +930,10 @@ export async function handleDiscordCommandArgInteraction(params: {
     commandArgs: commandArgsWithRaw,
     cfg: ctx.cfg,
     discordConfig: ctx.discordConfig,
-    accountId: ctx.accountId,
+    accountId: route.accountId,
     sessionPrefix: ctx.sessionPrefix,
     preferFollowUp: true,
     threadBindings: ctx.threadBindings,
-    responseEphemeral: resolveDiscordSlashCommandConfig(ctx.discordConfig?.slashCommand).ephemeral,
   });
 }
 

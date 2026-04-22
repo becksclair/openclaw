@@ -370,6 +370,8 @@ export async function handleDiscordMessagingAction(
         const result = await discordMessagingActionRuntime.sendVoiceMessageDiscord(to, mediaUrl, {
           ...cfgOptions,
           ...(accountId ? { accountId } : {}),
+          mediaLocalRoots: options?.mediaLocalRoots,
+          mediaReadFile: options?.mediaReadFile,
           replyTo,
           silent,
         });

@@ -63,11 +63,14 @@ reimplemented on this branch.
 - Wave 1 is reimplemented upstream-first on this branch:
   - seam 3: Agent-scoped Talk/TTS
   - seam 9: Google Gemini TTS prompt-steering
-- Wave 2 first slice is reimplemented upstream-first on this branch:
+- Wave 2 voice-routing seam is reimplemented upstream-first on this branch:
   - seam 1: shared preview-text fallback/dedupe in `src/auto-reply/reply/dispatch-from-config.ts`
   - seam 1 / voice-note carry: Opus compatibility normalization in `extensions/speech-core/src/tts.ts`
   - seam 1: routed `audioAsVoice` payloads stay on channel `sendPayload` in `src/infra/outbound/deliver.ts`
   - seam 1: Discord outbound routed voice sends preserve the native voice path in `extensions/discord/src/outbound-adapter.ts` and `extensions/discord/src/send.outbound.ts`
+  - seam 1: Discord native slash-command and interaction replies preserve `audioAsVoice`, routed-account text policy, and voice-only cleanup semantics in `extensions/discord/src/monitor/native-command.ts` and `extensions/discord/src/monitor/native-command-ui.ts`
+  - seam 1: Discord direct reply callers preserve trusted local-media roots in `extensions/discord/src/monitor/reply-delivery.ts` and `extensions/discord/src/actions/runtime.messaging.ts`
+  - seam 1: Telegram outbound preserves `audioAsVoice` in `extensions/telegram/src/outbound-adapter.ts`
 - Focused Wave 1 proof completed on this branch:
   - `pnpm test src/tts/tts-config.test.ts src/gateway/talk-agent-config.test.ts`
   - `pnpm test src/gateway/server-methods/tts.test.ts src/gateway/server-methods/talk.test.ts src/gateway/server.talk-config.test.ts`
@@ -84,10 +87,14 @@ reimplemented on this branch.
   - `pnpm test src/infra/outbound/deliver.test.ts`
   - `pnpm test extensions/discord/src/outbound-adapter.test.ts`
   - `pnpm build`
+- Focused Wave 2 interaction / Telegram follow-on proof completed on this branch:
+  - `pnpm test extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts extensions/discord/src/monitor/native-command.model-picker.test.ts extensions/discord/src/monitor/native-command.status-direct.test.ts extensions/discord/src/actions/runtime.test.ts extensions/discord/src/monitor/reply-delivery.test.ts extensions/discord/src/send.sends-basic-channel-messages.test.ts`
+  - `pnpm test extensions/telegram/src/outbound-adapter.test.ts`
+  - `pnpm build`
 - In this branch, `src/auto-reply/reply/dispatch-from-config.ts` currently
-  carries only the agent-scoped config resolution needed for seam 3. The
-  remaining seam 1 work is the Discord native-command / interaction lane and
-  any Telegram-specific follow-on that still depends on the shared voice path.
+  carries both the seam 3 agent-scoped config resolution and the seam 1 shared
+  preview-text fallback/dedupe behavior. The remaining major replay work now
+  sits outside the Discord/Telegram voice-routing lane.
 
 ## Replay impact snapshot: 2026-04-15 onto upstream/main `d7cc6f7643`
 

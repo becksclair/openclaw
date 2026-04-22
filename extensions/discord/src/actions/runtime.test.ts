@@ -410,6 +410,34 @@ describe("handleDiscordMessagingAction", () => {
     expect(sendMessageDiscord).not.toHaveBeenCalled();
   });
 
+  it("forwards trusted media access into voice message sends", async () => {
+    sendVoiceMessageDiscord.mockClear();
+
+    const mediaReadFile = vi.fn(async () => Buffer.from("voice"));
+    await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        path: "/tmp/voice.mp3",
+        asVoice: true,
+      },
+      enableAllActions,
+      {
+        mediaLocalRoots: ["/tmp/agent-root"],
+        mediaReadFile,
+      },
+    );
+
+    expect(sendVoiceMessageDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      "/tmp/voice.mp3",
+      expect.objectContaining({
+        mediaLocalRoots: ["/tmp/agent-root"],
+        mediaReadFile,
+      }),
+    );
+  });
+
   it("forwards trusted mediaLocalRoots into sendMessageDiscord", async () => {
     sendMessageDiscord.mockClear();
     await handleMessagingAction(
