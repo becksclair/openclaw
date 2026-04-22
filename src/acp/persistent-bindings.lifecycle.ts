@@ -83,7 +83,8 @@ export async function ensureConfiguredAcpBindingSession(params: {
         cfg: params.cfg,
         sessionKey,
         reason: "config-binding-reconfigure",
-        clearMeta: false,
+        discardPersistentState: true,
+        clearMeta: true,
         allowBackendUnavailable: true,
         requireAcpSession: false,
       });

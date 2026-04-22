@@ -12,6 +12,7 @@ import {
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
+import { validateAcpRuntimeCwd } from "../runtime/cwd-validation.js";
 import {
   AcpRuntimeError,
   toAcpRuntimeError,
@@ -87,6 +88,50 @@ const ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS = 2_000;
 const ACP_TURN_TIMEOUT_REASON = "turn-timeout";
 const ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH = 160;
 const ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH = 240;
+
+function assertRuntimeCwd(
+  cwd: string | undefined,
+  code: "ACP_SESSION_INIT_FAILED" | "ACP_INVALID_RUNTIME_OPTION",
+): void {
+  if (!cwd) {
+    return;
+  }
+  const validation = validateAcpRuntimeCwd(cwd);
+  if (validation.ok) {
+    return;
+  }
+  throw new AcpRuntimeError(code, validation.message);
+}
+
+function hasManagedRuntimeOption(
+  capabilities: AcpRuntimeCapabilities | undefined,
+  key: string | undefined,
+): boolean {
+  const normalized = normalizeText(key);
+  if (!normalized) {
+    return false;
+  }
+  return (capabilities?.managedRuntimeOptionKeys ?? []).some(
+    (entry) => normalizeText(entry) === normalized,
+  );
+}
+
+function createManagedRuntimeOptionError(params: {
+  backend: string;
+  key: string;
+}): AcpRuntimeError {
+  return new AcpRuntimeError(
+    "ACP_INVALID_RUNTIME_OPTION",
+    `ACP runtime option "${params.key}" is managed by backend "${params.backend}" and cannot be changed in-session.`,
+  );
+}
+
+function patchHasRuntimeOption(
+  patch: Partial<AcpSessionRuntimeOptions> | undefined,
+  key: keyof AcpSessionRuntimeOptions,
+): boolean {
+  return Object.hasOwn((patch ?? {}) as Record<string, unknown>, key);
+}
 
 function summarizeBackgroundTaskText(text: string): string {
   const normalized = normalizeText(text) ?? "ACP background task";
@@ -311,8 +356,13 @@ export class AcpSessionManager {
     return await this.withSessionActor(sessionKey, async () => {
       const backend = this.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
       const runtime = backend.runtime;
-      const initialRuntimeOptions = validateRuntimeOptionPatch({ cwd: input.cwd });
+      const runtimeCapabilities = await this.resolveRuntimeCapabilities({ runtime });
+      const runtimeManagesCwd = hasManagedRuntimeOption(runtimeCapabilities, "cwd");
+      const initialRuntimeOptions = runtimeManagesCwd
+        ? {}
+        : validateRuntimeOptionPatch({ cwd: input.cwd });
       const requestedCwd = initialRuntimeOptions.cwd;
+      assertRuntimeCwd(requestedCwd, "ACP_SESSION_INIT_FAILED");
       this.enforceConcurrentSessionLimit({
         cfg: input.cfg,
         sessionKey,
@@ -575,8 +625,18 @@ export class AcpSessionManager {
         sessionKey,
         meta: resolvedMeta,
       });
-      const inferredPatch = inferRuntimeOptionPatchFromConfigOption(key, value);
       const capabilities = await this.resolveRuntimeCapabilities({ runtime, handle });
+      if (
+        normalizeLowercaseStringOrEmpty(key) === "cwd" &&
+        hasManagedRuntimeOption(capabilities, "cwd")
+      ) {
+        throw createManagedRuntimeOptionError({
+          backend: handle.backend || meta.backend,
+          key: "cwd",
+        });
+      }
+      const inferredPatch = inferRuntimeOptionPatchFromConfigOption(key, value);
+      assertRuntimeCwd(inferredPatch.cwd, "ACP_INVALID_RUNTIME_OPTION");
       if (
         !capabilities.controls.includes("session/set_config_option") ||
         !runtime.setConfigOption
@@ -629,10 +689,10 @@ export class AcpSessionManager {
     patch: Partial<AcpSessionRuntimeOptions>;
   }): Promise<AcpSessionRuntimeOptions> {
     const sessionKey = canonicalizeAcpSessionKey(params);
-    const validatedPatch = validateRuntimeOptionPatch(params.patch);
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
+    const patchHasCwd = patchHasRuntimeOption(params.patch, "cwd");
 
     await this.evictIdleRuntimeHandles({ cfg: params.cfg });
     return await this.withSessionActor(sessionKey, async () => {
@@ -641,6 +701,22 @@ export class AcpSessionManager {
         sessionKey,
       });
       const resolvedMeta = requireReadySessionMeta(resolution);
+      if (patchHasCwd) {
+        const backend = this.deps.requireRuntimeBackend(
+          resolvedMeta.backend || params.cfg.acp?.backend,
+        );
+        const capabilities = await this.resolveRuntimeCapabilities({
+          runtime: backend.runtime,
+        });
+        if (hasManagedRuntimeOption(capabilities, "cwd")) {
+          throw createManagedRuntimeOptionError({
+            backend: resolvedMeta.backend || backend.id,
+            key: "cwd",
+          });
+        }
+      }
+      const validatedPatch = validateRuntimeOptionPatch(params.patch);
+      assertRuntimeCwd(validatedPatch.cwd, "ACP_INVALID_RUNTIME_OPTION");
       const nextOptions = mergeRuntimeOptions({
         current: resolveRuntimeOptionsFromMeta(resolvedMeta),
         patch: validatedPatch,
@@ -1877,7 +1953,7 @@ export class AcpSessionManager {
 
   private async resolveRuntimeCapabilities(params: {
     runtime: AcpRuntime;
-    handle: AcpRuntimeHandle;
+    handle?: AcpRuntimeHandle;
   }): Promise<AcpRuntimeCapabilities> {
     return await resolveManagerRuntimeCapabilities(params);
   }
