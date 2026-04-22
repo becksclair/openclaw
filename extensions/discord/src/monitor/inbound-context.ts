@@ -49,10 +49,15 @@ export function buildDiscordGroupSystemPrompt(
 
 export function buildDiscordUntrustedContext(params: {
   isGuild: boolean;
+  channelConfig?: DiscordChannelConfigResolved | null;
   channelTopic?: string;
   messageBody?: string;
 }): string[] | undefined {
   if (!params.isGuild) {
+    return undefined;
+  }
+  const isUntrustedChannel = params.channelConfig?.copyMessageBodyToUntrustedContext === true;
+  if (!isUntrustedChannel) {
     return undefined;
   }
   const entries = [
@@ -90,6 +95,7 @@ export function buildDiscordInboundAccessContext(params: {
       : undefined,
     untrustedContext: buildDiscordUntrustedContext({
       isGuild: params.isGuild,
+      channelConfig: params.channelConfig,
       channelTopic: params.channelTopic,
       messageBody: params.messageBody,
     }),
