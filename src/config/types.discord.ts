@@ -39,6 +39,12 @@ export type DiscordDmConfig = {
 export type DiscordGuildChannelConfig = {
   requireMention?: boolean;
   /**
+   * If true, treat this guild channel as untrusted for inbound Discord context:
+   * copy channel topic metadata and the live guild message body into
+   * UntrustedContext as wrapped external content. Default: false (trusted).
+   */
+  copyMessageBodyToUntrustedContext?: boolean;
+  /**
    * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
    * Default: false.
    */
