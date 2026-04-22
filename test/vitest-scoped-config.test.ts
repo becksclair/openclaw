@@ -462,7 +462,11 @@ describe("scoped vitest configs", () => {
   it("normalizes memory extension include patterns relative to the scoped dir", () => {
     expect(defaultExtensionMemoryConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
     expect(defaultExtensionMemoryConfig.test?.include).toEqual(
-      expect.arrayContaining(["memory-core/**/*.test.ts", "memory-lancedb/**/*.test.ts"]),
+      expect.arrayContaining([
+        "memory-core/**/*.test.ts",
+        "memory-lancedb/**/*.test.ts",
+        "memory-maintenance/**/*.test.ts",
+      ]),
     );
   });
 

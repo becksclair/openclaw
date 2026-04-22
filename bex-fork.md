@@ -318,7 +318,7 @@ These are local operating rules, not carried fork seams.
   - `extensions/memory-maintenance/` remains outside the carried fork surface.
   - Keep that nested repo managed from the source checkout's local exclude rules; do not fold it into the replay diff.
   - When a replay worktree needs extension-focused validation, copy both `extensions/acpx-remote/` and `extensions/memory-maintenance/` from the source checkout into the replay worktree before running extension tests, then rerun `pnpm install` there so the workspace and extension test harness see the private packages. Treat those copies as local replay scaffolding, not parent-repo carry.
-  - `pnpm test:extension memory-maintenance` currently misses the real `extensions/memory-maintenance/**` test files in replay worktrees; use `pnpm test extensions/memory-maintenance` until the helper learns that package.
+  - On the 2026-04-22 replay branch, `pnpm test:extension memory-maintenance` is now a valid focused proof again because the helper routes `extensions/memory-maintenance/**` through the memory extension Vitest config.
 
 ## Seam inventory
 
@@ -887,6 +887,6 @@ Run these after replaying the live seams:
 - `pnpm test extensions/discord/src/channel.test.ts`
 - `pnpm test src/acp/control-plane/manager.test.ts src/acp/persistent-bindings.test.ts src/config/config.acp-cwd.validation.test.ts`
 - `pnpm test:extension acpx-remote` (when the private nested repo checkout is present)
-- `pnpm test extensions/memory-maintenance` (when the private nested repo checkout is present; `pnpm test:extension memory-maintenance` currently misses the real test files)
+- `pnpm test:extension memory-maintenance` (when the private nested repo checkout is present)
 - `pnpm build`
 - `pnpm check`
