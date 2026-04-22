@@ -477,6 +477,7 @@ export async function deliverDiscordReply(params: {
         token: params.token,
         rest: params.rest,
         accountId: params.accountId,
+        mediaLocalRoots: params.mediaLocalRoots,
         replyTo,
       });
       deliveredAny = true;
