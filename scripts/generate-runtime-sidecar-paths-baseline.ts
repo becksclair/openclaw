@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import path from "node:path";
 import { writeBundledRuntimeSidecarPathBaseline } from "../src/plugins/runtime-sidecar-paths-baseline.js";
+import { listTrackedBundledPluginDirs } from "./lib/tracked-bundled-plugin-dirs.mjs";
 
 const args = new Set(process.argv.slice(2));
 const checkOnly = args.has("--check");
@@ -12,9 +13,11 @@ if (checkOnly === writeMode) {
 }
 
 const repoRoot = process.cwd();
+const trackedDirNames = listTrackedBundledPluginDirs(repoRoot);
 const result = await writeBundledRuntimeSidecarPathBaseline({
   repoRoot,
   check: checkOnly,
+  trackedDirNames,
 });
 
 if (checkOnly) {

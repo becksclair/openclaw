@@ -356,12 +356,15 @@ export class AcpSessionManager {
     return await this.withSessionActor(sessionKey, async () => {
       const backend = this.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
       const runtime = backend.runtime;
-      const runtimeCapabilities = await this.resolveRuntimeCapabilities({ runtime });
-      const runtimeManagesCwd = hasManagedRuntimeOption(runtimeCapabilities, "cwd");
       const rawInitialRuntimeOptions = validateRuntimeOptionPatch({
         ...input.runtimeOptions,
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       });
+      const requestedCwdProvided = rawInitialRuntimeOptions.cwd !== undefined;
+      const runtimeCapabilities = requestedCwdProvided
+        ? await this.resolveRuntimeCapabilities({ runtime })
+        : undefined;
+      const runtimeManagesCwd = hasManagedRuntimeOption(runtimeCapabilities, "cwd");
       const runtimeOptionsWithoutManagedCwd = { ...rawInitialRuntimeOptions };
       delete runtimeOptionsWithoutManagedCwd.cwd;
       const initialRuntimeOptions = runtimeManagesCwd

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { listTrackedBundledPluginDirs } from "../../scripts/lib/tracked-bundled-plugin-dirs.mjs";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import {
   type BundledPluginMetadata,
@@ -125,8 +126,9 @@ describe("bundled plugin metadata", () => {
     "matches the checked-in runtime sidecar path baseline",
     { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
     () => {
+      const trackedDirNames = listTrackedBundledPluginDirs(repoRoot);
       expect(BUNDLED_RUNTIME_SIDECAR_PATHS).toEqual(
-        collectBundledRuntimeSidecarPaths({ rootDir: repoRoot }),
+        collectBundledRuntimeSidecarPaths({ rootDir: repoRoot, trackedDirNames }),
       );
     },
   );

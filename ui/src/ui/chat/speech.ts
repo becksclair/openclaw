@@ -1,3 +1,5 @@
+import { stripMarkdownForSpeech } from "./strip-markdown-for-speech.ts";
+
 /**
  * Browser-native speech services: STT via SpeechRecognition, TTS via SpeechSynthesis.
  * Falls back gracefully when APIs are unavailable.
@@ -148,7 +150,7 @@ export function speakText(
 
   stopTts();
 
-  const cleaned = stripMarkdown(text);
+  const cleaned = stripMarkdownForSpeech(text);
   if (!cleaned.trim()) {
     return false;
   }
@@ -190,36 +192,4 @@ export function stopTts(): void {
 
 export function isTtsSpeaking(): boolean {
   return isTtsSupported() && speechSynthesis.speaking;
-}
-
-/** Strip common markdown syntax for cleaner speech output. */
-function stripMarkdown(text: string): string {
-  return (
-    text
-      // code blocks
-      .replace(/```[\s\S]*?```/g, "")
-      // inline code
-      .replace(/`[^`]+`/g, "")
-      // images
-      .replace(/!\[.*?\]\(.*?\)/g, "")
-      // links → keep text
-      .replace(/\[([^\]]+)\]\(.*?\)/g, "$1")
-      // headings
-      .replace(/^#{1,6}\s+/gm, "")
-      // bold/italic
-      .replace(/\*{1,3}(.*?)\*{1,3}/g, "$1")
-      .replace(/_{1,3}(.*?)_{1,3}/g, "$1")
-      // blockquotes
-      .replace(/^>\s?/gm, "")
-      // horizontal rules
-      .replace(/^[-*_]{3,}\s*$/gm, "")
-      // list markers
-      .replace(/^\s*[-*+]\s+/gm, "")
-      .replace(/^\s*\d+\.\s+/gm, "")
-      // HTML tags
-      .replace(/<[^>]+>/g, "")
-      // collapse whitespace
-      .replace(/\n{3,}/g, "\n\n")
-      .trim()
-  );
 }
