@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
+import type { ReplyPayload } from "../reply-payload.js";
 import {
   acpManagerRuntimeMocks,
   acpMocks,
@@ -16,7 +17,9 @@ import {
   sessionBindingMocks,
   sessionStoreMocks,
   setDiscordTestRegistry,
+  ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
+import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
@@ -141,5 +144,98 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
     });
+  });
+
+  it("uses cleaned preview text for final-mode TTS when partial streaming has no final payload", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(() => false);
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { payload: ReplyPayload; kind: "tool" | "block" | "final" };
+      if (
+        params.kind === "final" &&
+        typeof params.payload.text === "string" &&
+        params.payload.text.trim()
+      ) {
+        return {
+          ...params.payload,
+          mediaUrl: "https://example.com/tts-synth.opus",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    });
+    const dispatcher = createDispatcher();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:luke:session-1",
+        BodyForAgent: "stream this",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_msgCtx, options) => {
+        await options?.onPartialReply?.({
+          text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+        });
+        return undefined;
+      },
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: { text: "luke voice smoke pass" },
+      }),
+    );
+    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as ReplyPayload | undefined;
+    expect(finalPayload).toEqual(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/tts-synth.opus",
+        audioAsVoice: true,
+      }),
+    );
+    expect(finalPayload?.text).toBeUndefined();
+  });
+
+  it("does not retry preview fallback TTS when the final reply already resolves to the same visible text", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(() => false);
+    const dispatcher = createDispatcher();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:luke:session-1",
+        BodyForAgent: "stream this",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_msgCtx, options) => {
+        await options?.onPartialReply?.({
+          text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+        });
+        return {
+          text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+        };
+      },
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        payload: {
+          text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+        },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: '<think>hidden scratchpad</think><tool_result>{"output":"hidden"}</tool_result>[[audio_as_voice]] luke voice smoke pass',
+      }),
+    );
   });
 });

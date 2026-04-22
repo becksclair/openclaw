@@ -6,9 +6,13 @@ import { ChannelType, Routes } from "discord-api-types/v10";
 import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
-import { maxBytesForKind } from "openclaw/plugin-sdk/media-runtime";
-import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
-import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
+import {
+  buildOutboundMediaLoadOptions,
+  extensionForMime,
+  maxBytesForKind,
+  type OutboundMediaAccess,
+  unlinkIfExists,
+} from "openclaw/plugin-sdk/media-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
@@ -502,6 +506,9 @@ type VoiceMessageOpts = {
   cfg: OpenClawConfig;
   token?: string;
   accountId?: string;
+  mediaAccess?: OutboundMediaAccess;
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   verbose?: boolean;
   rest?: RequestClient;
   replyTo?: string;
@@ -509,10 +516,22 @@ type VoiceMessageOpts = {
   silent?: boolean;
 };
 
-async function materializeVoiceMessageInput(mediaUrl: string): Promise<{ filePath: string }> {
+async function materializeVoiceMessageInput(
+  mediaUrl: string,
+  opts: Pick<VoiceMessageOpts, "mediaAccess" | "mediaLocalRoots" | "mediaReadFile"> = {},
+): Promise<{ filePath: string }> {
   // Security: reuse the standard media loader so we apply SSRF guards + allowed-local-root checks.
   // Then write to a private temp file so ffmpeg/ffprobe never sees the original URL/path string.
-  const media = await loadWebMediaRaw(mediaUrl, maxBytesForKind("audio"));
+  const media = await loadWebMediaRaw(
+    mediaUrl,
+    buildOutboundMediaLoadOptions({
+      maxBytes: maxBytesForKind("audio"),
+      mediaAccess: opts.mediaAccess,
+      mediaLocalRoots: opts.mediaLocalRoots,
+      mediaReadFile: opts.mediaReadFile,
+      optimizeImages: false,
+    }),
+  );
   const extFromName = media.fileName ? path.extname(media.fileName) : "";
   const extFromMime = media.contentType ? extensionForMime(media.contentType) : "";
   const ext = extFromName || extFromMime || ".bin";
@@ -537,7 +556,7 @@ export async function sendVoiceMessageDiscord(
   audioPath: string,
   opts: VoiceMessageOpts,
 ): Promise<DiscordSendResult> {
-  const { filePath: localInputPath } = await materializeVoiceMessageInput(audioPath);
+  const { filePath: localInputPath } = await materializeVoiceMessageInput(audioPath, opts);
   let oggPath: string | null = null;
   let oggCleanup = false;
   let token: string | undefined;

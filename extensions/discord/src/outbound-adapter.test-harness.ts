@@ -5,6 +5,7 @@ type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 
 type DiscordOutboundHoisted = {
   sendMessageDiscordMock: AsyncUnknownMock;
+  sendVoiceMessageDiscordMock: AsyncUnknownMock;
   sendDiscordComponentMessageMock: AsyncUnknownMock;
   sendPollDiscordMock: AsyncUnknownMock;
   sendWebhookMessageDiscordMock: AsyncUnknownMock;
@@ -25,12 +26,14 @@ function invokeMock<TArgs extends unknown[], TResult>(
 
 export function createDiscordOutboundHoisted(): DiscordOutboundHoisted {
   const sendMessageDiscordMock = vi.fn();
+  const sendVoiceMessageDiscordMock = vi.fn();
   const sendDiscordComponentMessageMock = vi.fn();
   const sendPollDiscordMock = vi.fn();
   const sendWebhookMessageDiscordMock = vi.fn();
   const getThreadBindingManagerMock = vi.fn();
   return {
     sendMessageDiscordMock,
+    sendVoiceMessageDiscordMock,
     sendDiscordComponentMessageMock,
     sendPollDiscordMock,
     sendWebhookMessageDiscordMock,
@@ -56,6 +59,11 @@ export async function createDiscordSendModuleMock(
         Parameters<DiscordSendModule["sendMessageDiscord"]>,
         ReturnType<DiscordSendModule["sendMessageDiscord"]>
       >(hoisted.sendMessageDiscordMock, ...args),
+    sendVoiceMessageDiscord: (...args: Parameters<DiscordSendModule["sendVoiceMessageDiscord"]>) =>
+      invokeMock<
+        Parameters<DiscordSendModule["sendVoiceMessageDiscord"]>,
+        ReturnType<DiscordSendModule["sendVoiceMessageDiscord"]>
+      >(hoisted.sendVoiceMessageDiscordMock, ...args),
     sendPollDiscord: (...args: Parameters<DiscordSendModule["sendPollDiscord"]>) =>
       invokeMock<
         Parameters<DiscordSendModule["sendPollDiscord"]>,
@@ -111,6 +119,9 @@ export async function installDiscordOutboundModuleSpies(hoisted: DiscordOutbound
   vi.spyOn(sendModule, "sendMessageDiscord").mockImplementation(
     mockedSendModule.sendMessageDiscord,
   );
+  vi.spyOn(sendModule, "sendVoiceMessageDiscord").mockImplementation(
+    mockedSendModule.sendVoiceMessageDiscord,
+  );
   vi.spyOn(sendModule, "sendPollDiscord").mockImplementation(mockedSendModule.sendPollDiscord);
   vi.spyOn(sendModule, "sendWebhookMessageDiscord").mockImplementation(
     mockedSendModule.sendWebhookMessageDiscord,
@@ -138,6 +149,10 @@ export async function installDiscordOutboundModuleSpies(hoisted: DiscordOutbound
 export function resetDiscordOutboundMocks(hoisted: DiscordOutboundHoisted) {
   hoisted.sendMessageDiscordMock.mockReset().mockResolvedValue({
     messageId: "msg-1",
+    channelId: "ch-1",
+  });
+  hoisted.sendVoiceMessageDiscordMock.mockReset().mockResolvedValue({
+    messageId: "voice-1",
     channelId: "ch-1",
   });
   hoisted.sendDiscordComponentMessageMock.mockReset().mockResolvedValue({

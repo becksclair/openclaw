@@ -1338,6 +1338,50 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "line", messageId: "ln-1" }]);
   });
 
+  it("routes audioAsVoice media payloads through sendPayload when available", async () => {
+    const sendPayload = vi.fn().mockResolvedValue({ channel: "telegram", messageId: "tg-voice" });
+    const sendMedia = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: { deliveryMode: "direct", sendPayload, sendMedia, sendText: vi.fn() },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "telegram",
+      to: "123",
+      payloads: [
+        {
+          text: "Voice reply",
+          mediaUrl: "file:///tmp/voice.ogg",
+          audioAsVoice: true,
+        },
+      ],
+    });
+
+    expect(sendPayload).toHaveBeenCalledTimes(1);
+    expect(sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audioAsVoice: true,
+        payload: expect.objectContaining({
+          text: "Voice reply",
+          mediaUrl: "file:///tmp/voice.ogg",
+          audioAsVoice: true,
+        }),
+      }),
+    );
+    expect(sendMedia).not.toHaveBeenCalled();
+    expect(results).toEqual([{ channel: "telegram", messageId: "tg-voice" }]);
+  });
+
   it("falls back to sendText when plugin outbound omits sendMedia", async () => {
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
     setActivePluginRegistry(
