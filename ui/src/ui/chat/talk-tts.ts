@@ -1,3 +1,5 @@
+import { stripMarkdownForSpeech } from "./strip-markdown-for-speech.ts";
+
 export type SpeechGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
 };
@@ -115,7 +117,7 @@ export async function speakText(
 
   stopTts();
 
-  const cleaned = stripMarkdown(text);
+  const cleaned = stripMarkdownForSpeech(text);
   if (!cleaned.trim()) {
     return false;
   }
@@ -206,22 +208,4 @@ export function isTtsSpeaking(): boolean {
   return (
     currentSource !== null || (currentAudio !== null && !currentAudio.paused && !currentAudio.ended)
   );
-}
-
-function stripMarkdown(text: string): string {
-  return text
-    .replace(/```[\s\S]*?```/g, "")
-    .replace(/`[^`]+`/g, "")
-    .replace(/!\[.*?\]\(.*?\)/g, "")
-    .replace(/\[([^\]]+)\]\(.*?\)/g, "$1")
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/\*{1,3}(.*?)\*{1,3}/g, "$1")
-    .replace(/_{1,3}(.*?)_{1,3}/g, "$1")
-    .replace(/^>\s?/gm, "")
-    .replace(/^[-*_]{3,}\s*$/gm, "")
-    .replace(/^\s*[-*+]\s+/gm, "")
-    .replace(/^\s*\d+\.\s+/gm, "")
-    .replace(/<[^>]+>/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
 }
