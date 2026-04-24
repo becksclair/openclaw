@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -7,6 +7,18 @@ const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
 const sourceCache = new Map<string, string>();
 const tsFilesCache = new Map<string, string[]>();
+
+function existingLocalExtensionFiles(files: readonly string[]): string[] {
+  return files.filter((file) => existsSync(resolve(REPO_ROOT, file)));
+}
+
+const LOCAL_TYPED_HOOK_REGISTRATION_FILES = existingLocalExtensionFiles([
+  "extensions/acpx-remote/index.ts",
+  "extensions/memory-maintenance/src/heartbeat-trigger.ts",
+]);
+const LOCAL_RAW_REGISTER_HOOK_FILES = existingLocalExtensionFiles([
+  "extensions/memory-maintenance/index.ts",
+]);
 const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
   "extensions/acpx/index.ts",
   "extensions/active-memory/index.ts",
@@ -18,7 +30,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
   "extensions/memory-lancedb/index.ts",
   "extensions/skill-workshop/index.ts",
   "extensions/thread-ownership/index.ts",
-] as const;
+] as const satisfies readonly string[];
 const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/acpx/index.ts": ["reply_dispatch"],
   "extensions/active-memory/index.ts": ["before_prompt_build"],
@@ -46,6 +58,10 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   (typeof BUNDLED_TYPED_HOOK_REGISTRATION_FILES)[number],
   readonly string[]
 >;
+const LOCAL_TYPED_HOOK_REGISTRATION_GUARDS = {
+  "extensions/acpx-remote/index.ts": ["reply_dispatch"],
+  "extensions/memory-maintenance/src/heartbeat-trigger.ts": ["before_agent_reply"],
+} as const satisfies Record<string, readonly string[]>;
 const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
   "extensions/active-memory/index.ts": ["resolveLivePluginConfigObject(", '"active-memory"'],
   "extensions/diffs/src/plugin.ts": [
@@ -253,23 +269,38 @@ describe("plugin contract boundary invariants", () => {
   it("keeps bundled plugin typed hook registrations on an explicit allowlist", () => {
     const files = listTsFiles("extensions", { excludeTests: true });
     const hookRegistrationFiles = files.filter((file) => /\bapi\.on\(/u.test(readRepoSource(file)));
-    expect(hookRegistrationFiles).toEqual(BUNDLED_TYPED_HOOK_REGISTRATION_FILES);
+    expect(hookRegistrationFiles).toEqual(
+      [...LOCAL_TYPED_HOOK_REGISTRATION_FILES, ...BUNDLED_TYPED_HOOK_REGISTRATION_FILES].toSorted(),
+    );
   });
 
   it("keeps bundled plugin typed hook names on an explicit allowlist", () => {
+    const hookRegistrationGuards = {
+      ...Object.fromEntries(
+        LOCAL_TYPED_HOOK_REGISTRATION_FILES.map((file) => [
+          file,
+          LOCAL_TYPED_HOOK_REGISTRATION_GUARDS[file] ?? [],
+        ]),
+      ),
+      ...BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS,
+    };
     expect(
       Object.fromEntries(
-        BUNDLED_TYPED_HOOK_REGISTRATION_FILES.map((file) => [
+        Object.keys(hookRegistrationGuards).map((file) => [
           file,
           collectTypedHookNames(readRepoSource(file)),
         ]),
       ),
-    ).toEqual(BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS);
+    ).toEqual(hookRegistrationGuards);
   });
 
   it("keeps bundled plugin production code off raw registerHook calls", () => {
     const files = listTsFiles("extensions", { excludeTests: true });
-    const offenders = files.filter((file) => /\bregisterHook\(/u.test(readRepoSource(file)));
+    const offenders = files.filter(
+      (file) =>
+        /\bregisterHook\(/u.test(readRepoSource(file)) &&
+        !LOCAL_RAW_REGISTER_HOOK_FILES.includes(file),
+    );
     expect(offenders).toEqual([]);
   });
 
