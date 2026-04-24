@@ -11,33 +11,31 @@ OpenAI provides developer APIs for GPT models. OpenClaw supports three OpenAI-fa
 
 - **API key** — direct OpenAI Platform access with usage-based billing (`openai/*` models)
 - **Codex subscription through PI** — ChatGPT/Codex sign-in with subscription access (`openai-codex/*` models)
-- **Codex app-server harness** — native Codex app-server execution (`openai/*` models plus `agents.defaults.embeddedHarness.runtime: "codex"`)
+- **Codex app-server harness** — native Codex app-server execution (`codex/*` models)
 
 OpenAI explicitly supports subscription OAuth usage in external tools and workflows like OpenClaw.
 
 <Note>
-GPT-5.5 is currently available in OpenClaw through subscription/OAuth routes:
-`openai-codex/gpt-5.5` with the PI runner, or `openai/gpt-5.5` with the
-Codex app-server harness. Direct API-key access for `openai/gpt-5.5` is
-supported once OpenAI enables GPT-5.5 on the public API; until then use an
-API-enabled model such as `openai/gpt-5.4` for `OPENAI_API_KEY` setups.
+GPT-5.5 is currently available in OpenClaw through the native Codex app-server
+harness as `codex/gpt-5.5`. Use `openai-codex/gpt-5.4` for Codex OAuth through
+PI and `openai/gpt-5.4` for direct OpenAI Platform API access.
 </Note>
 
 ## OpenClaw feature coverage
 
-| OpenAI capability         | OpenClaw surface                                       | Status                                                 |
-| ------------------------- | ------------------------------------------------------ | ------------------------------------------------------ |
-| Chat / Responses          | `openai/<model>` model provider                        | Yes                                                    |
-| Codex subscription models | `openai-codex/<model>` with `openai-codex` OAuth       | Yes                                                    |
-| Codex app-server harness  | `openai/<model>` with `embeddedHarness.runtime: codex` | Yes                                                    |
-| Server-side web search    | Native OpenAI Responses tool                           | Yes, when web search is enabled and no provider pinned |
-| Images                    | `image_generate`                                       | Yes                                                    |
-| Videos                    | `video_generate`                                       | Yes                                                    |
-| Text-to-speech            | `messages.tts.provider: "openai"` / `tts`              | Yes                                                    |
-| Batch speech-to-text      | `tools.media.audio` / media understanding              | Yes                                                    |
-| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`              | Yes                                                    |
-| Realtime voice            | Voice Call `realtime.provider: "openai"`               | Yes                                                    |
-| Embeddings                | memory embedding provider                              | Yes                                                    |
+| OpenAI capability         | OpenClaw surface                                 | Status                                                 |
+| ------------------------- | ------------------------------------------------ | ------------------------------------------------------ |
+| Chat / Responses          | `openai/<model>` model provider                  | Yes                                                    |
+| Codex subscription models | `openai-codex/<model>` with `openai-codex` OAuth | Yes                                                    |
+| Codex app-server harness  | `codex/<model>` model provider                   | Yes                                                    |
+| Server-side web search    | Native OpenAI Responses tool                     | Yes, when web search is enabled and no provider pinned |
+| Images                    | `image_generate`                                 | Yes                                                    |
+| Videos                    | `video_generate`                                 | Yes                                                    |
+| Text-to-speech            | `messages.tts.provider: "openai"` / `tts`        | Yes                                                    |
+| Batch speech-to-text      | `tools.media.audio` / media understanding        | Yes                                                    |
+| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`        | Yes                                                    |
+| Realtime voice            | Voice Call `realtime.provider: "openai"`         | Yes                                                    |
+| Embeddings                | memory embedding provider                        | Yes                                                    |
 
 ## Getting started
 
@@ -75,12 +73,9 @@ Choose your preferred auth method and follow the setup steps.
     |-----------|-------|------|
     | `openai/gpt-5.4` | Direct OpenAI Platform API | `OPENAI_API_KEY` |
     | `openai/gpt-5.4-mini` | Direct OpenAI Platform API | `OPENAI_API_KEY` |
-    | `openai/gpt-5.5` | Future direct API route once OpenAI enables GPT-5.5 on the API | `OPENAI_API_KEY` |
-
     <Note>
-    `openai/*` is the direct OpenAI API-key route unless you explicitly force
-    the Codex app-server harness. GPT-5.5 itself is currently subscription/OAuth
-    only; use `openai-codex/*` for Codex OAuth through the default PI runner.
+    `openai/*` is the direct OpenAI API-key route. Use `codex/gpt-5.5` for the
+    native Codex app-server harness.
     </Note>
 
     ### Config example
@@ -121,7 +116,7 @@ Choose your preferred auth method and follow the setup steps.
       </Step>
       <Step title="Set the default model">
         ```bash
-        openclaw config set agents.defaults.model.primary openai-codex/gpt-5.5
+        openclaw config set agents.defaults.model.primary openai-codex/gpt-5.4
         ```
       </Step>
       <Step title="Verify the model is available">
@@ -135,8 +130,8 @@ Choose your preferred auth method and follow the setup steps.
 
     | Model ref | Route | Auth |
     |-----------|-------|------|
-    | `openai-codex/gpt-5.5` | ChatGPT/Codex OAuth through PI | Codex sign-in |
-    | `openai/gpt-5.5` + `embeddedHarness.runtime: "codex"` | Codex app-server harness | Codex app-server auth |
+    | `openai-codex/gpt-5.4` | ChatGPT/Codex OAuth through PI | Codex sign-in |
+    | `codex/gpt-5.5` | Codex app-server harness | Codex app-server auth |
 
     <Note>
     Keep using the `openai-codex` provider id for auth/profile commands. The
@@ -147,7 +142,7 @@ Choose your preferred auth method and follow the setup steps.
 
     ```json5
     {
-      agents: { defaults: { model: { primary: "openai-codex/gpt-5.5" } } },
+      agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
     }
     ```
 
@@ -169,7 +164,7 @@ Choose your preferred auth method and follow the setup steps.
 
     OpenClaw treats model metadata and the runtime context cap as separate values.
 
-    For `openai-codex/gpt-5.5` through Codex OAuth:
+    For `openai-codex/gpt-5.4` through Codex OAuth:
 
     - Native `contextWindow`: `1000000`
     - Default runtime `contextTokens` cap: `272000`
@@ -181,7 +176,7 @@ Choose your preferred auth method and follow the setup steps.
       models: {
         providers: {
           "openai-codex": {
-            models: [{ id: "gpt-5.5", contextTokens: 160000 }],
+            models: [{ id: "gpt-5.4", contextTokens: 160000 }],
           },
         },
       },
@@ -281,9 +276,9 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs across providers. It applies by model id, so `openai-codex/gpt-5.5`, `openai/gpt-5.4`, `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
+OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs across providers. It applies by model id, so `codex/gpt-5.5`, `openai-codex/gpt-5.4`, `openai/gpt-5.4`, `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
 
-The bundled native Codex harness uses the same GPT-5 behavior and heartbeat overlay through Codex app-server developer instructions, so `openai/gpt-5.x` sessions forced through `embeddedHarness.runtime: "codex"` keep the same follow-through and proactive heartbeat guidance even though Codex owns the rest of the harness prompt.
+The bundled native Codex harness uses the same GPT-5 behavior and heartbeat overlay through Codex app-server developer instructions, so `codex/gpt-5.x` sessions keep the same follow-through and proactive heartbeat guidance even though Codex owns the rest of the harness prompt.
 
 The GPT-5 contribution adds a tagged behavior contract for persona persistence, execution safety, tool discipline, output shape, completion checks, and verification. Channel-specific reply and silent-message behavior stays in the shared OpenClaw system prompt and outbound delivery policy. The GPT-5 guidance is always enabled for matching models. The friendly interaction-style layer is separate and configurable.
 
@@ -576,7 +571,7 @@ the Server-side compaction accordion below.
             "openai/gpt-5.4": {
               params: { transport: "auto" },
             },
-            "openai-codex/gpt-5.5": {
+            "openai-codex/gpt-5.4": {
               params: { transport: "auto" },
             },
           },

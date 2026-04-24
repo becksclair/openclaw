@@ -69,6 +69,7 @@ then from `27b8aa1ddf` to `c0a7b6a510`, and then from `c0a7b6a510` to
   - seam 7: ACP local cwd validation, backend-managed runtime options, and persistent binding reset
   - seam 8: parent-side generic ACP/Discord support needed by the private `acpx-remote` extension
   - seam 9: Google Gemini TTS prompt-steering fields
+  - seam 10: native Codex GPT-5.5 routing and OpenAI-family model-prefix defaults
   - Discord trusted-by-default inbound context remains opt-in through config.
 - Support seams carried after re-check:
   - safe-bin trust now checks canonical realpaths when the resolver provides them; upstream still lacked the explicit realpath trust path
@@ -194,6 +195,20 @@ Verdicts for the previous fork-only commits:
   - The local `codex-openclaw` ACP backend must use ChatGPT login/auth, not an inherited `OPENAI_API_KEY` from the gateway service environment.
   - The fix was local operator state: remove OpenAI/Codex API-key variables from the gateway process environment, re-login Codex with ChatGPT device auth, and keep Codex configured to reject API-key login.
   - This is documented below as a local workflow invariant because it should not become repo code or committed live config.
+
+- 2026-04-24 native Codex GPT-5.5 routing seam — keep until upstream separates the three OpenAI-family runtime paths
+  - Root cause from live gateway debugging: `codex/gpt-5.5` must run through the bundled native Codex app-server harness, while `openai/gpt-*` and `openai-codex/gpt-*` remain normal OpenClaw provider paths.
+  - The fork carries explicit model-prefix policy:
+    - `codex/gpt-5.5` is the native Codex app-server/default GPT-5.5 path.
+    - `openai/gpt-5.4` is the direct OpenAI API-key default.
+    - `openai-codex/gpt-5.4` is the OpenAI Codex OAuth-through-PI default.
+  - The fork also carries a narrow harness-selection fix so legacy PI session pins or history defaults cannot override an explicitly configured native `codex` harness for Codex-provider sessions.
+  - Cleanup decision: do not carry the discarded Codex binary resolver or agent-scoped `CODEX_HOME` auth-bridge experiments. The local stale Bun-installed `codex` binary was removed, and the repo patch should stay focused on routing/model policy, not local binary hygiene.
+  - Proof on the source checkout:
+    - `pnpm test src/agents/command/attempt-execution.cli.test.ts src/agents/harness/selection.test.ts extensions/openai/openai-codex-provider.test.ts src/commands/models/auth.test.ts src/plugins/provider-runtime.test.ts`
+    - direct build path: `node scripts/tsdown-build.mjs && node --import tsx scripts/write-build-info.ts`
+    - live gateway smoke after restart: `agentId=codex`, `sessionKey=agent:codex:main`, model `codex/gpt-5.5`, thinking `low`, no fallback, returned `OPENCLAW-CODEX-55-TIGHT-OK`.
+  - Treat this as a temporary routing/defaults carry. If upstream adopts equivalent prefix semantics and native Codex harness selection behavior, delete the local patch and remove this entry plus seam 10 below.
 
 - 2026-04-15 Discord auto-TTS native voice-note regression seam — keep until upstream preserves voice intent end-to-end
   - Plain-text auto-TTS on Discord regressed so routed replies could arrive as plain opus attachments instead of native voice-message bubbles, and direct voice sends could fail when the synthesized audio artifact was only reachable through trusted local-media access.
@@ -836,6 +851,59 @@ Required invariants after rebase:
 - The prompt wrapper keeps the transcript isolated in its own section so Gemini only speaks the intended transcript text.
 - Talk-mode Google overrides can inherit the base Google prompt-steering fields and selectively replace any subset of them.
 - Docs still describe these fields as OpenClaw prompt-steering helpers rather than native Gemini `SpeechConfig` keys.
+
+### 10. Native Codex GPT-5.5 routing seam
+
+Status: implemented in the source checkout
+
+Why this exists:
+
+- The fork wants `codex/gpt-5.5` to mean the native Codex app-server harness, not the direct OpenAI API provider and not OpenAI Codex OAuth through PI.
+- OpenAI-family prefixes carry different auth/runtime semantics:
+  - `codex/*` is native Codex app-server harness.
+  - `openai/*` is direct OpenAI API-key provider.
+  - `openai-codex/*` is OpenAI Codex OAuth through PI.
+- Existing session history can contain legacy PI pins. Those pins must not silently steal a run when config explicitly asks for the native Codex harness.
+
+Behavior carried by this fork:
+
+- OpenAI default model constants use `openai/gpt-5.4`.
+- OpenAI Codex OAuth default model constants use `openai-codex/gpt-5.4`.
+- Docs and auth/model hints explain that GPT-5.5 is available through `codex/gpt-5.5` on the native Codex harness, while OpenAI and OpenAI-Codex provider defaults stay on GPT-5.4.
+- `runAgentAttempt(...)` does not synthesize or preserve a PI harness pin for Codex-provider sessions when the session history predates the native harness.
+- `selectAgentHarness(...)` lets explicit plugin harness config override an existing PI pin, while preserving explicit non-PI plugin pins and normal PI behavior.
+
+Primary seam files:
+
+- `extensions/openai/default-models.ts`
+- `src/plugins/provider-model-defaults.ts`
+- `src/agents/command/attempt-execution.ts`
+- `src/agents/harness/selection.ts`
+- `docs/plugins/codex-harness.md`
+- `docs/providers/openai.md`
+
+Primary seam tests:
+
+- `src/agents/command/attempt-execution.cli.test.ts`
+- `src/agents/harness/selection.test.ts`
+- `extensions/openai/openai-codex-provider.test.ts`
+- `src/commands/models/auth.test.ts`
+- `src/plugins/provider-runtime.test.ts`
+
+Rebase notes:
+
+- Keep this seam as routing/default policy only.
+- Do not reintroduce the discarded Codex app-server binary resolver or agent-scoped `CODEX_HOME` materialization unless a fresh live failure proves repo code must own that behavior.
+- If a local machine has multiple `codex` binaries, fix local PATH/binary state first; do not expand this fork seam for local binary hygiene.
+- Keep `codex/gpt-*`, `openai/gpt-*`, and `openai-codex/gpt-*` semantics distinct in docs, auth hints, provider defaults, and tests.
+
+Required invariants after rebase:
+
+- `codex/gpt-5.5` selects the native Codex app-server harness and can complete a live low-thinking codex-agent turn without fallback.
+- `openai/gpt-5.4` remains the direct OpenAI API-key default.
+- `openai-codex/gpt-5.4` remains the OpenAI Codex OAuth-through-PI default.
+- Explicit native Codex harness config wins over stale PI session pins for Codex-provider sessions.
+- Existing explicit non-PI harness pins and explicit PI runtime selection keep their previous behavior.
 
 ## Replay checklist
 

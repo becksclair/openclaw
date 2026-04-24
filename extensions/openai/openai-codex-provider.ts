@@ -484,7 +484,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         ? {
             suppress: true,
             errorMessage:
-              "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+              "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai-codex/gpt-5.4 for Codex OAuth or codex/gpt-5.5 for the native Codex harness.",
           }
         : undefined,
     preferRuntimeResolvedModel: (ctx) => {

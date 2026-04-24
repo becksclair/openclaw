@@ -88,7 +88,11 @@ function selectAgentHarnessDecision(params: {
   agentHarnessId?: string;
 }): AgentHarnessSelectionDecision {
   const pinnedPolicy = resolvePinnedAgentHarnessPolicy(params.agentHarnessId);
-  const policy = pinnedPolicy ?? resolveAgentHarnessPolicy(params);
+  const configuredPolicy = resolveAgentHarnessPolicy(params);
+  const policy =
+    pinnedPolicy && shouldHonorPinnedAgentHarnessPolicy(pinnedPolicy, configuredPolicy)
+      ? pinnedPolicy
+      : configuredPolicy;
   // PI is intentionally not part of the plugin candidate list. It is the legacy
   // fallback path, so `fallback: "none"` can prove that only plugin harnesses run.
   const pluginHarnesses = listPluginAgentHarnesses();
@@ -271,6 +275,20 @@ function resolvePinnedAgentHarnessPolicy(
     return undefined;
   }
   return { runtime, fallback: "none" };
+}
+
+function shouldHonorPinnedAgentHarnessPolicy(
+  pinnedPolicy: AgentHarnessPolicy,
+  configuredPolicy: AgentHarnessPolicy,
+): boolean {
+  if (
+    pinnedPolicy.runtime === "pi" &&
+    configuredPolicy.runtime !== "auto" &&
+    configuredPolicy.runtime !== "pi"
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export async function maybeCompactAgentHarnessSession(

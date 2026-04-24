@@ -261,8 +261,14 @@ describe("selectAgentHarness", () => {
     );
   });
 
-  it("keeps an existing session pinned to PI even when config now forces a plugin harness", () => {
-    registerFailingCodexHarness();
+  it("lets explicit plugin harness config override an existing PI-pinned session", () => {
+    const runAttempt = vi.fn(async () => createAttemptResult("codex"));
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: vi.fn(() => ({ supported: true as const, priority: 100 })),
+      runAttempt,
+    });
 
     expect(
       selectAgentHarness({
@@ -271,7 +277,7 @@ describe("selectAgentHarness", () => {
         agentHarnessId: "pi",
         config: { agents: { defaults: { embeddedHarness: { runtime: "codex" } } } },
       }).id,
-    ).toBe("pi");
+    ).toBe("codex");
   });
 
   it("keeps an existing session pinned to its plugin harness even when env now forces PI", () => {

@@ -52,6 +52,23 @@ const ACP_TRANSCRIPT_USAGE = {
   },
 } as const;
 
+function resolveSessionPinnedAgentHarnessId(params: {
+  provider: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionId: string;
+  sessionHasHistory?: boolean;
+}): string | undefined {
+  if (params.sessionEntry?.sessionId !== params.sessionId) {
+    return undefined;
+  }
+  const pinnedAgentHarnessId =
+    params.sessionEntry.agentHarnessId ?? (params.sessionHasHistory ? "pi" : undefined);
+  if (pinnedAgentHarnessId === "pi" && params.provider.trim().toLowerCase() === "codex") {
+    return undefined;
+  }
+  return pinnedAgentHarnessId;
+}
+
 type TranscriptUsage = {
   input?: number;
   output?: number;
@@ -262,10 +279,12 @@ export function runAgentAttempt(params: {
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-  const sessionPinnedAgentHarnessId =
-    params.sessionEntry?.sessionId === params.sessionId
-      ? (params.sessionEntry.agentHarnessId ?? (params.sessionHasHistory ? "pi" : undefined))
-      : undefined;
+  const sessionPinnedAgentHarnessId = resolveSessionPinnedAgentHarnessId({
+    provider: params.providerOverride,
+    sessionEntry: params.sessionEntry,
+    sessionId: params.sessionId,
+    sessionHasHistory: params.sessionHasHistory,
+  });
   const authProfileId =
     params.providerOverride === params.authProfileProvider
       ? params.sessionEntry?.authProfileOverride

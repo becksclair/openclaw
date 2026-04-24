@@ -396,6 +396,50 @@ describe("embedded attempt harness pinning", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  async function runCodexAttemptWithPotentialPiPin(params: {
+    sessionEntry: SessionEntry;
+    runId: string;
+  }) {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "codex",
+      modelOverride: "gpt-5.5",
+      cfg: {} as OpenClawConfig,
+      sessionEntry: params.sessionEntry,
+      sessionId: params.sessionEntry.sessionId,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "continue",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "low",
+      timeoutMs: 1_000,
+      runId: params.runId,
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "codex",
+      sessionHasHistory: true,
+    });
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: undefined,
+        model: "gpt-5.5",
+        provider: "codex",
+      }),
+    );
+  }
+
   it("treats legacy sessions with history as PI-pinned", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "legacy-session",
@@ -437,6 +481,27 @@ describe("embedded attempt harness pinning", () => {
         agentHarnessId: "pi",
       }),
     );
+  });
+
+  it("does not pin codex provider sessions to legacy PI history", async () => {
+    await runCodexAttemptWithPotentialPiPin({
+      sessionEntry: {
+        sessionId: "legacy-codex-session",
+        updatedAt: Date.now(),
+      },
+      runId: "run-codex-no-legacy-pi-pin",
+    });
+  });
+
+  it("does not keep a stored PI harness pin for codex provider sessions", async () => {
+    await runCodexAttemptWithPotentialPiPin({
+      sessionEntry: {
+        sessionId: "stored-pi-codex-session",
+        agentHarnessId: "pi",
+        updatedAt: Date.now(),
+      },
+      runId: "run-codex-ignore-stored-pi-pin",
+    });
   });
 
   it("leaves a fresh unpinned session on config-selected harness resolution", async () => {
