@@ -356,20 +356,22 @@ export class AcpSessionManager {
     return await this.withSessionActor(sessionKey, async () => {
       const backend = this.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
       const runtime = backend.runtime;
-      const rawInitialRuntimeOptions = validateRuntimeOptionPatch({
+      const rawInitialRuntimeOptions = {
         ...input.runtimeOptions,
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-      });
-      const requestedCwdProvided = rawInitialRuntimeOptions.cwd !== undefined;
+      };
+      const requestedCwdProvided =
+        Object.hasOwn(rawInitialRuntimeOptions, "cwd") &&
+        rawInitialRuntimeOptions.cwd !== undefined;
       const runtimeCapabilities = requestedCwdProvided
         ? await this.resolveRuntimeCapabilities({ runtime })
         : undefined;
       const runtimeManagesCwd = hasManagedRuntimeOption(runtimeCapabilities, "cwd");
       const runtimeOptionsWithoutManagedCwd = { ...rawInitialRuntimeOptions };
       delete runtimeOptionsWithoutManagedCwd.cwd;
-      const initialRuntimeOptions = runtimeManagesCwd
-        ? runtimeOptionsWithoutManagedCwd
-        : rawInitialRuntimeOptions;
+      const initialRuntimeOptions = validateRuntimeOptionPatch(
+        runtimeManagesCwd ? runtimeOptionsWithoutManagedCwd : rawInitialRuntimeOptions,
+      );
       const requestedCwd = initialRuntimeOptions.cwd;
       assertRuntimeCwd(requestedCwd, "ACP_SESSION_INIT_FAILED");
       this.enforceConcurrentSessionLimit({

@@ -1065,8 +1065,7 @@ async function dispatchDiscordCommandInteraction(params: {
       interaction.channel?.type === ChannelType.PrivateThread ||
       interaction.channel?.type === ChannelType.AnnouncementThread;
     const messageThreadId = !isDirectMessage && isThreadChannel ? channelId : undefined;
-    const threadParentId =
-      !isDirectMessage && isThreadChannel ? safeChannelInfo.parentId : undefined;
+    const pluginThreadParentId = !isDirectMessage && isThreadChannel ? threadParentId : undefined;
     const { effectiveRoute } = await getNativeRouteState();
     const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
     const pluginReply = await executePluginCommandImpl({
@@ -1087,7 +1086,7 @@ async function dispatchDiscordCommandInteraction(params: {
       to: `slash:${user.id}`,
       accountId: effectiveRoute.accountId,
       messageThreadId,
-      threadParentId,
+      threadParentId: pluginThreadParentId,
     });
     if (!hasRenderableReplyPayload(pluginReply)) {
       await respond("Done.");

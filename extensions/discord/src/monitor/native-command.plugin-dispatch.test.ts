@@ -8,7 +8,6 @@ import {
   setActivePluginRegistry,
 } from "../../../../test/helpers/plugins/plugin-registry.js";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
-import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import {
   createMockCommandInteraction,
   type MockCommandInteraction,

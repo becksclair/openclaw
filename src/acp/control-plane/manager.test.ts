@@ -1337,36 +1337,38 @@ describe("AcpSessionManager", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    hoisted.upsertAcpSessionMetaMock.mockResolvedValue({
-      sessionKey: "agent:codex:acp:session-cwd-runtime-options",
-      storeSessionKey: "agent:codex:acp:session-cwd-runtime-options",
-      acp: readySessionMeta({
-        runtimeOptions: {
-          cwd: "/workspace/from-runtime-options",
-        },
-        cwd: "/workspace/from-runtime-options",
-      }),
-    });
-
-    const manager = new AcpSessionManager();
-    await manager.initializeSession({
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-cwd-runtime-options",
-      agent: "codex",
-      mode: "persistent",
-      runtimeOptions: {
-        cwd: "/workspace/from-runtime-options",
-      },
-    });
-
-    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
-      expect.objectContaining({
+    await withTempDir({ prefix: "openclaw-acp-runtime-options-cwd-" }, async (cwd) => {
+      hoisted.upsertAcpSessionMetaMock.mockResolvedValue({
         sessionKey: "agent:codex:acp:session-cwd-runtime-options",
-        cwd: "/workspace/from-runtime-options",
-      }),
-    );
-    expect(extractRuntimeOptionsFromUpserts()).toContainEqual({
-      cwd: "/workspace/from-runtime-options",
+        storeSessionKey: "agent:codex:acp:session-cwd-runtime-options",
+        acp: readySessionMeta({
+          runtimeOptions: {
+            cwd,
+          },
+          cwd,
+        }),
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.initializeSession({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-cwd-runtime-options",
+        agent: "codex",
+        mode: "persistent",
+        runtimeOptions: {
+          cwd,
+        },
+      });
+
+      expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:codex:acp:session-cwd-runtime-options",
+          cwd,
+        }),
+      );
+      expect(extractRuntimeOptionsFromUpserts()).toContainEqual({
+        cwd,
+      });
     });
   });
 

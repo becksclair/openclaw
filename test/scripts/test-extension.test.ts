@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -36,6 +37,11 @@ function findExtensionWithoutTests() {
   return extensionId ?? "missing-no-test-extension";
 }
 
+function optionalBundledExtensionIds(extensionIds: string[]): string[] {
+  return extensionIds.filter((extensionId) =>
+    fs.existsSync(path.join(process.cwd(), "extensions", extensionId, "package.json")),
+  );
+}
 describe("scripts/test-extension.mjs", () => {
   it("resolves split channel extensions onto their own vitest configs", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "slack", cwd: process.cwd() });
@@ -156,7 +162,11 @@ describe("scripts/test-extension.mjs", () => {
   });
 
   it("resolves memory extensions onto the memory vitest config", () => {
-    for (const extensionId of ["memory-core", "memory-maintenance"]) {
+    const memoryExtensionIds = [
+      "memory-core",
+      ...optionalBundledExtensionIds(["memory-maintenance"]),
+    ];
+    for (const extensionId of memoryExtensionIds) {
       const plan = resolveExtensionTestPlan({ targetArg: extensionId, cwd: process.cwd() });
 
       expect(plan.extensionId).toBe(extensionId);
@@ -256,6 +266,10 @@ describe("scripts/test-extension.mjs", () => {
   });
 
   it("batches extensions into config-specific vitest invocations", () => {
+    const memoryExtensionIds = [
+      "memory-core",
+      ...optionalBundledExtensionIds(["memory-maintenance"]),
+    ];
     const batch = resolveExtensionBatchPlan({
       cwd: process.cwd(),
       extensionIds: [
@@ -270,8 +284,7 @@ describe("scripts/test-extension.mjs", () => {
         "whatsapp",
         "zalo",
         "zalouser",
-        "memory-core",
-        "memory-maintenance",
+        ...memoryExtensionIds,
         "msteams",
         "feishu",
         "irc",
@@ -295,8 +308,7 @@ describe("scripts/test-extension.mjs", () => {
       "line",
       "matrix",
       "mattermost",
-      "memory-core",
-      "memory-maintenance",
+      ...memoryExtensionIds,
       "msteams",
       "openai",
       "qa-lab",
@@ -382,8 +394,8 @@ describe("scripts/test-extension.mjs", () => {
       {
         config: "test/vitest/vitest.extension-memory.config.ts",
         estimatedCost: expect.any(Number),
-        extensionIds: ["memory-core", "memory-maintenance"],
-        roots: [bundledPluginRoot("memory-core"), bundledPluginRoot("memory-maintenance")],
+        extensionIds: memoryExtensionIds,
+        roots: memoryExtensionIds.map((extensionId) => bundledPluginRoot(extensionId)),
         testFileCount: expect.any(Number),
       },
       {

@@ -48,62 +48,41 @@ These are the working rules that kept this branch smaller during the voice-routi
   - Once behavior is green, review the diff and remove files that no longer carry fork-specific value.
   - Do not keep formatting churn, stale tests, or dead imports in the fork.
 
-## Current replay status: 2026-04-22 onto upstream/main `a99490fba4`
+## Current replay status: 2026-04-24 onto upstream/main `f04a3dced0`
 
-This replay branch is intentionally mid-port.
-
-For `bex/replay-upstream-2026-04-22-tip`, use this section as the branch-truth
-snapshot. Treat the seam inventory below as the target carry contract from the
-source checkout unless a seam section explicitly says it has already been
-reimplemented on this branch.
+For `bex/replay-upstream-2026-04-24-tip`, this is the branch-truth snapshot.
+The replay started from a fresh worktree at current `upstream/main` after the
+planned `d16b879334` base had moved.
 
 - Context gaps in this fresh replay worktree:
   - `CONTINUITY.md` is absent.
   - `NOTES.md` is absent.
-- Wave 1 is reimplemented upstream-first on this branch:
-  - seam 3: Agent-scoped Talk/TTS
-  - seam 9: Google Gemini TTS prompt-steering
-- Wave 2 voice-routing seam is reimplemented upstream-first on this branch:
-  - seam 1: shared preview-text fallback/dedupe in `src/auto-reply/reply/dispatch-from-config.ts`
-  - seam 1 / voice-note carry: Opus compatibility normalization in `extensions/speech-core/src/tts.ts`
-  - seam 1: routed `audioAsVoice` payloads stay on channel `sendPayload` in `src/infra/outbound/deliver.ts`
-  - seam 1: Discord outbound routed voice sends preserve the native voice path in `extensions/discord/src/outbound-adapter.ts` and `extensions/discord/src/send.outbound.ts`
-  - seam 1: Discord native slash-command and interaction replies preserve `audioAsVoice`, routed-account text policy, and voice-only cleanup semantics in `extensions/discord/src/monitor/native-command.ts` and `extensions/discord/src/monitor/native-command-ui.ts`
-  - seam 1: Discord direct reply callers preserve trusted local-media roots in `extensions/discord/src/monitor/reply-delivery.ts` and `extensions/discord/src/actions/runtime.messaging.ts`
-  - seam 1: Telegram outbound preserves `audioAsVoice` in `extensions/telegram/src/outbound-adapter.ts`
-- Wave 3 Control UI Talk read-aloud seam is reimplemented upstream-first on this branch:
-  - seam 5: Control UI read-aloud now routes through gateway Talk in `ui/src/ui/chat/talk-tts.ts` instead of browser speech synthesis
-  - seam 5: read-aloud agent selection now lives in `ui/src/ui/chat/read-aloud-agent.ts` and pins explicit agent sessions while resolving the default configured agent for the `main` session alias
-  - seam 5: chat message-group rendering only exposes read-aloud when a gateway client is available, and passes read-aloud errors and agent identity through `ui/src/ui/chat/grouped-render.ts` and `ui/src/ui/views/chat.ts`
-  - seam 5: app render resolves the effective read-aloud agent from live session state and passes the gateway client into chat rendering in `ui/src/ui/app-render.ts`
-- Focused Wave 1 proof completed on this branch:
-  - `pnpm test src/tts/tts-config.test.ts src/gateway/talk-agent-config.test.ts`
-  - `pnpm test src/gateway/server-methods/tts.test.ts src/gateway/server-methods/talk.test.ts src/gateway/server.talk-config.test.ts`
-  - `pnpm test extensions/google/speech-provider.test.ts`
-  - `pnpm test src/auto-reply/reply/commands-tts.test.ts src/auto-reply/reply/dispatch-acp.test.ts`
-  - `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/reply/dispatch-from-config.reply-dispatch.test.ts src/auto-reply/reply/dispatch-from-config.acp-abort.test.ts`
-  - `pnpm test src/agents/openclaw-tools.tts-scope.test.ts src/auto-reply/reply/session.test.ts src/config/schema.base.generated.test.ts`
-  - `pnpm config:docs:gen`
-  - `pnpm config:schema:gen`
-  - `pnpm build`
-- Focused Wave 2 first-slice proof completed on this branch:
-  - `pnpm test extensions/speech-core/src/tts.test.ts`
-  - `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts src/auto-reply/reply/dispatch-from-config.reply-dispatch.test.ts`
-  - `pnpm test src/infra/outbound/deliver.test.ts`
-  - `pnpm test extensions/discord/src/outbound-adapter.test.ts`
-  - `pnpm build`
-- Focused Wave 2 interaction / Telegram follow-on proof completed on this branch:
-  - `pnpm test extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts extensions/discord/src/monitor/native-command.model-picker.test.ts extensions/discord/src/monitor/native-command.status-direct.test.ts extensions/discord/src/actions/runtime.test.ts extensions/discord/src/monitor/reply-delivery.test.ts extensions/discord/src/send.sends-basic-channel-messages.test.ts`
-  - `pnpm test extensions/telegram/src/outbound-adapter.test.ts`
-  - `pnpm build`
-- Focused Wave 3 Control UI read-aloud proof completed on this branch:
-  - `pnpm test ui/src/ui/views/chat.test.ts`
-  - `pnpm build`
-- In this branch, `src/auto-reply/reply/dispatch-from-config.ts` currently
-  carries both the seam 3 agent-scoped config resolution and the seam 1 shared
-  preview-text fallback/dedupe behavior. The remaining major replay work now
-  sits outside the Discord/Telegram voice-routing lane and the Control UI Talk
-  read-aloud path.
+- Active product seams reimplemented upstream-first on this branch:
+  - seam 1: shared voice-routing, preview fallback, Opus voice-note normalization, and Discord/Telegram native voice preservation
+  - seam 3: agent-scoped Talk/TTS config resolution, session initialization, gateway `tts.convert`, and reply/tool/Discord voice paths
+  - seam 5: Control UI Talk read-aloud through gateway Talk instead of browser speech synthesis
+  - seam 6: Telegram inbound-audio auto-TTS via explicit `InboundAudio` context
+  - seam 7: ACP local cwd validation, backend-managed runtime options, and persistent binding reset
+  - seam 8: parent-side generic ACP/Discord support needed by the private `acpx-remote` extension
+  - seam 9: Google Gemini TTS prompt-steering fields
+  - Discord trusted-by-default inbound context remains opt-in through config.
+- Support seams carried after re-check:
+  - safe-bin trust now checks canonical realpaths when the resolver provides them; upstream still lacked the explicit realpath trust path
+  - runtime-sidecar generation filters to tracked bundled plugin directories so ignored private nested repos do not leak into parent baselines
+  - local test routing includes the private `acpx-remote` and `memory-maintenance` extension helpers when those nested repos are present
+- Generated surfaces were regenerated on this branch after replay:
+  - `src/config/schema.base.generated.ts`
+  - `src/config/bundled-channel-config-metadata.generated.ts`
+  - `docs/.generated/config-baseline.sha256`
+  - `scripts/lib/bundled-runtime-sidecar-paths.json`
+  - `docs/.generated/plugin-sdk-api-baseline.sha256`
+- Validation state:
+  - `pnpm install` passed in the fresh replay worktree, and again after temporary private nested-extension validation was removed.
+  - Focused TTS/Talk/Gemini, Discord voice/interaction, Telegram voice, auto-reply/session/tool, UI read-aloud, Discord channel, ACP cwd/runtime, safe-bin, bundled-plugin metadata, and scoped-config tests passed on this branch.
+  - Temporary private nested-extension proof passed with copied local checkouts: `pnpm test:extension acpx-remote` and `pnpm test:extension memory-maintenance`.
+  - Final replay gates passed on this branch: `pnpm build`, `pnpm ui:build`, `pnpm check`, `pnpm test`, `pnpm config:docs:check`, and `pnpm plugin-sdk:api:check`.
+  - Extra generated-surface checks passed: `pnpm config:channels:check`, `pnpm config:schema:check`, and `pnpm runtime-sidecars:check`. The schema check reported only the expected parent-worktree warnings for absent private nested plugins.
+  - Landing is still intentionally unperformed: do not force-push `origin/main`, realign local `main`, or restart a gateway without explicit landing approval and a fresh upstream preflight.
 
 ## Replay impact snapshot: 2026-04-15 onto upstream/main `d7cc6f7643`
 
