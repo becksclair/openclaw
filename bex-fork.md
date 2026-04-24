@@ -48,14 +48,15 @@ These are the working rules that kept this branch smaller during the voice-routi
   - Once behavior is green, review the diff and remove files that no longer carry fork-specific value.
   - Do not keep formatting churn, stale tests, or dead imports in the fork.
 
-## Current replay status: 2026-04-24 onto upstream/main `c0a7b6a510`
+## Current replay status: 2026-04-24 onto upstream/main `754acc4478`
 
 For `bex/replay-upstream-2026-04-24-tip`, this is the branch-truth snapshot.
 The replay started from a fresh worktree at current `upstream/main` after the
 planned `d16b879334` base had moved, then was replayed again after
 `upstream/main` moved from `f04a3dced0` to `b164bb3717`, and again from
 `b164bb3717` to `93e95a2057`, and finally from `93e95a2057` to `27b8aa1ddf`,
-then from `27b8aa1ddf` to `c0a7b6a510`, during validation.
+then from `27b8aa1ddf` to `c0a7b6a510`, and then from `c0a7b6a510` to
+`754acc4478`, during validation.
 
 - Context gaps in this fresh replay worktree:
   - `CONTINUITY.md` is absent.
