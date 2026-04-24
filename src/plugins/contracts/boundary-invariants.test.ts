@@ -58,10 +58,10 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   (typeof BUNDLED_TYPED_HOOK_REGISTRATION_FILES)[number],
   readonly string[]
 >;
-const LOCAL_TYPED_HOOK_REGISTRATION_GUARDS = {
+const LOCAL_TYPED_HOOK_REGISTRATION_GUARDS: Record<string, readonly string[]> = {
   "extensions/acpx-remote/index.ts": ["reply_dispatch"],
   "extensions/memory-maintenance/src/heartbeat-trigger.ts": ["before_agent_reply"],
-} as const satisfies Record<string, readonly string[]>;
+};
 const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
   "extensions/active-memory/index.ts": ["resolveLivePluginConfigObject(", '"active-memory"'],
   "extensions/diffs/src/plugin.ts": [

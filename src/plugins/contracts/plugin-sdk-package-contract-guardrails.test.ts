@@ -11,6 +11,8 @@ const PUBLIC_CONTRACT_REFERENCE_FILES = [
   "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
 ] as const;
 const PLUGIN_SDK_SUBPATH_PATTERN = /openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)\b/g;
+const ROOTDIR_BOUNDARY_CANARY_RE =
+  /(?:^|\/)__rootdir_boundary_canary__\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u;
 
 function collectPluginSdkPackageExports(): string[] {
   const packageJson = JSON.parse(readFileSync(resolve(REPO_ROOT, "package.json"), "utf8")) as {
@@ -89,6 +91,9 @@ function collectExtensionFiles(dir: string): string[] {
       continue;
     }
     if (!entry.isFile() || !/\.(?:[cm]?ts|tsx|mts|cts)$/.test(entry.name)) {
+      continue;
+    }
+    if (ROOTDIR_BOUNDARY_CANARY_RE.test(nextPath.replaceAll("\\", "/"))) {
       continue;
     }
     files.push(nextPath);

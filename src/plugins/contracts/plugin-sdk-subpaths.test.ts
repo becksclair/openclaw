@@ -51,6 +51,8 @@ const PLUGIN_SDK_DIR = resolve(SRC_ROOT, "plugin-sdk");
 const sourceCache = new Map<string, string>();
 const repoTsFilesCache = new Map<string, string[]>();
 const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
+const ROOTDIR_BOUNDARY_CANARY_RE =
+  /(?:^|\/)__rootdir_boundary_canary__\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u;
 
 const importResolvedPluginSdkSubpath = async (specifier: string) => import(specifier);
 
@@ -241,6 +243,9 @@ function listRepoTsFiles(dir: string): string[] {
       return listRepoTsFiles(absolute);
     }
     if (!entry.isFile()) {
+      return [];
+    }
+    if (ROOTDIR_BOUNDARY_CANARY_RE.test(absolute.replaceAll("\\", "/"))) {
       return [];
     }
     return absolute.endsWith(".ts") ? [absolute] : [];
