@@ -903,6 +903,7 @@ export const nl: TranslationMap = {
     thinkingToggle: "Denken-/werken-output van assistent schakelen",
     toolCallsToggle: "Tool-aanroepen en toolresultaten schakelen",
     focusToggle: "Focusmodus schakelen (zijbalk + paginakop verbergen)",
+    readAloud: "Voorlezen",
     hideCronSessions: "Cron-sessies verbergen",
     showCronSessions: "Cron-sessies weergeven",
     showCronSessionsHidden: "Cron-sessies weergeven ({count} verborgen)",

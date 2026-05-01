@@ -902,6 +902,7 @@ export const pt_BR: TranslationMap = {
     thinkingToggle: "Alternar saída de pensamento/trabalho do assistente",
     toolCallsToggle: "Alternar chamadas de ferramenta e resultados de ferramenta",
     focusToggle: "Alternar modo de foco (ocultar barra lateral + cabeçalho da página)",
+    readAloud: "Ler em voz alta",
     hideCronSessions: "Ocultar sessões de cron",
     showCronSessions: "Mostrar sessões de cron",
     showCronSessionsHidden: "Mostrar sessões de cron ({count} ocultas)",

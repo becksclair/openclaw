@@ -906,6 +906,7 @@ export const de: TranslationMap = {
     thinkingToggle: "Ausgabe des Assistenten ein-/ausblenden",
     toolCallsToggle: "Tool-Aufrufe und Tool-Ergebnisse umschalten",
     focusToggle: "Fokusmodus ein-/ausschalten (Seitenleiste + Kopfzeile ausblenden)",
+    readAloud: "Vorlesen",
     hideCronSessions: "Cron-Sitzungen ausblenden",
     showCronSessions: "Cron-Sitzungen anzeigen",
     showCronSessionsHidden: "Cron-Sitzungen anzeigen ({count} ausgeblendet)",

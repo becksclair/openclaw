@@ -900,6 +900,7 @@ export const id: TranslationMap = {
     thinkingToggle: "Alihkan output berpikir/bekerja asisten",
     toolCallsToggle: "Alihkan panggilan alat dan hasil alat",
     focusToggle: "Alihkan mode fokus (sembunyikan bilah samping + header halaman)",
+    readAloud: "Bacakan",
     hideCronSessions: "Sembunyikan sesi cron",
     showCronSessions: "Tampilkan sesi cron",
     showCronSessionsHidden: "Tampilkan sesi cron ({count} disembunyikan)",

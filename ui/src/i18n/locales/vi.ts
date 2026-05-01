@@ -897,6 +897,7 @@ export const vi: TranslationMap = {
     thinkingToggle: "Bật/tắt đầu ra suy nghĩ/đang xử lý của trợ lý",
     toolCallsToggle: "Bật/tắt lượt gọi công cụ và kết quả công cụ",
     focusToggle: "Bật/tắt chế độ tập trung (ẩn thanh bên + tiêu đề trang)",
+    readAloud: "Đọc thành tiếng",
     hideCronSessions: "Ẩn phiên cron",
     showCronSessions: "Hiển thị phiên cron",
     showCronSessionsHidden: "Hiển thị phiên cron ({count} bị ẩn)",

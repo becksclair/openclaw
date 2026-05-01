@@ -130,6 +130,7 @@ export const sharedVitestConfig = {
   root: repoRoot,
   envFile: false,
   resolve: {
+    preserveSymlinks: true,
     alias: [
       {
         find: "openclaw/extension-api",

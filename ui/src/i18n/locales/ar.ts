@@ -892,6 +892,7 @@ export const ar: TranslationMap = {
     thinkingToggle: "تبديل مخرجات تفكير/عمل المساعد",
     toolCallsToggle: "تبديل استدعاءات الأدوات ونتائج الأدوات",
     focusToggle: "تبديل وضع التركيز (إخفاء الشريط الجانبي + رأس الصفحة)",
+    readAloud: "اقرأ بصوت عالٍ",
     hideCronSessions: "إخفاء جلسات cron",
     showCronSessions: "إظهار جلسات cron",
     showCronSessionsHidden: "إظهار جلسات cron ({count} مخفية)",

@@ -904,6 +904,7 @@ export const uk: TranslationMap = {
     thinkingToggle: "Перемкнути показ мислення/роботи асистента",
     toolCallsToggle: "Перемкнути виклики інструментів і результати інструментів",
     focusToggle: "Перемкнути режим фокусу (сховати бічну панель і заголовок сторінки)",
+    readAloud: "Прочитати вголос",
     hideCronSessions: "Сховати сеанси Cron",
     showCronSessions: "Показати сеанси Cron",
     showCronSessionsHidden: "Показати сеанси Cron ({count} приховано)",

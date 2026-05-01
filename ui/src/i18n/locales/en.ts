@@ -894,6 +894,7 @@ export const en: TranslationMap = {
     thinkingToggle: "Toggle assistant thinking/working output",
     toolCallsToggle: "Toggle tool calls and tool results",
     focusToggle: "Toggle focus mode (hide sidebar + page header)",
+    readAloud: "Read aloud",
     hideCronSessions: "Hide cron sessions",
     showCronSessions: "Show cron sessions",
     showCronSessionsHidden: "Show cron sessions ({count} hidden)",

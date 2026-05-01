@@ -901,6 +901,7 @@ export const fa: TranslationMap = {
     thinkingToggle: "تغییر وضعیت خروجی فکر/کار دستیار",
     toolCallsToggle: "تغییر وضعیت نمایش فراخوانی‌های ابزار و نتایج ابزار",
     focusToggle: "تغییر وضعیت حالت تمرکز (پنهان کردن نوار کناری + سرصفحه صفحه)",
+    readAloud: "با صدای بلند بخوان",
     hideCronSessions: "پنهان کردن نشست‌های cron",
     showCronSessions: "نمایش نشست‌های cron",
     showCronSessionsHidden: "نمایش نشست‌های cron ({count} پنهان)",

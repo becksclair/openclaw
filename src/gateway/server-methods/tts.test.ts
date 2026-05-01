@@ -3,6 +3,7 @@ import { ErrorCodes } from "../protocol/index.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
+  resolveEffectiveTtsConfig: vi.fn(() => ({})),
   resolveExplicitTtsOverrides: vi.fn(() => ({})),
   textToSpeech: vi.fn(async () => ({
     success: true,
@@ -43,10 +44,17 @@ vi.mock("../../tts/tts.js", () => ({
   textToSpeech: mocks.textToSpeech as typeof import("../../tts/tts.js").textToSpeech,
 }));
 
+vi.mock("../../tts/tts-config.js", () => ({
+  resolveEffectiveTtsConfig:
+    mocks.resolveEffectiveTtsConfig as typeof import("../../tts/tts-config.js").resolveEffectiveTtsConfig,
+}));
+
 describe("ttsHandlers", () => {
   beforeEach(() => {
     mocks.getRuntimeConfig.mockReset();
     mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.resolveEffectiveTtsConfig.mockReset();
+    mocks.resolveEffectiveTtsConfig.mockReturnValue({});
     mocks.resolveExplicitTtsOverrides.mockReset();
     mocks.resolveExplicitTtsOverrides.mockReturnValue({});
     mocks.textToSpeech.mockReset();
@@ -85,5 +93,66 @@ describe("ttsHandlers", () => {
       }),
     );
     expect(mocks.textToSpeech).not.toHaveBeenCalled();
+  });
+
+  it("resolves tts.convert against agent and channel scoped TTS config", async () => {
+    const runtimeConfig = {
+      messages: {
+        tts: {
+          provider: "openai",
+          voice: "global",
+        },
+      },
+    };
+    const effectiveTts = {
+      provider: "google",
+      voice: "agent-voice",
+    };
+    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
+    mocks.resolveEffectiveTtsConfig.mockReturnValue(effectiveTts);
+
+    const { ttsHandlers } = await import("./tts.js");
+    const respond = vi.fn();
+
+    await ttsHandlers["tts.convert"]({
+      params: {
+        text: "hello",
+        agentId: "reader",
+        channel: "telegram",
+        accountId: "personal",
+      },
+      respond,
+      context: { getRuntimeConfig: mocks.getRuntimeConfig },
+    } as never);
+
+    const scopedConfig = {
+      messages: {
+        tts: effectiveTts,
+      },
+    };
+    expect(mocks.resolveEffectiveTtsConfig).toHaveBeenCalledWith(runtimeConfig, {
+      agentId: "reader",
+      channelId: "telegram",
+      accountId: "personal",
+    });
+    expect(mocks.resolveExplicitTtsOverrides).toHaveBeenCalledWith({
+      cfg: scopedConfig,
+      provider: undefined,
+      modelId: undefined,
+      voiceId: undefined,
+    });
+    expect(mocks.textToSpeech).toHaveBeenCalledWith({
+      text: "hello",
+      cfg: scopedConfig,
+      channel: "telegram",
+      overrides: {},
+      disableFallback: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, {
+      audioPath: "/tmp/tts.mp3",
+      provider: "openai",
+      outputFormat: "mp3",
+      voiceCompatible: false,
+    });
   });
 });

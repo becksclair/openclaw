@@ -905,6 +905,7 @@ export const it: TranslationMap = {
     thinkingToggle: "Attiva/disattiva output di pensiero/elaborazione dell'assistente",
     toolCallsToggle: "Attiva/disattiva chiamate agli strumenti e risultati strumenti",
     focusToggle: "Attiva/disattiva modalità focus (nascondi barra laterale + intestazione pagina)",
+    readAloud: "Leggi ad alta voce",
     hideCronSessions: "Nascondi sessioni cron",
     showCronSessions: "Mostra sessioni cron",
     showCronSessionsHidden: "Mostra sessioni cron ({count} nascoste)",

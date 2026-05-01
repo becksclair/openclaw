@@ -896,6 +896,7 @@ export const ko: TranslationMap = {
     thinkingToggle: "어시스턴트 생각/작업 출력 전환",
     toolCallsToggle: "도구 호출 및 도구 결과 전환",
     focusToggle: "집중 모드 전환(사이드바 + 페이지 헤더 숨기기)",
+    readAloud: "소리 내어 읽기",
     hideCronSessions: "Cron 세션 숨기기",
     showCronSessions: "Cron 세션 표시",
     showCronSessionsHidden: "Cron 세션 표시({count}개 숨김)",

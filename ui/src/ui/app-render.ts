@@ -2366,6 +2366,7 @@ export function renderApp(state: AppViewState) {
               onSend: () => state.handleSendChat(),
               onCompact: () => state.handleSendChat("/compact", { restoreDraft: true }),
               onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),
+              onReadAloud: (text) => void state.handleReadAloud(text),
               canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),
               onQueueRemove: (id) => state.removeQueuedMessage(id),

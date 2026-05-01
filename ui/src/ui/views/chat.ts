@@ -110,6 +110,7 @@ export type ChatProps = {
   onSend: () => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
+  onReadAloud?: (text: string) => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueSteer?: (id: string) => void;
@@ -960,6 +961,7 @@ export function renderChat(props: ChatProps) {
                 allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
                 contextWindow:
                   activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,
+                onReadAloud: props.onReadAloud,
                 onDelete: () => {
                   deleted.delete(item.key);
                   requestUpdate();

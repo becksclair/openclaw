@@ -903,6 +903,7 @@ export const ja_JP: TranslationMap = {
     thinkingToggle: "アシスタントの思考 / 作業出力の表示を切り替え",
     toolCallsToggle: "ツール呼び出しとツール結果の表示を切り替え",
     focusToggle: "フォーカスモードを切り替え（サイドバー + ページヘッダーを非表示）",
+    readAloud: "読み上げ",
     hideCronSessions: "Cron セッションを非表示",
     showCronSessions: "Cron セッションを表示",
     showCronSessionsHidden: "Cron セッションを表示（{count} 件を非表示中）",

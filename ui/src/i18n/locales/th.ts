@@ -887,6 +887,7 @@ export const th: TranslationMap = {
     thinkingToggle: "สลับการแสดงผลการคิด/การทำงานของผู้ช่วย",
     toolCallsToggle: "สลับการแสดงการเรียกใช้ tool และผลลัพธ์ของ tool",
     focusToggle: "สลับโหมดโฟกัส (ซ่อนแถบด้านข้าง + ส่วนหัวหน้า)",
+    readAloud: "อ่านออกเสียง",
     hideCronSessions: "ซ่อนเซสชัน cron",
     showCronSessions: "แสดงเซสชัน cron",
     showCronSessionsHidden: "แสดงเซสชัน cron (ซ่อนอยู่ {count})",

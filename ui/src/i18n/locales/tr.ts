@@ -905,6 +905,7 @@ export const tr: TranslationMap = {
     thinkingToggle: "Asistanın düşünme/çalışma çıktısını aç/kapat",
     toolCallsToggle: "Araç çağrılarını ve araç sonuçlarını aç/kapat",
     focusToggle: "Odak modunu aç/kapat (kenar çubuğunu + sayfa başlığını gizle)",
+    readAloud: "Sesli oku",
     hideCronSessions: "Cron oturumlarını gizle",
     showCronSessions: "Cron oturumlarını göster",
     showCronSessionsHidden: "Cron oturumlarını göster ({count} gizli)",

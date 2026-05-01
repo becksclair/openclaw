@@ -469,6 +469,7 @@ export type AppViewState = {
     resetChatInputHistoryNavigation: () => void;
     handleSendChat: (messageOverride?: string, opts?: ChatSendOptions) => Promise<void>;
     toggleRealtimeTalk: () => Promise<void>;
+    handleReadAloud: (text: string) => Promise<void>;
     steerQueuedChatMessage: (id: string) => Promise<void>;
     handleAbortChat: () => Promise<void>;
     removeQueuedMessage: (id: string) => void;

@@ -886,6 +886,7 @@ export const zh_CN: TranslationMap = {
     thinkingToggle: "切换助手思考/工作输出",
     toolCallsToggle: "切换工具调用和工具结果",
     focusToggle: "切换专注模式 (隐藏侧边栏 + 页面页眉)",
+    readAloud: "朗读",
     hideCronSessions: "隐藏定时任务会话",
     showCronSessions: "显示定时任务会话",
     showCronSessionsHidden: "显示定时任务会话 (已隐藏 {count} 个)",

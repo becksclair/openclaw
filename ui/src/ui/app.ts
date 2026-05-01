@@ -61,8 +61,10 @@ import {
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
+import { resolveReadAloudAgentId } from "./chat/read-aloud-agent.ts";
 import { RealtimeTalkSession, type RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
+import { speakText } from "./chat/talk-tts.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
@@ -936,6 +938,20 @@ export class OpenClawApp extends LitElement {
       this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
       this.lastError = this.realtimeTalkDetail;
     }
+  }
+
+  async handleReadAloud(text: string) {
+    if (!this.client || !this.connected) {
+      this.lastError = "Gateway not connected";
+      return;
+    }
+    const agentId = resolveReadAloudAgentId(this as unknown as AppViewState, this.assistantAgentId);
+    await speakText(text, this.client, {
+      agentId,
+      onError: (error) => {
+        this.lastError = error;
+      },
+    });
   }
 
   async steerQueuedChatMessage(id: string) {

@@ -907,6 +907,7 @@ export const fr: TranslationMap = {
     thinkingToggle: "Afficher/masquer la sortie de réflexion/travail de l’assistant",
     toolCallsToggle: "Afficher/masquer les appels d’outil et les résultats d’outil",
     focusToggle: "Activer/désactiver le mode focus (masquer la barre latérale + l’en-tête de page)",
+    readAloud: "Lire à voix haute",
     hideCronSessions: "Masquer les sessions cron",
     showCronSessions: "Afficher les sessions cron",
     showCronSessionsHidden: "Afficher les sessions cron ({count} masquées)",
