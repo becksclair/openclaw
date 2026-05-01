@@ -123,13 +123,14 @@ Use the table below to pick the right model for your use case.
 
 </Tip>
 
-## Built-in catalog (41 total)
+## Built-in catalog (42 total)
 
 <AccordionGroup>
-  <Accordion title="Private models (26) — fully private, no logging">
+  <Accordion title="Private models (27) — fully private, no logging">
     | Model ID                               | Name                                | Context | Features                   |
     | -------------------------------------- | ----------------------------------- | ------- | -------------------------- |
     | `kimi-k2-5`                            | Kimi K2.5                           | 256k    | Default, reasoning, vision |
+    | `kimi-k2-6`                            | Kimi K2.6                           | 256k    | Reasoning, vision          |
     | `kimi-k2-thinking`                     | Kimi K2 Thinking                    | 256k    | Reasoning                  |
     | `llama-3.3-70b`                        | Llama 3.3 70B                       | 128k    | General                    |
     | `llama-3.2-3b`                         | Llama 3.2 3B                        | 128k    | General                    |

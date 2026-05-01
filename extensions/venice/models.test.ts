@@ -126,6 +126,12 @@ describe("venice-models", () => {
     expect(def.maxTokens).toBe(entry.maxTokens);
   });
 
+  it("includes current Kimi K2 Venice models in the static catalog", () => {
+    expect(VENICE_MODEL_CATALOG.map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["kimi-k2-5", "kimi-k2-6"]),
+    );
+  });
+
   it("retries transient fetch failures before succeeding", async () => {
     let attempts = 0;
     const fetchMock = vi.fn(async () => {

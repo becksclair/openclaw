@@ -250,6 +250,15 @@ export const VENICE_MODEL_CATALOG = [
     privacy: "private",
   },
   {
+    id: "kimi-k2-6",
+    name: "Kimi K2.6",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 256000,
+    maxTokens: 65536,
+    privacy: "private",
+  },
+  {
     id: "kimi-k2-thinking",
     name: "Kimi K2 Thinking",
     reasoning: true,
