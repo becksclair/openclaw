@@ -75,6 +75,11 @@ then from `27b8aa1ddf` to `c0a7b6a510`, and then from `c0a7b6a510` to
   - safe-bin trust now checks canonical realpaths when the resolver provides them; upstream still lacked the explicit realpath trust path
   - runtime-sidecar generation filters to tracked bundled plugin directories so ignored private nested repos do not leak into parent baselines
   - local test routing includes the private `acpx-remote` and `memory-maintenance` extension helpers when those nested repos are present
+- Custom extension links tracked by this fork:
+  - `extensions/acpx-remote` links to the private ACP-over-SSH runtime backend repo.
+  - `extensions/codex-transcribe` links to the private Codex-backed audio transcription provider repo.
+  - `extensions/memory-maintenance` links to the private memory-maintenance orchestration plugin repo.
+  - Keep these gitlinks linked during replay unless the corresponding private extension is intentionally retired and this ledger is updated in the same change.
 - Generated surfaces were regenerated on this branch after replay:
   - `src/config/schema.base.generated.ts`
   - `src/config/bundled-channel-config-metadata.generated.ts`
@@ -185,7 +190,7 @@ Verdicts for the previous fork-only commits:
   - This is paired with the `acpx-remote` seam below, where the remote backend owns cwd mapping instead of forcing users to remember local alias paths.
 
 - 2026-04-16 `acpx-remote` parent support seam — keep until upstream has equivalent backend-managed ACP runtime semantics
-  - The `acpx-remote` implementation itself now lives in its own private nested repository at `extensions/acpx-remote/`; the OpenClaw parent repo deliberately carries only the generic support seams needed for that extension to work from an in-tree checkout.
+  - The `acpx-remote` implementation itself lives in its own private linked repository at `extensions/acpx-remote/`; the OpenClaw parent repo deliberately carries only the gitlink plus the generic support seams needed for that extension to work from an in-tree checkout.
   - Parent-side OpenClaw changes add backend-managed ACP runtime-option semantics, local cwd validation for unmanaged ACP backends, destructive persistent-binding reset when backend/cwd/error state changes, and Discord persistent-thread id normalization so remote bound sessions are actually reached.
   - The private extension registers backend id `acpx-remote`, creates private local alias directories for remote agent cwd mappings, starts ACP over SSH, rewrites ACP cwd fields across the bridge, and advertises `cwd` as backend-managed so core will not validate or mutate it as a local path.
   - Live proof was completed for both an Orion remote ACP binding and a Cesium remote ACP binding through Discord persistent threads; the persisted sessions used backend `acpx-remote`, remote cwd mapping, and returned successful Discord replies from the bound sessions.
@@ -312,11 +317,12 @@ These are local operating rules, not carried fork seams.
   - Before blaming ACP routing for local Codex cost/auth surprises, check the gateway process environment for `OPENAI_API_KEY` / `CODEX_API_KEY` / `OPENAI_BASE_URL` style overrides and check `codex login status`.
   - Keep the local Codex config pinned to ChatGPT login so accidental API-key login fails fast instead of silently burning API credits.
 
-- Nested repo handling:
-  - `extensions/memory-maintenance/` remains outside the carried fork surface.
-  - Keep that nested repo managed from the source checkout's local exclude rules; do not fold it into the replay diff.
-  - When a replay worktree needs extension-focused validation, copy both `extensions/acpx-remote/` and `extensions/memory-maintenance/` from the source checkout into the replay worktree before running extension tests, then rerun `pnpm install` there so the workspace and extension test harness see the private packages. Treat those copies as local replay scaffolding, not parent-repo carry.
-  - On the 2026-04-22 replay branch, `pnpm test:extension memory-maintenance` is now a valid focused proof again because the helper routes `extensions/memory-maintenance/**` through the memory extension Vitest config.
+- Custom extension link handling:
+  - `extensions/acpx-remote/`, `extensions/codex-transcribe/`, and `extensions/memory-maintenance/` are intentional fork-owned links to private extension repositories.
+  - Keep those links present during replay unless the private extension is intentionally retired; do not silently drop them just because upstream does not know about them.
+  - The parent repo should track only the extension links and generic parent support seams, not vendored private extension source.
+  - After creating or refreshing a replay worktree, ensure the linked private extension checkouts are populated, rerun `pnpm install`, then use their focused extension tests as external proof for extension-owned behavior.
+  - `pnpm test:extension memory-maintenance` remains a valid focused proof when the private linked repo is present because the helper routes `extensions/memory-maintenance/**` through the memory extension Vitest config.
 
 ## Seam inventory
 
@@ -704,7 +710,7 @@ Required invariants after rebase:
 
 ### 8. `acpx-remote` SSH ACP runtime support seam
 
-Status: implemented in the source checkout and reimplemented in the 2026-04-22 replay branch for the OpenClaw parent checkout; extension implementation lives in private nested repo `extensions/acpx-remote/`
+Status: implemented in the source checkout and reimplemented in the 2026-04-22 replay branch for the OpenClaw parent checkout; extension implementation lives in private linked repo `extensions/acpx-remote/`
 
 Why this exists:
 
@@ -794,7 +800,7 @@ Rebase notes:
 - Keep Discord id normalization inside the Discord plugin binding adapter; do not teach generic ACP core about Discord id prefixes.
 - Do not reintroduce a separate `remote-acp` appendix unless there is a concrete reason the extension boundary cannot own the behavior.
 - If the replay worktree does not include the private nested `extensions/acpx-remote/` checkout, treat parent-repo ACP/Discord tests plus build/check as the local proof bar and leave the private extension unit/live proof as an external nested-repo gate.
-- For replay worktrees that need private extension proof, copy both `extensions/acpx-remote/` and `extensions/memory-maintenance/` from the source checkout into the replay worktree first, then rerun `pnpm install`. Keep any resulting workspace/lockfile churn out of the parent carry unless the parent repo actually gained a real tracked dependency change.
+- For replay worktrees that need private extension proof, keep `extensions/acpx-remote/`, `extensions/codex-transcribe/`, and `extensions/memory-maintenance/` populated from their linked private repos, then rerun `pnpm install`. Keep any resulting workspace/lockfile churn out of the parent carry unless the parent repo actually gained a real tracked dependency change.
 - If upstream adds an equivalent remote ACP backend, compare lifecycle, cwd rewriting, backend identity, SSH config handling, backend-managed runtime options, and persistent binding behavior before dropping this carry.
 
 Required invariants after rebase:
@@ -914,8 +920,8 @@ When rebasing this fork onto a newer upstream base:
 3. Replay only the active seams above.
 4. Prefer upstream behavior wherever it now overlaps, but explicitly re-prove Discord voice delivery on the routed outbound lane, the direct reply lane, and the native slash-command/interaction lane before dropping any Discord voice-note carry.
 5. Re-prove Discord persistent ACP binding behavior separately from raw ACP session tests; the failure class lives at the channel binding/startup/live-mutation seam.
-6. If you need private extension validation in the replay worktree, copy both `extensions/acpx-remote/` and `extensions/memory-maintenance/` from the source checkout into that replay worktree, rerun `pnpm install`, and keep any resulting nested-repo or lockfile churn out of the parent carry.
-7. Re-prove `acpx-remote` with both unit tests and at least one real persistent Discord binding before treating remote ACP as carried; if the private nested repo is absent from the replay worktree, mark that extension proof as deferred external validation instead of faking a parent-repo green.
+6. If you need private extension validation in the replay worktree, keep `extensions/acpx-remote/`, `extensions/codex-transcribe/`, and `extensions/memory-maintenance/` populated from their linked private repos, rerun `pnpm install`, and keep any resulting linked-repo or lockfile churn out of the parent carry.
+7. Re-prove `acpx-remote` with both unit tests and at least one real persistent Discord binding before treating remote ACP as carried; if the private linked repo is absent from the replay worktree, mark that extension proof as deferred external validation instead of faking a parent-repo green.
 8. After replay, remove stale tests and redundant fork code before calling it done.
 
 ## Narrow validation set
@@ -937,7 +943,8 @@ Run these after replaying the live seams:
 - `pnpm test ui/src/ui/views/chat.test.ts`
 - `pnpm test extensions/discord/src/channel.test.ts`
 - `pnpm test src/acp/control-plane/manager.test.ts src/acp/persistent-bindings.test.ts src/config/config.acp-cwd.validation.test.ts`
-- `pnpm test:extension acpx-remote` (when the private nested repo checkout is present)
-- `pnpm test:extension memory-maintenance` (when the private nested repo checkout is present)
+- `pnpm test:extension acpx-remote` (when the private linked repo checkout is present)
+- `pnpm test:extension codex-transcribe` (when the private linked repo checkout is present)
+- `pnpm test:extension memory-maintenance` (when the private linked repo checkout is present)
 - `pnpm build`
 - `pnpm check`
