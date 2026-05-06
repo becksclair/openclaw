@@ -17,7 +17,7 @@ Current replay target: `v2026.5.6`.
 - `02915314ae` - active seam: keep Telegram transcribed-audio TTS intent through the reply path.
 - `6c4503c385` - active seam: keep agent-scoped TTS conversion config resolution.
 - `da4c5c7c34` - active seam: keep exec safe-bin realpath trust for approved safe binaries reached through symlinks or wrapper paths.
-- `replay-validation-hermeticity` - active seam: keep replay validation tests hermetic against local plugin install records, current metadata snapshot seams, and hosts without IPv6 loopback.
+- `docker-replay-validation` - active seam: keep the root `AGENTS.md` Docker-first Bex fork replay directives and run fork replay, build proof, and broad tests in a clean Docker validation container before deploying to Bex's live Gateway; use host-local tests only for targeted checks that intentionally depend on Bex's local environment.
 
 ## Seam inventory
 
@@ -190,27 +190,32 @@ Rebase notes:
 - Upstream added fs-safe primitives, exec argument allowlist hardening, dotenv/system-path trust blocking, and Windows fallback guards. Keep the realpath invariant while fitting the current safety model.
 - The safe condition is conjunctive when a realpath exists: both the invoked path directory and resolved target directory must satisfy safe-bin trust.
 
-### Replay validation test hermeticity
+### Docker replay validation directives
 
-Carry behavior: fork replay proof must stay deterministic on Bex's live workstation and in clean validation environments. Registry snapshot tests must build fixtures from explicit install-record state instead of reading ambient private plugin records; plugin activation boundary tests must mock the metadata snapshot seam that static model normalization now uses; Gateway canvas auth tests must reject bind failures cleanly so hosts without IPv6 loopback do not turn environment limits into Vitest timeouts.
+Carry behavior: root `AGENTS.md` must keep the Docker-first directives for Bex fork replay. Fork replay execution, build proof, broad unit tests, changed gates, and Docker/local E2E lanes should run inside a clean Docker validation container before changes are deployed to Bex's live Gateway. The container must not mount Bex's real `~/.openclaw`, private plugin install records, credentials, Gateway state, or host session data unless a proof explicitly requires those local resources. Host-local commands are reserved for narrow debugging loops and live checks that intentionally target Bex's environment, such as private plugin runtime wiring, Gateway status, Discord-bound ACP verifier work, or credential-backed live smoke tests.
 
 Primary seam files:
 
-- `src/plugins/plugin-registry-snapshot.test.ts`
-- `src/plugin-activation-boundary.test.ts`
-- `src/gateway/server.canvas-auth.test.ts`
+- `AGENTS.md`
+- `CLAUDE.md`
+- `bex-fork.md`
 
 Primary seam tests:
 
-- `pnpm test src/plugins/plugin-registry-snapshot.test.ts src/plugin-activation-boundary.test.ts src/gateway/server.canvas-auth.test.ts src/agents/simple-completion-runtime.selection.test.ts src/commands/status.summary.runtime.test.ts src/video-generation/runtime.test.ts`
-- `pnpm exec oxfmt --check --threads=1 src/plugins/plugin-registry-snapshot.test.ts src/plugin-activation-boundary.test.ts src/gateway/server.canvas-auth.test.ts`
-- `pnpm test`
+- `pnpm test:docker:local:all`
+- `pnpm test:docker:all`
+- clean-container build proof for `pnpm build`, `pnpm check:changed`, and broad `pnpm test` before deploy
+- host-local targeted proof only when the check intentionally depends on Bex's local environment
 
 Rebase notes:
 
-- Do not call `loadInstalledPluginIndex` from registry snapshot fixtures without explicit `installRecords` unless the test is intentionally proving installed-record discovery. Ambient records from local/private plugins can make persisted fast-path assertions fall back to derived state.
-- Keep activation-boundary tests mocked at the current metadata snapshot seam when static model normalization reaches manifest metadata before plugin runtime. Broad `plugin-registry` mocks alone are stale for this path.
-- Do not chase lack of host IPv6 loopback as replay behavior. The Gateway harness should reject and clean up listen errors so `EADDRNOTAVAIL ::1` remains an environment fact, not a dangling timeout or unhandled error.
+- Treat removal or softening of the root `AGENTS.md` Docker validation directives as a dropped seam. They are mandatory replay policy, not incidental local instructions.
+- Keep `CLAUDE.md` as the repo-local mirror/symlink of `AGENTS.md` so Claude-family agents receive the same Docker-first replay constraints.
+- Do not use Bex's host `~/.openclaw` as the default broad-test environment. If broad replay validation fails only because the host carries private plugin state, move the proof into the clean Docker validation container instead of patching unrelated tests to accommodate local state.
+- Keep the external `openclaw-fork-replay` skill instructions aligned with this Docker-first proof model.
+- Prefer Docker validation over Testbox for Bex fork replay. Testbox is an upstream/OpenClaw maintainer lane, not the default Bex fork replay lane.
+- After Docker build/test proof passes, deploy or restart the live Gateway only when explicitly requested and only after noting any live-session risk.
+- Keep Bex-owned custom extensions separate: push and install those repos when the replay depends on them, but do not push, fork, or republish third-party plugins unless Bex explicitly asks for that plugin.
 
 ## Narrow validation set
 
@@ -225,8 +230,8 @@ Rebase notes:
 - `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
 - `pnpm test src/gateway/server-methods/tts.test.ts`
 - `pnpm test src/infra/exec-safe-bin-trust.test.ts src/infra/exec-approvals-safe-bins.test.ts`
-- `pnpm test src/plugins/plugin-registry-snapshot.test.ts src/plugin-activation-boundary.test.ts src/gateway/server.canvas-auth.test.ts src/agents/simple-completion-runtime.selection.test.ts src/commands/status.summary.runtime.test.ts src/video-generation/runtime.test.ts`
-- `pnpm exec oxfmt --check --threads=1 src/plugins/plugin-registry-snapshot.test.ts src/plugin-activation-boundary.test.ts src/gateway/server.canvas-auth.test.ts`
+- `pnpm test:docker:local:all`
+- `pnpm test:docker:all`
 - `pnpm tsgo:core`
 - `pnpm tsgo:core:test`
 - `git diff --check`
@@ -235,4 +240,4 @@ Rebase notes:
 ## Deferred live proof
 
 - `./scripts/verify-codex-devbox-acp.js` needs the private `extensions/acpx-remote/` lifecycle, live Gateway state, and local Discord binding credentials.
-- `pnpm check:changed` is a broad gate for this replay set and belongs in Blacksmith Testbox on maintainer machines.
+- Host-local Gateway, private-plugin, and credential-backed live checks run after clean Docker proof only when explicitly needed.
