@@ -86,4 +86,41 @@ describe("ttsHandlers", () => {
     );
     expect(mocks.textToSpeech).not.toHaveBeenCalled();
   });
+
+  it("forwards agent and account scope into TTS conversion", async () => {
+    const { ttsHandlers } = await import("./tts.js");
+    const respond = vi.fn();
+
+    await ttsHandlers["tts.convert"]({
+      params: {
+        text: "hello",
+        channel: "telegram",
+        accountId: "bot-main",
+        agentId: "reader",
+        modelId: "voice-model",
+      },
+      respond,
+      context: { getRuntimeConfig: mocks.getRuntimeConfig },
+    } as never);
+
+    expect(mocks.resolveExplicitTtsOverrides).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "reader",
+        channelId: "telegram",
+        accountId: "bot-main",
+        modelId: "voice-model",
+      }),
+    );
+    expect(mocks.textToSpeech).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "reader",
+        channel: "telegram",
+        accountId: "bot-main",
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ audioPath: "/tmp/tts.mp3" }),
+    );
+  });
 });

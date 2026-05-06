@@ -101,6 +101,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
     try {
       const cfg = context.getRuntimeConfig();
       const channel = normalizeOptionalString(params.channel);
+      const accountId = normalizeOptionalString(params.accountId);
+      const agentId = normalizeOptionalString(params.agentId);
       const providerRaw = normalizeOptionalString(params.provider);
       const modelId = normalizeOptionalString(params.modelId);
       const voiceId = normalizeOptionalString(params.voiceId);
@@ -111,6 +113,9 @@ export const ttsHandlers: GatewayRequestHandlers = {
           provider: providerRaw,
           modelId,
           voiceId,
+          agentId,
+          channelId: channel,
+          accountId,
         });
       } catch (err) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
@@ -122,6 +127,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
         channel,
         overrides,
         disableFallback: Boolean(overrides.provider || modelId || voiceId),
+        agentId,
+        accountId,
       });
       if (result.success && result.audioPath) {
         respond(true, {
