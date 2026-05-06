@@ -17,6 +17,7 @@ Current replay target: `v2026.5.6`.
 - `02915314ae` - active seam: keep Telegram transcribed-audio TTS intent through the reply path.
 - `6c4503c385` - active seam: keep agent-scoped TTS conversion config resolution.
 - `da4c5c7c34` - active seam: keep exec safe-bin realpath trust for approved safe binaries reached through symlinks or wrapper paths.
+- `replay-validation-hermeticity` - active seam: keep replay validation tests hermetic against local plugin install records, current metadata snapshot seams, and hosts without IPv6 loopback.
 
 ## Seam inventory
 
@@ -189,6 +190,28 @@ Rebase notes:
 - Upstream added fs-safe primitives, exec argument allowlist hardening, dotenv/system-path trust blocking, and Windows fallback guards. Keep the realpath invariant while fitting the current safety model.
 - The safe condition is conjunctive when a realpath exists: both the invoked path directory and resolved target directory must satisfy safe-bin trust.
 
+### Replay validation test hermeticity
+
+Carry behavior: fork replay proof must stay deterministic on Bex's live workstation and in clean validation environments. Registry snapshot tests must build fixtures from explicit install-record state instead of reading ambient private plugin records; plugin activation boundary tests must mock the metadata snapshot seam that static model normalization now uses; Gateway canvas auth tests must reject bind failures cleanly so hosts without IPv6 loopback do not turn environment limits into Vitest timeouts.
+
+Primary seam files:
+
+- `src/plugins/plugin-registry-snapshot.test.ts`
+- `src/plugin-activation-boundary.test.ts`
+- `src/gateway/server.canvas-auth.test.ts`
+
+Primary seam tests:
+
+- `pnpm test src/plugins/plugin-registry-snapshot.test.ts src/plugin-activation-boundary.test.ts src/gateway/server.canvas-auth.test.ts src/agents/simple-completion-runtime.selection.test.ts src/commands/status.summary.runtime.test.ts src/video-generation/runtime.test.ts`
+- `pnpm exec oxfmt --check --threads=1 src/plugins/plugin-registry-snapshot.test.ts src/plugin-activation-boundary.test.ts src/gateway/server.canvas-auth.test.ts`
+- `pnpm test`
+
+Rebase notes:
+
+- Do not call `loadInstalledPluginIndex` from registry snapshot fixtures without explicit `installRecords` unless the test is intentionally proving installed-record discovery. Ambient records from local/private plugins can make persisted fast-path assertions fall back to derived state.
+- Keep activation-boundary tests mocked at the current metadata snapshot seam when static model normalization reaches manifest metadata before plugin runtime. Broad `plugin-registry` mocks alone are stale for this path.
+- Do not chase lack of host IPv6 loopback as replay behavior. The Gateway harness should reject and clean up listen errors so `EADDRNOTAVAIL ::1` remains an environment fact, not a dangling timeout or unhandled error.
+
 ## Narrow validation set
 
 - `pnpm test src/plugins/bundled-plugin-metadata.test.ts test/scripts/tracked-bundled-plugin-dirs.test.ts`
@@ -202,6 +225,8 @@ Rebase notes:
 - `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
 - `pnpm test src/gateway/server-methods/tts.test.ts`
 - `pnpm test src/infra/exec-safe-bin-trust.test.ts src/infra/exec-approvals-safe-bins.test.ts`
+- `pnpm test src/plugins/plugin-registry-snapshot.test.ts src/plugin-activation-boundary.test.ts src/gateway/server.canvas-auth.test.ts src/agents/simple-completion-runtime.selection.test.ts src/commands/status.summary.runtime.test.ts src/video-generation/runtime.test.ts`
+- `pnpm exec oxfmt --check --threads=1 src/plugins/plugin-registry-snapshot.test.ts src/plugin-activation-boundary.test.ts src/gateway/server.canvas-auth.test.ts`
 - `pnpm tsgo:core`
 - `pnpm tsgo:core:test`
 - `git diff --check`

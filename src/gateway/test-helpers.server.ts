@@ -585,8 +585,11 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
   resetConfigRuntimeState();
   clearSessionStoreCacheForTest();
   const mod = await getServerModule();
-  const resolvedOpts =
-    opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
+  const resolvedOpts = {
+    ...opts,
+    bind: opts?.bind ?? "loopback",
+    controlUiEnabled: opts?.controlUiEnabled ?? false,
+  } satisfies GatewayServerOptions;
   if (
     resolvedOpts?.controlUiEnabled === true &&
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1" &&

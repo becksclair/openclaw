@@ -19,45 +19,70 @@ const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() =>
   }),
 );
 
+const manifestPlugins = vi.hoisted(() => [
+  {
+    id: "test-channel-fixture",
+    channels: ["discord", "irc", "slack", "telegram"],
+    providers: [],
+    cliBackends: [],
+    channelEnvVars: {
+      discord: ["DISCORD_BOT_TOKEN"],
+      irc: ["IRC_HOST", "IRC_NICK"],
+      slack: ["SLACK_BOT_TOKEN"],
+      telegram: ["TELEGRAM_BOT_TOKEN"],
+    },
+    modelIdNormalization: {
+      providers: {
+        google: {
+          aliases: {
+            "gemini-3.1-pro": "gemini-3.1-pro-preview",
+          },
+        },
+        xai: {
+          aliases: {
+            "grok-4-fast-reasoning": "grok-4-fast",
+          },
+        },
+      },
+    },
+    skills: [],
+    hooks: [],
+    origin: "bundled",
+    rootDir: "/tmp/openclaw-test-channel-fixture",
+    source: "bundled",
+    manifestPath: "/tmp/openclaw-test-channel-fixture/openclaw.plugin.json",
+  },
+]);
+
 const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
   vi.fn(() => ({
     diagnostics: [],
-    plugins: [
-      {
-        id: "test-channel-fixture",
-        channels: ["discord", "irc", "slack", "telegram"],
-        providers: [],
-        cliBackends: [],
-        channelEnvVars: {
-          discord: ["DISCORD_BOT_TOKEN"],
-          irc: ["IRC_HOST", "IRC_NICK"],
-          slack: ["SLACK_BOT_TOKEN"],
-          telegram: ["TELEGRAM_BOT_TOKEN"],
-        },
-        modelIdNormalization: {
-          providers: {
-            google: {
-              aliases: {
-                "gemini-3.1-pro": "gemini-3.1-pro-preview",
-              },
-            },
-            xai: {
-              aliases: {
-                "grok-4-fast-reasoning": "grok-4-fast",
-              },
-            },
-          },
-        },
-        skills: [],
-        hooks: [],
-        origin: "bundled",
-        rootDir: "/tmp/openclaw-test-channel-fixture",
-        source: "bundled",
-        manifestPath: "/tmp/openclaw-test-channel-fixture/openclaw.plugin.json",
-      },
-    ],
+    plugins: manifestPlugins,
   })),
 );
+
+const pluginMetadataSnapshot = vi.hoisted(() => ({
+  configFingerprint: "test",
+  diagnostics: [],
+  index: {
+    compatRegistryVersion: "test",
+    diagnostics: [],
+    generatedAtMs: 0,
+    hostContractVersion: "test",
+    installRecords: {},
+    migrationVersion: 1,
+    plugins: [],
+    policyHash: "test",
+    version: 1,
+  },
+  manifestRegistry: {
+    diagnostics: [],
+    plugins: manifestPlugins,
+  },
+  plugins: manifestPlugins,
+  policyHash: "test",
+  registryDiagnostics: [],
+}));
 
 const facadeMockHelpers = vi.hoisted(() => {
   const createLazyFacadeObjectValue = <T extends object>(load: () => T): T =>
@@ -80,6 +105,10 @@ const facadeMockHelpers = vi.hoisted(() => {
 
 vi.mock("./plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry,
+}));
+
+vi.mock("./plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: () => pluginMetadataSnapshot,
 }));
 
 vi.mock("./secrets/channel-env-vars.js", () => ({
