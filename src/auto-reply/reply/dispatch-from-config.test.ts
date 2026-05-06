@@ -3919,6 +3919,32 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("treats transcribed inbound media as inbound audio for TTS", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      MediaTypes: ["image/jpeg"],
+      MediaTranscribedIndexes: [0],
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "This reply should preserve inbound audio intent." }),
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        inboundAudio: true,
+        payload: { text: "This reply should preserve inbound audio intent." },
+      }),
+    );
+  });
+
   it("forwards generated-media block replies in WhatsApp group sessions", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
