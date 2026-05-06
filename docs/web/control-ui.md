@@ -97,6 +97,7 @@ Imported themes are stored only in the current browser profile. They are not wri
   <Accordion title="Chat and Talk">
     - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`).
     - Talk through browser realtime sessions. OpenAI uses direct WebRTC, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use the Gateway relay transport. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.realtime.relay*` RPCs and sends `openclaw_agent_consult` tool calls back through `chat.send` for the larger configured OpenClaw model.
+    - Read assistant replies aloud from the message footer. The browser calls Gateway `talk.speak`, so Talk provider credentials stay server-side and the generated audio plays only in the current browser session.
     - Stream tool calls + live tool output cards in Chat (agent events).
 
   </Accordion>

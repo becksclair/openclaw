@@ -19,7 +19,11 @@ import { resolveLocalUserName } from "../user-identity.ts";
 export { resolveAssistantTextAvatar } from "../views/agents-utils.ts";
 import { renderChatAvatar } from "./chat-avatar.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
-import { extractThinkingCached, formatReasoningMarkdown } from "./message-extract.ts";
+import {
+  extractTextCached,
+  extractThinkingCached,
+  formatReasoningMarkdown,
+} from "./message-extract.ts";
 import { isToolResultMessage, normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import {
@@ -395,6 +399,7 @@ export function renderMessageGroup(
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
     contextWindow?: number | null;
+    onReadAloud?: (text: string) => void;
     onDelete?: () => void;
   },
 ) {
@@ -424,6 +429,13 @@ export function renderMessageGroup(
 
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
+  const readAloudText =
+    normalizedRole === "assistant" && opts.onReadAloud
+      ? group.messages
+          .map((item) => extractTextCached(item.message)?.trim() ?? "")
+          .filter(Boolean)
+          .join("\n\n")
+      : "";
 
   return html`
     <div class="chat-group ${roleClass}">
@@ -468,6 +480,19 @@ export function renderMessageGroup(
         <div class="chat-group-footer">
           <span class="chat-sender-name">${who}</span>
           ${renderChatTimestamp(group.timestamp)} ${renderMessageMeta(meta)}
+          ${readAloudText
+            ? html`
+                <button
+                  class="chat-tts-btn"
+                  type="button"
+                  title="Read aloud"
+                  aria-label="Read aloud"
+                  @click=${() => opts.onReadAloud?.(readAloudText)}
+                >
+                  ${icons.volume2}
+                </button>
+              `
+            : nothing}
           ${opts.onDelete
             ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
             : nothing}

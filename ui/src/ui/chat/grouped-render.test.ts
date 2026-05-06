@@ -410,7 +410,28 @@ describe("grouped chat rendering", () => {
     expect(badge?.getAttribute("aria-label")).toBe("4 consecutive identical messages collapsed");
   });
 
-  it("does not render the stale assistant read-aloud footer action", () => {
+  it("renders assistant read-aloud through the footer action", () => {
+    const onReadAloud = vi.fn();
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "hello from assistant",
+        timestamp: 1000,
+      },
+      { onReadAloud },
+    );
+
+    const button = container.querySelector<HTMLButtonElement>(".chat-tts-btn");
+    expect(button).not.toBeNull();
+    expect(container.querySelector('[aria-label="Read aloud"]')).toBe(button);
+
+    button?.click();
+    expect(onReadAloud).toHaveBeenCalledWith("hello from assistant");
+  });
+
+  it("does not render assistant read-aloud when no handler is provided", () => {
     const container = document.createElement("div");
     renderAssistantMessage(container, {
       role: "assistant",
@@ -419,7 +440,6 @@ describe("grouped chat rendering", () => {
     });
 
     expect(container.querySelector(".chat-tts-btn")).toBeNull();
-    expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
   });
 
   it("positions delete confirm by message side", () => {
