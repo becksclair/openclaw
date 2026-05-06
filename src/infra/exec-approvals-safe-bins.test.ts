@@ -326,11 +326,13 @@ describe("exec approvals safe bins", () => {
     if (process.platform === "win32") {
       return;
     }
+    let trustedPathCheckParams: { resolvedPath?: string; resolvedRealPath?: string } | undefined;
     const baseParams = {
       argv: ["jq", ".foo"],
       resolution: {
         rawExecutable: "jq",
         resolvedPath: "/tmp/custom/jq",
+        resolvedRealPath: "/bin/jq",
         executableName: "jq",
       },
       safeBins: normalizeSafeBins(["jq"]),
@@ -338,9 +340,16 @@ describe("exec approvals safe bins", () => {
     expect(
       isSafeBinUsage({
         ...baseParams,
-        isTrustedSafeBinPathFn: () => true,
+        isTrustedSafeBinPathFn: (params) => {
+          trustedPathCheckParams = params;
+          return true;
+        },
       }),
     ).toBe(true);
+    expect(trustedPathCheckParams).toMatchObject({
+      resolvedPath: "/tmp/custom/jq",
+      resolvedRealPath: "/bin/jq",
+    });
     expect(
       isSafeBinUsage({
         ...baseParams,
