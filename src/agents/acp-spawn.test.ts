@@ -908,7 +908,7 @@ describe("spawnAcpDirect", () => {
     );
   });
 
-  it("maps OpenClaw ACP runtime agent aliases to their configured harness id", async () => {
+  it("maps OpenClaw ACP runtime agent aliases to their configured harness id and backend", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),
       agents: {
@@ -919,6 +919,7 @@ describe("spawnAcpDirect", () => {
               type: "acp",
               acp: {
                 agent: "codex",
+                backend: "acpx-remote",
               },
             },
           },
@@ -946,6 +947,7 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         agent: "codex",
+        backendId: "acpx-remote",
         sessionKey: expect.stringMatching(/^agent:codex:acp:/),
       }),
     );
