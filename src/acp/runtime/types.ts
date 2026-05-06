@@ -65,6 +65,11 @@ export type AcpRuntimeCapabilities = {
    * Empty/undefined means "backend accepts keys, but did not advertise a strict list".
    */
   configOptionKeys?: string[];
+  /**
+   * Optional backend-managed option keys.
+   * Managed keys may be resolved internally during ensureSession.
+   */
+  managedRuntimeOptionKeys?: string[];
 };
 
 export type AcpRuntimeStatus = {

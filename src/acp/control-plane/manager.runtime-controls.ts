@@ -35,9 +35,15 @@ export async function resolveManagerRuntimeCapabilities(params: {
   const normalizedKeys = (reported?.configOptionKeys ?? [])
     .map((entry) => normalizeText(entry))
     .filter(Boolean) as string[];
+  const normalizedManagedKeys = (reported?.managedRuntimeOptionKeys ?? [])
+    .map((entry) => normalizeText(entry))
+    .filter(Boolean) as string[];
   return {
     controls: [...controls].toSorted(),
     ...(normalizedKeys.length > 0 ? { configOptionKeys: normalizedKeys } : {}),
+    ...(normalizedManagedKeys.length > 0
+      ? { managedRuntimeOptionKeys: normalizedManagedKeys.toSorted() }
+      : {}),
   };
 }
 
@@ -67,6 +73,12 @@ export async function applyManagerRuntimeControls(params: {
       .map((entry) => normalizeText(entry))
       .filter(Boolean) as string[],
   );
+  const managedKeys = new Set(
+    (capabilities.managedRuntimeOptionKeys ?? [])
+      .map((entry) => normalizeText(entry))
+      .filter(Boolean) as string[],
+  );
+  const unmanagedConfigOptions = configOptions.filter(([key]) => !managedKeys.has(key));
 
   await withAcpRuntimeErrorBoundary({
     run: async () => {
@@ -83,7 +95,7 @@ export async function applyManagerRuntimeControls(params: {
         });
       }
 
-      if (configOptions.length > 0) {
+      if (unmanagedConfigOptions.length > 0) {
         if (
           !capabilities.controls.includes("session/set_config_option") ||
           !params.runtime.setConfigOption
@@ -93,7 +105,7 @@ export async function applyManagerRuntimeControls(params: {
             control: "session/set_config_option",
           });
         }
-        for (const [key, value] of configOptions) {
+        for (const [key, value] of unmanagedConfigOptions) {
           if (advertisedKeys.size > 0 && !advertisedKeys.has(key)) {
             throw new AcpRuntimeError(
               "ACP_BACKEND_UNSUPPORTED_CONTROL",
