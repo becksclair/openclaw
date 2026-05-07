@@ -43,6 +43,7 @@ describe("realtime voice agent consult tool", () => {
     expect(prompt).toContain("during a private Google Meet");
     expect(prompt).toContain("Participant: Can you check the repo?");
     expect(prompt).toContain("Agent: I'll verify.");
+    expect(prompt).toContain("Preserve your normal OpenClaw agent voice");
     expect(prompt).toContain("Question:\nDo we support realtime tools?");
   });
 

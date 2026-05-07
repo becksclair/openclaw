@@ -624,13 +624,11 @@ export async function ensureAgentWorkspace(params?: {
   };
 }
 
-export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
-  const resolvedDir = resolveUserPath(dir);
-
-  const entries: Array<{
-    name: WorkspaceBootstrapFileName;
-    filePath: string;
-  }> = [
+function getWorkspaceBootstrapEntries(resolvedDir: string): Array<{
+  name: WorkspaceBootstrapFileName;
+  filePath: string;
+}> {
+  return [
     {
       name: DEFAULT_AGENTS_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_AGENTS_FILENAME),
@@ -664,6 +662,19 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       filePath: path.join(resolvedDir, DEFAULT_MEMORY_FILENAME),
     },
   ];
+}
+
+export async function loadWorkspaceBootstrapFilesByName(
+  dir: string,
+  names: readonly WorkspaceBootstrapFileName[],
+): Promise<WorkspaceBootstrapFile[]> {
+  const resolvedDir = resolveUserPath(dir);
+  const selectedNames = new Set(names);
+
+  const entries: Array<{
+    name: WorkspaceBootstrapFileName;
+    filePath: string;
+  }> = getWorkspaceBootstrapEntries(resolvedDir).filter((entry) => selectedNames.has(entry.name));
 
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
@@ -689,6 +700,19 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     }
   }
   return result;
+}
+
+export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
+  return loadWorkspaceBootstrapFilesByName(dir, [
+    DEFAULT_AGENTS_FILENAME,
+    DEFAULT_SOUL_FILENAME,
+    DEFAULT_TOOLS_FILENAME,
+    DEFAULT_IDENTITY_FILENAME,
+    DEFAULT_USER_FILENAME,
+    DEFAULT_HEARTBEAT_FILENAME,
+    DEFAULT_BOOTSTRAP_FILENAME,
+    DEFAULT_MEMORY_FILENAME,
+  ]);
 }
 
 const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([

@@ -530,6 +530,8 @@ The active persona is selected deterministically:
 2. `messages.tts.persona`, if set.
 3. No persona.
 
+Realtime/browser Talk uses the same selected persona as spoken delivery guidance after injecting the current agent's `SOUL.md`, `IDENTITY.md`, and `USER.md` into realtime instructions. Agent-scoped Talk sessions such as `agent:luke:*` apply that agent's `agents.list[].tts` persona override before selection.
+
 Provider selection runs explicit-first:
 
 1. Direct overrides (CLI, gateway, Talk, allowed TTS directives).

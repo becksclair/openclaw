@@ -90,7 +90,7 @@ import type {
 import { importCustomThemeFromUrl } from "./custom-theme.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
-import { resolveAgentIdFromSessionKey } from "./session-key.ts";
+import { resolveAgentIdFromSessionKey, toAgentStoreSessionKey } from "./session-key.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
 import { loadLocalUserIdentity, loadSettings, type UiSettings } from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
@@ -972,7 +972,10 @@ export class OpenClawApp extends LitElement {
     this.realtimeTalkStatus = "connecting";
     this.realtimeTalkDetail = null;
     this.realtimeTalkTranscript = null;
-    const session = new RealtimeTalkSession(this.client, this.sessionKey, {
+    const realtimeTalkSessionKey = this.assistantAgentId
+      ? toAgentStoreSessionKey({ agentId: this.assistantAgentId, requestKey: this.sessionKey })
+      : this.sessionKey;
+    const session = new RealtimeTalkSession(this.client, realtimeTalkSessionKey, {
       onStatus: (status, detail) => {
         this.realtimeTalkStatus = status;
         this.realtimeTalkDetail = detail ?? null;

@@ -100,6 +100,14 @@ Defaults:
 - Manual Mic stops when the app leaves the foreground or the user leaves the Voice tab.
 - Talk Mode keeps running until toggled off or the Android node disconnects, and uses Android's microphone foreground-service type while active.
 
+## Realtime browser Talk
+
+Realtime/browser Talk sends one generic realtime instruction string to the selected realtime provider. OpenClaw injects the current agent's `SOUL.md`, `IDENTITY.md`, and `USER.md` into that instruction string so direct realtime replies see the same voice and relationship context as normal agent turns.
+
+When a TTS persona is selected, OpenClaw also renders the effective persona from `messages.tts.personas` as spoken delivery guidance inside those instructions instead of duplicating persona prose into `talk.providers.*`.
+
+Persona selection follows the normal TTS resolver, including `/tts persona <id>` local preferences and `agents.list[].tts` overrides. Agent overrides apply to any canonical agent-scoped Talk session key matching `agent:<agentId>:*`, so `agent:luke:main` and `agent:luke:telegram:direct:123` both use Luke's effective TTS persona.
+
 ## Notes
 
 - Requires Speech + Microphone permissions.

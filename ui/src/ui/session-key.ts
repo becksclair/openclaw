@@ -66,6 +66,29 @@ export function buildAgentMainSessionKey(params: {
   return `agent:${agentId}:${mainKey}`;
 }
 
+export function toAgentStoreSessionKey(params: {
+  agentId: string | undefined | null;
+  requestKey: string | undefined | null;
+  mainKey?: string | undefined;
+}): string {
+  const raw = normalizeOptionalString(params.requestKey) ?? "";
+  const lowered = normalizeLowercaseStringOrEmpty(raw);
+  if (!raw || lowered === DEFAULT_MAIN_KEY) {
+    return buildAgentMainSessionKey({
+      agentId: params.agentId ?? DEFAULT_AGENT_ID,
+      mainKey: params.mainKey,
+    });
+  }
+  const parsed = parseAgentSessionKey(raw);
+  if (parsed) {
+    return `agent:${parsed.agentId}:${parsed.rest}`;
+  }
+  if (lowered.startsWith("agent:")) {
+    return lowered;
+  }
+  return `agent:${normalizeAgentId(params.agentId)}:${lowered}`;
+}
+
 export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);

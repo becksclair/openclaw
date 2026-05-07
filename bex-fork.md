@@ -14,6 +14,7 @@ Current replay target: `v2026.5.6`.
 - `5d62565271` - active seam: keep the operator verifier for the Discord-bound `codex-devbox` ACP route, with machine/channel ids supplied by flags or environment only.
 - `extensions/acpx-remote` - active seam: keep the local `codex-devbox` remote ACP bridge as a separate nested/excluded plugin lifecycle; do not fold it into the outer repo replay.
 - `c5991de10f` - active seam: keep Control UI read-aloud routed through the Gateway Talk/TTS surface, with Markdown/noisy markup stripped before speech.
+- `realtime-talk-agent-instructions` - active seam: keep Control UI realtime Talk scoped to the active agent and keep provider realtime instructions embedding that agent's `SOUL.md`, `IDENTITY.md`, `USER.md`, and selected TTS persona guidance.
 - `02915314ae` - active seam: keep Telegram transcribed-audio TTS intent through the reply path.
 - `6c4503c385` - active seam: keep agent-scoped TTS conversion config resolution.
 - `da4c5c7c34` - active seam: keep exec safe-bin realpath trust for approved safe binaries reached through symlinks or wrapper paths.
@@ -133,6 +134,39 @@ Rebase notes:
 - Upstream introduced a unified `src/talk/*` runtime, Talk gateway sessions, Talk events, and browser realtime client changes. Port this seam as a thin current-Talk integration, not as a parallel legacy TTS flow.
 - Current `TalkSpeakParamsSchema` is strict and does not accept `agentId`; do not send stale UI-side agent scope unless the Gateway protocol grows that field.
 
+### Realtime Talk agent instructions
+
+Carry behavior: Control UI realtime Talk must start with an agent-scoped session key for the active assistant, and Gateway realtime provider instructions must embed the selected agent's `SOUL.md`, `IDENTITY.md`, `USER.md`, and selected TTS persona delivery guidance before provider-specific realtime sessions are created.
+
+Primary seam files:
+
+- `src/realtime-voice/realtime-instructions.ts`
+- `src/realtime-voice/realtime-instructions.test.ts`
+- `src/tts/realtime-persona-instructions.ts`
+- `src/tts/realtime-persona-instructions.test.ts`
+- `src/gateway/server-methods/talk.ts`
+- `src/gateway/server-methods/talk.test.ts`
+- `src/agents/workspace.ts`
+- `src/agents/workspace.test.ts`
+- `ui/src/ui/app.ts`
+- `ui/src/ui/app.talk.test.ts`
+- `ui/src/ui/session-key.ts`
+
+Primary seam tests:
+
+- `pnpm test src/agents/workspace.test.ts src/realtime-voice/realtime-instructions.test.ts src/realtime-voice/agent-consult-tool.test.ts src/tts/realtime-persona-instructions.test.ts src/gateway/server-methods/talk.test.ts ui/src/ui/app.talk.test.ts ui/src/ui/realtime-talk.test.ts`
+- `pnpm tsgo:core`
+- `pnpm tsgo:core:test`
+- `pnpm tsgo:test:ui`
+- `pnpm ui:build`
+
+Rebase notes:
+
+- Re-prove the complete instruction string shape, including `<SOUL.md>`, `<IDENTITY.md>`, and `<USER.md>` blocks separated by `---` before realtime and persona guidance.
+- Preserve fully scoped agent session keys such as `agent:sky:discord:direct:708530820616552498` when starting realtime Talk; do not collapse them back to `main`.
+- Keep realtime providers generic. Provider implementations should receive only the opaque `instructions` string, not agent ids, workspace paths, or provider-specific persona prose.
+- Keep mutable TTS persona selection flowing through the existing TTS resolver and `messages.tts.personas`; do not duplicate canonical persona prose into `talk.providers.*`.
+
 ### Telegram transcribed-audio TTS intent
 
 Carry behavior: Telegram voice/audio transcripts preserve the user's TTS/read-aloud intent through the reply path, including cases where inbound media was already transcribed before reply dispatch.
@@ -225,7 +259,9 @@ Rebase notes:
 - `pnpm test src/acp/control-plane/manager.test.ts`
 - `./scripts/verify-codex-devbox-acp.js --help`
 - `pnpm test ui/src/ui/chat/grouped-render.test.ts ui/src/ui/chat/talk-tts.test.ts ui/src/ui/chat/strip-markdown-for-speech.test.ts`
+- `pnpm test src/agents/workspace.test.ts src/realtime-voice/realtime-instructions.test.ts src/realtime-voice/agent-consult-tool.test.ts src/tts/realtime-persona-instructions.test.ts src/gateway/server-methods/talk.test.ts ui/src/ui/app.talk.test.ts ui/src/ui/realtime-talk.test.ts`
 - `pnpm tsgo:test:ui`
+- `pnpm ui:build`
 - `pnpm docs:check-mdx docs/web/control-ui.md`
 - `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
 - `pnpm test src/gateway/server-methods/tts.test.ts`

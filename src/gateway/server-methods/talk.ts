@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import {
@@ -7,10 +8,7 @@ import {
 } from "../../config/talk.js";
 import type { TalkConfigResponse, TalkProviderConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
-import {
-  REALTIME_VOICE_AGENT_CONSULT_TOOL,
-  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-} from "../../realtime-voice/agent-consult-tool.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../realtime-voice/agent-consult-tool.js";
 import { getRealtimeVoiceProvider } from "../../realtime-voice/provider-registry.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../realtime-voice/provider-resolver.js";
 import type {
@@ -18,11 +16,17 @@ import type {
   RealtimeVoiceProviderConfig,
 } from "../../realtime-voice/provider-types.js";
 import {
+  buildRealtimeVoiceInstructions,
+  resolveRealtimeVoiceInstructionContext,
+} from "../../realtime-voice/realtime-instructions.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "../../tts/provider-registry.js";
+import { resolveTtsPersonaDeliveryInstructions } from "../../tts/realtime-persona-instructions.js";
 import { synthesizeSpeech, type TtsDirectiveOverrides } from "../../tts/tts.js";
 import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import {
@@ -209,8 +213,12 @@ function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvider?: str
   };
 }
 
-function buildRealtimeInstructions(): string {
-  return `You are OpenClaw's realtime voice interface. Keep spoken replies concise. If the user asks for code, repository state, tools, files, current OpenClaw context, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`;
+function resolveRealtimeTalkAgentId(
+  config: OpenClawConfig,
+  sessionKey: string | undefined,
+): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  return parsed?.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(config);
 }
 
 function withRealtimeBrowserOverrides(
@@ -505,12 +513,17 @@ export const talkHandlers: GatewayRequestHandlers = {
       return;
     }
     const typedParams = params as {
+      sessionKey?: string;
       provider?: string;
       model?: string;
       voice?: string;
     };
     try {
       const runtimeConfig = context.getRuntimeConfig();
+      const agentId = resolveRealtimeTalkAgentId(
+        runtimeConfig,
+        normalizeOptionalString(typedParams.sessionKey),
+      );
       const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, typedParams.provider);
       const resolution = resolveConfiguredRealtimeVoiceProvider({
         configuredProviderId: realtimeConfig.provider,
@@ -519,10 +532,16 @@ export const talkHandlers: GatewayRequestHandlers = {
         cfgForResolve: runtimeConfig,
         noRegisteredProviderMessage: "No realtime voice provider registered",
       });
+      const instructionContext = await resolveRealtimeVoiceInstructionContext({
+        cfg: runtimeConfig,
+        agentId,
+        personaInstructions: resolveTtsPersonaDeliveryInstructions(runtimeConfig, { agentId }),
+      });
+      const instructions = buildRealtimeVoiceInstructions(instructionContext);
       if (resolution.provider.createBrowserSession) {
         const session = await resolution.provider.createBrowserSession({
           providerConfig: resolution.providerConfig,
-          instructions: buildRealtimeInstructions(),
+          instructions,
           tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
           model: normalizeOptionalString(typedParams.model),
           voice: normalizeOptionalString(typedParams.voice),
@@ -549,7 +568,7 @@ export const talkHandlers: GatewayRequestHandlers = {
         connId,
         provider: resolution.provider,
         providerConfig: withRealtimeBrowserOverrides(resolution.providerConfig, { model, voice }),
-        instructions: buildRealtimeInstructions(),
+        instructions,
         tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
         model,
         voice,

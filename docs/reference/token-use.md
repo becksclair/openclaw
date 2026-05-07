@@ -41,6 +41,8 @@ Everything the model receives counts toward the context limit:
 
 Some runtime-heavy surfaces have their own explicit caps:
 
+- Realtime/browser Talk sends a direct realtime provider instruction string that includes the active agent's `SOUL.md`, `IDENTITY.md`, and `USER.md`, plus selected TTS persona guidance when configured. Those bytes are separate from normal full-agent bootstrap context and count against the realtime provider's session context.
+
 - `agents.defaults.contextLimits.memoryGetMaxChars`
 - `agents.defaults.contextLimits.memoryGetDefaultLines`
 - `agents.defaults.contextLimits.toolResultMaxChars`

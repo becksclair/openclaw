@@ -16,6 +16,7 @@ import {
   filterBootstrapFilesForSession,
   isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
+  loadWorkspaceBootstrapFilesByName,
   reconcileWorkspaceBootstrapCompletion,
   resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
@@ -371,6 +372,27 @@ describe("loadWorkspaceBootstrapFiles", () => {
 
     const files = await loadWorkspaceBootstrapFiles(tempDir);
     expect(getMemoryEntries(files)).toHaveLength(0);
+  });
+
+  it("loads only requested bootstrap files by name", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: "SOUL.md", content: "soul" });
+    await writeWorkspaceFile({ dir: tempDir, name: "IDENTITY.md", content: "identity" });
+    await writeWorkspaceFile({ dir: tempDir, name: "USER.md", content: "user" });
+    await writeWorkspaceFile({ dir: tempDir, name: "TOOLS.md", content: "tools" });
+
+    const files = await loadWorkspaceBootstrapFilesByName(tempDir, [
+      DEFAULT_SOUL_FILENAME,
+      DEFAULT_IDENTITY_FILENAME,
+      DEFAULT_USER_FILENAME,
+    ]);
+
+    expect(files.map((file) => file.name)).toEqual([
+      DEFAULT_SOUL_FILENAME,
+      DEFAULT_IDENTITY_FILENAME,
+      DEFAULT_USER_FILENAME,
+    ]);
+    expect(files.map((file) => file.content)).toEqual(["soul", "identity", "user"]);
   });
 
   it("treats hardlinked bootstrap aliases as missing", async () => {

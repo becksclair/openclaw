@@ -12,6 +12,9 @@ const mocks = vi.hoisted(() => ({
   getRealtimeVoiceProvider: vi.fn(),
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
   createTalkRealtimeRelaySession: vi.fn(),
+  resolveTtsPersonaDeliveryInstructions: vi.fn(),
+  resolveRealtimeVoiceInstructionContext: vi.fn(),
+  buildRealtimeVoiceInstructions: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -33,6 +36,15 @@ vi.mock("../../realtime-voice/provider-registry.js", () => ({
 
 vi.mock("../../realtime-voice/provider-resolver.js", () => ({
   resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
+}));
+
+vi.mock("../../tts/realtime-persona-instructions.js", () => ({
+  resolveTtsPersonaDeliveryInstructions: mocks.resolveTtsPersonaDeliveryInstructions,
+}));
+
+vi.mock("../../realtime-voice/realtime-instructions.js", () => ({
+  resolveRealtimeVoiceInstructionContext: mocks.resolveRealtimeVoiceInstructionContext,
+  buildRealtimeVoiceInstructions: mocks.buildRealtimeVoiceInstructions,
 }));
 
 vi.mock("../talk-realtime-relay.js", async (importOriginal) => {
@@ -241,10 +253,19 @@ describe("talk.config handler", () => {
 describe("talk.realtime.session handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveTtsPersonaDeliveryInstructions.mockReturnValue(undefined);
+    mocks.resolveRealtimeVoiceInstructionContext.mockImplementation(
+      async (params: { agentId: string; personaInstructions?: string }) => ({
+        agentName: params.agentId,
+        agentContext: {},
+        persona: params.personaInstructions,
+      }),
+    );
+    mocks.buildRealtimeVoiceInstructions.mockReturnValue("realtime instructions");
   });
 
   it("falls back to the gateway relay when Google returns a WebRTC-shaped browser session", async () => {
-    const createBrowserSession = vi.fn(async () => ({
+    const createBrowserSession = vi.fn(async (_req: { instructions?: string }) => ({
       provider: "google",
       clientSecret: "legacy-google-secret",
     }));
@@ -308,5 +329,169 @@ describe("talk.realtime.session handler", () => {
       }),
       undefined,
     );
+  });
+
+  it("does not load realtime instructions when provider resolution fails", async () => {
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockImplementation(() => {
+      throw new Error("No realtime voice provider registered");
+    });
+    const respond = vi.fn();
+
+    await talkHandlers["talk.realtime.session"]({
+      req: { type: "req", id: "1", method: "talk.realtime.session" },
+      params: { sessionKey: "agent:luke:main", provider: "missing" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () => ({ talk: { provider: "missing" } }) as OpenClawConfig,
+      } as never,
+    });
+
+    expect(mocks.resolveTtsPersonaDeliveryInstructions).not.toHaveBeenCalled();
+    expect(mocks.resolveRealtimeVoiceInstructionContext).not.toHaveBeenCalled();
+    expect(mocks.buildRealtimeVoiceInstructions).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: "Error: No realtime voice provider registered",
+      }),
+    );
+  });
+
+  it("passes selected TTS persona and agent context to browser realtime sessions", async () => {
+    const createBrowserSession = vi.fn(async (_req: { instructions?: string }) => ({
+      provider: "acme",
+      transport: "json-pcm-websocket",
+      clientSecret: "client-secret",
+      websocketUrl: "wss://example.invalid/realtime",
+      protocol: "acme-live",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+    }));
+    const provider = {
+      id: "acme",
+      label: "Acme Live Voice",
+      isConfigured: () => true,
+      createBrowserSession,
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "acme-key" },
+    });
+    mocks.resolveTtsPersonaDeliveryInstructions.mockReturnValue(
+      "Name: Luke\nProfile: grounded and warm.",
+    );
+    const runtimeConfig = {
+      talk: {
+        provider: "acme",
+        providers: { acme: { apiKey: "acme-key" } },
+      },
+      messages: {
+        tts: {
+          persona: "sky",
+        },
+      },
+      agents: {
+        list: [{ id: "luke", tts: { persona: "luke" } }],
+      },
+    } as OpenClawConfig;
+
+    const respond = vi.fn();
+    await talkHandlers["talk.realtime.session"]({
+      req: { type: "req", id: "1", method: "talk.realtime.session" },
+      params: { sessionKey: "agent:luke:telegram:direct:123", provider: "acme" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => runtimeConfig } as never,
+    });
+
+    expect(mocks.resolveTtsPersonaDeliveryInstructions).toHaveBeenCalledWith(runtimeConfig, {
+      agentId: "luke",
+    });
+    expect(mocks.resolveRealtimeVoiceInstructionContext).toHaveBeenCalledWith({
+      cfg: runtimeConfig,
+      agentId: "luke",
+      personaInstructions: "Name: Luke\nProfile: grounded and warm.",
+    });
+    expect(mocks.buildRealtimeVoiceInstructions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        persona: "Name: Luke\nProfile: grounded and warm.",
+      }),
+    );
+    expect(createBrowserSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instructions: "realtime instructions",
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ provider: "acme" }),
+      undefined,
+    );
+  });
+
+  it("passes the same persona-enriched instructions to realtime relay fallback", async () => {
+    const createBrowserSession = vi.fn(async (_req: { instructions?: string }) => ({
+      provider: "google",
+      clientSecret: "legacy-google-secret",
+    }));
+    const provider = {
+      id: "google",
+      label: "Google Live Voice",
+      isConfigured: () => true,
+      createBrowserSession,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "gemini-key" },
+    });
+    mocks.resolveTtsPersonaDeliveryInstructions.mockReturnValue("Name: Luke");
+    mocks.buildRealtimeVoiceInstructions.mockReturnValue("relay realtime instructions");
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "google",
+      transport: "gateway-relay",
+      relaySessionId: "relay-1",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+    });
+    const runtimeConfig = {
+      talk: {
+        provider: "google",
+        providers: { google: { apiKey: "gemini-key" } },
+      },
+    } as OpenClawConfig;
+
+    const respond = vi.fn();
+    await talkHandlers["talk.realtime.session"]({
+      req: { type: "req", id: "1", method: "talk.realtime.session" },
+      params: { sessionKey: "agent:luke:main", provider: "google" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => runtimeConfig } as never,
+    });
+
+    const browserInstructions = (
+      createBrowserSession.mock.calls[0]?.[0] as { instructions?: string } | undefined
+    )?.instructions;
+    const relayCall = mocks.createTalkRealtimeRelaySession.mock.calls[0] as
+      | [{ instructions?: string }]
+      | undefined;
+    const relayInstructions = relayCall?.[0].instructions;
+    expect(browserInstructions).toBe(relayInstructions);
+    expect(relayInstructions).toBe("relay realtime instructions");
   });
 });
