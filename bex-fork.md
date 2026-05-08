@@ -11,8 +11,8 @@ Current replay target: `v2026.5.6`.
 - `d5f0ca2e6b` - active seam: keep private/non-git-tracked plugin directories out of runtime sidecar baseline collection.
 - `e000c3410d` - active seam: keep ACP backend alias routing so `sessions_spawn({ runtime: "acp", agentId })` resolves the selected config agent's `runtime.acp.backend` instead of falling through to global `acp.backend`.
 - `9349edd41c` - active seam: keep ACP backend-managed runtime options hidden from core runtime control writes.
-- `5d62565271` - active seam: keep the operator verifier for the Discord-bound `codex-devbox` ACP route, with machine/channel ids supplied by flags or environment only.
-- `extensions/acpx-remote` - active seam: keep the local `codex-devbox` remote ACP bridge as a separate nested/excluded plugin lifecycle; do not fold it into the outer repo replay.
+- `5d62565271` - active seam: keep the operator verifier for target-backed remote ACP bindings, with machine/channel ids supplied by flags or environment only.
+- `extensions/acpx-remote` - active seam: keep the local target-backed remote ACP bridge as a separate nested/excluded plugin lifecycle; do not fold it into the outer repo replay.
 - `c5991de10f` - active seam: keep Control UI read-aloud routed through the Gateway Talk/TTS surface, with Markdown/noisy markup stripped before speech.
 - `realtime-talk-agent-instructions` - active seam: keep Control UI realtime Talk scoped to the active agent and keep provider realtime instructions embedding that agent's `SOUL.md`, `IDENTITY.md`, `USER.md`, and selected TTS persona guidance.
 - `realtime-android-discord-audio` - active seam: keep Android Talk Mode on the Gateway realtime relay when available, and keep Discord voice channels on the same full-duplex provider-backed realtime path by default.
@@ -83,24 +83,40 @@ Rebase notes:
 - Keep this as a generic ACP runtime capability. Do not hard-code `codex-devbox`, `acpx-remote`, provider names, or extension ids into core.
 - Direct `setSessionConfigOption` behavior is a separate lifecycle policy; this seam only controls generated runtime controls/session planning.
 
-### ACP remote codex-devbox bridge
+### ACP remote target-backed bridge
 
-Carry behavior: `codex-devbox` can run through the locally configured `acpx-remote` backend and native Codex ChatGPT subscription auth, including Discord-bound session routing proof.
+Carry behavior: OpenClaw can keep the top-level ACP agent generic, such as `codex`, while binding-level ACP config selects the remote execution target and working directory. `acpx-remote` materializes the private target-specific delegate session at runtime and deploys/uses the Codex ACP bridge from native Codex ChatGPT subscription auth when the public ACP agent is `codex`, including Discord/Telegram-bound session routing proof.
 
 Primary seam files:
 
 - `scripts/verify-codex-devbox-acp.js`
 - `extensions/acpx-remote`
+- `src/acp/control-plane/manager.core.ts`
+- `src/acp/control-plane/runtime-options.ts`
+- `src/acp/persistent-bindings.lifecycle.ts`
+- `src/acp/persistent-bindings.types.ts`
+- `src/channels/plugins/acp-configured-binding-consumer.ts`
+- `src/config/zod-schema.agents.ts`
+- `src/config/zod-schema.agent-runtime.ts`
+- `docs/tools/acp-agents.md`
 - `CONTINUITY.md`
 - `NOTES.md`
 
 Primary seam tests:
 
 - `scripts/verify-codex-devbox-acp.js`
+- `src/acp/control-plane/manager.test.ts`
+- `src/acp/persistent-bindings.test.ts`
+- `src/acp/persistent-bindings.lifecycle.test.ts`
+- `src/channels/plugins/acp-bindings.test.ts`
 
 Rebase notes:
 
 - `extensions/acpx-remote/` is locally excluded and must be verified as its own lifecycle. Do not treat it as an ordinary in-tree plugin.
+- Do not restore top-level `codex-*` OpenClaw agents for each host. The clean configured shape is one top-level OpenClaw ACP agent, usually `codex`, with `bindings[].acp.backend: "acpx-remote"`, `bindings[].acp.target`, and `bindings[].acp.cwd` selecting the remote host/workspace per conversation.
+- Keep the generated target-specific `codex-<target>-<hash>` id private to `acpx-remote`'s ACPX delegate. It is an implementation detail, not an OpenClaw config agent.
+- Core ACP runtime support must stay generic: `target` is a bounded runtime option and a binding/runtime default, not an `acpx-remote` or Codex-specific core path.
+- The Codex bridge deployment decision belongs to `acpx-remote` and keys off the public requested ACP agent (`codex`) before dynamic materialization, not off configured `codex-*` agents.
 - The verifier must keep live machine, account, channel, and token values out of repo files. Supply them through flags, environment, or local secret stores only.
 - Fully live Discord proof requires a non-bot user or separate bot account because the OpenClaw bot drops its own messages for loop prevention.
 

@@ -7,6 +7,7 @@ export type CachedRuntimeState = {
   agent: string;
   mode: AcpRuntimeSessionMode;
   cwd?: string;
+  target?: string;
   appliedControlSignature?: string;
 };
 

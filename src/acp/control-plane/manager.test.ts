@@ -114,6 +114,7 @@ function createRuntime(): {
       model?: string;
       thinking?: string;
       cwd?: string;
+      target?: string;
       resumeSessionId?: string;
     }) => ({
       sessionKey: input.sessionKey,
@@ -1061,6 +1062,46 @@ describe("AcpSessionManager", () => {
     );
   });
 
+  it("passes persisted target runtime options into ensureSession after restart", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:target-restart";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: {
+          ...readySessionMeta(),
+          runtimeOptions: {
+            cwd: "C:/dev/work",
+            target: "devbox",
+          },
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-binding-restart-target",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        cwd: "C:/dev/work",
+        target: "devbox",
+      }),
+    );
+  });
+
   it("passes persisted model runtime options into ensureSession after restart", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -1382,6 +1423,8 @@ describe("AcpSessionManager", () => {
         runtimeOptions: {
           model: "openai-codex/gpt-5.4",
           thinking: "high",
+          cwd: "C:/dev/work",
+          target: "devbox",
         },
       }),
     });
@@ -1395,18 +1438,24 @@ describe("AcpSessionManager", () => {
       runtimeOptions: {
         model: "openai-codex/gpt-5.4",
         thinking: "high",
+        cwd: "C:/dev/work",
+        target: "devbox",
       },
     });
 
     expect(extractRuntimeOptionsFromUpserts()).toContainEqual({
       model: "openai-codex/gpt-5.4",
       thinking: "high",
+      cwd: "C:/dev/work",
+      target: "devbox",
     });
     expect(runtimeState.ensureSession).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:codex:acp:session-a",
         model: "openai-codex/gpt-5.4",
         thinking: "high",
+        cwd: "C:/dev/work",
+        target: "devbox",
       }),
     );
   });

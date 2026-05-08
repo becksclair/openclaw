@@ -46,6 +46,7 @@ export type AcpInitializeSessionInput = {
   resumeSessionId?: string;
   runtimeOptions?: Partial<AcpSessionRuntimeOptions>;
   cwd?: string;
+  target?: string;
   backendId?: string;
 };
 

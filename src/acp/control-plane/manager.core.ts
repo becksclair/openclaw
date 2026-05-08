@@ -315,8 +315,10 @@ export class AcpSessionManager {
       const initialRuntimeOptions = validateRuntimeOptionPatch({
         ...input.runtimeOptions,
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+        ...(input.target !== undefined ? { target: input.target } : {}),
       });
       const requestedCwd = initialRuntimeOptions.cwd;
+      const requestedTarget = initialRuntimeOptions.target;
       const requestedModel = initialRuntimeOptions.model;
       const requestedThinking = initialRuntimeOptions.thinking;
       this.enforceConcurrentSessionLimit({
@@ -333,6 +335,7 @@ export class AcpSessionManager {
             ...(requestedModel ? { model: requestedModel } : {}),
             ...(requestedThinking ? { thinking: requestedThinking } : {}),
             cwd: requestedCwd,
+            ...(requestedTarget ? { target: requestedTarget } : {}),
           }),
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not initialize ACP session runtime.",
@@ -418,6 +421,7 @@ export class AcpSessionManager {
         agent,
         mode: input.mode,
         cwd: effectiveCwd,
+        ...(requestedTarget ? { target: requestedTarget } : {}),
       });
       return {
         runtime,
@@ -1368,6 +1372,7 @@ export class AcpSessionManager {
     const mode = params.meta.mode;
     const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
     const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
+    const target = normalizeText(runtimeOptions.target);
     const model = normalizeText(runtimeOptions.model);
     const thinking = normalizeText(runtimeOptions.thinking);
     const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
@@ -1377,6 +1382,7 @@ export class AcpSessionManager {
       const agentMatches = cached.agent === agent;
       const modeMatches = cached.mode === mode;
       const cwdMatches = (cached.cwd ?? "") === (cwd ?? "");
+      const targetMatches = (cached.target ?? "") === (target ?? "");
       const handleMatchesMeta = this.runtimeHandleMatchesMeta({
         handle: cached.handle,
         meta: params.meta,
@@ -1386,6 +1392,7 @@ export class AcpSessionManager {
         agentMatches &&
         modeMatches &&
         cwdMatches &&
+        targetMatches &&
         handleMatchesMeta &&
         (await this.isCachedRuntimeHandleReusable({
           sessionKey: params.sessionKey,
@@ -1429,6 +1436,7 @@ export class AcpSessionManager {
             ...(model ? { model } : {}),
             ...(thinking ? { thinking } : {}),
             cwd,
+            ...(target ? { target } : {}),
           }),
         fallbackCode: "ACP_SESSION_INIT_FAILED",
         fallbackMessage: "Could not initialize ACP session runtime.",
@@ -1537,6 +1545,7 @@ export class AcpSessionManager {
       agent,
       mode,
       cwd: effectiveCwd,
+      ...(target ? { target } : {}),
       appliedControlSignature: undefined,
     });
     return {
@@ -1626,7 +1635,10 @@ export class AcpSessionManager {
     if (!cached) {
       return;
     }
-    if ((cached.cwd ?? "") !== (normalized.cwd ?? "")) {
+    if (
+      (cached.cwd ?? "") !== (normalized.cwd ?? "") ||
+      (cached.target ?? "") !== (normalized.target ?? "")
+    ) {
       this.clearCachedRuntimeState(params.sessionKey);
       return;
     }

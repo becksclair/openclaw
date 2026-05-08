@@ -41,6 +41,7 @@ export type AcpRuntimeEnsureInput = {
   /** Optional runtime thinking/reasoning override that must be available during session creation. */
   thinking?: string;
   cwd?: string;
+  target?: string;
   env?: Record<string, string>;
 };
 

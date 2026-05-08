@@ -8432,6 +8432,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               description:
                                 "Optional default working directory for this agent's ACP sessions.",
                             },
+                            target: {
+                              type: "string",
+                              title: "Agent ACP Target",
+                              description:
+                                "Optional backend target for this agent's ACP sessions, such as a remote host alias.",
+                            },
                           },
                           additionalProperties: false,
                           title: "Agent ACP Runtime",
@@ -18962,6 +18968,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         "Working directory override for ACP sessions created from this binding.",
                     },
+                    target: {
+                      type: "string",
+                      title: "ACP Binding Target",
+                      description:
+                        "Backend target override for ACP sessions created from this binding, such as a remote host alias.",
+                    },
                     backend: {
                       type: "string",
                       title: "ACP Binding Backend",
@@ -24836,6 +24848,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional default working directory for this agent's ACP sessions.",
       tags: ["advanced"],
     },
+    "agents.list[].runtime.acp.target": {
+      label: "Agent ACP Target",
+      help: "Optional backend target for this agent's ACP sessions, such as a remote host alias.",
+      tags: ["advanced"],
+    },
     "agents.list[].thinkingDefault": {
       label: "Agent Thinking Default",
       help: "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
@@ -26377,6 +26394,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "bindings[].acp.cwd": {
       label: "ACP Binding Working Directory",
       help: "Working directory override for ACP sessions created from this binding.",
+      tags: ["advanced"],
+    },
+    "bindings[].acp.target": {
+      label: "ACP Binding Target",
+      help: "Backend target override for ACP sessions created from this binding, such as a remote host alias.",
       tags: ["advanced"],
     },
     "bindings[].acp.backend": {

@@ -11,6 +11,7 @@ const MAX_MODEL_LENGTH = 200;
 const MAX_THINKING_LENGTH = 32;
 const MAX_PERMISSION_PROFILE_LENGTH = 80;
 const MAX_CWD_LENGTH = 4096;
+const MAX_TARGET_LENGTH = 256;
 const MIN_TIMEOUT_SECONDS = 1;
 const MAX_TIMEOUT_SECONDS = 24 * 60 * 60;
 const MAX_BACKEND_OPTION_KEY_LENGTH = 64;
@@ -18,6 +19,7 @@ const MAX_BACKEND_OPTION_VALUE_LENGTH = 512;
 const MAX_BACKEND_EXTRAS = 32;
 
 const SAFE_OPTION_KEY_RE = /^[a-z0-9][a-z0-9._:-]*$/i;
+const WINDOWS_ABSOLUTE_PATH_RE = /^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/;
 
 function failInvalidOption(message: string): never {
   throw new AcpRuntimeError("ACP_INVALID_RUNTIME_OPTION", message);
@@ -104,10 +106,18 @@ export function validateRuntimeCwdInput(rawCwd: unknown): string {
     field: "Working directory",
     maxLength: MAX_CWD_LENGTH,
   });
-  if (!isAbsolute(cwd)) {
+  if (!isAbsolute(cwd) && !WINDOWS_ABSOLUTE_PATH_RE.test(cwd)) {
     failInvalidOption(`Working directory must be an absolute path. Received "${cwd}".`);
   }
   return cwd;
+}
+
+function validateRuntimeTargetInput(rawTarget: unknown): string {
+  return validateBoundedText({
+    value: rawTarget,
+    field: "Target",
+    maxLength: MAX_TARGET_LENGTH,
+  });
 }
 
 function validateRuntimeTimeoutSecondsInput(rawTimeout: unknown): number {
@@ -156,6 +166,7 @@ export function validateRuntimeOptionPatch(
     "model",
     "thinking",
     "cwd",
+    "target",
     "permissionProfile",
     "timeoutSeconds",
     "backendExtras",
@@ -193,6 +204,13 @@ export function validateRuntimeOptionPatch(
       next.cwd = undefined;
     } else {
       next.cwd = validateRuntimeCwdInput(rawPatch.cwd);
+    }
+  }
+  if (Object.hasOwn(rawPatch, "target")) {
+    if (rawPatch.target === undefined) {
+      next.target = undefined;
+    } else {
+      next.target = validateRuntimeTargetInput(rawPatch.target);
     }
   }
   if (Object.hasOwn(rawPatch, "permissionProfile")) {
@@ -239,6 +257,7 @@ export function normalizeRuntimeOptions(
   const model = normalizeText(options?.model);
   const thinking = normalizeText(options?.thinking);
   const cwd = normalizeText(options?.cwd);
+  const target = normalizeText(options?.target);
   const permissionProfile = normalizeText(options?.permissionProfile);
   let timeoutSeconds: number | undefined;
   if (typeof options?.timeoutSeconds === "number" && Number.isFinite(options.timeoutSeconds)) {
@@ -257,6 +276,7 @@ export function normalizeRuntimeOptions(
     ...(model ? { model } : {}),
     ...(thinking ? { thinking } : {}),
     ...(cwd ? { cwd } : {}),
+    ...(target ? { target } : {}),
     ...(permissionProfile ? { permissionProfile } : {}),
     ...(typeof timeoutSeconds === "number" ? { timeoutSeconds } : {}),
     ...(backendExtras ? { backendExtras } : {}),
@@ -366,6 +386,9 @@ export function inferRuntimeOptionPatchFromConfigOption(
   }
   if (normalizedKey === "cwd") {
     return { cwd: validateRuntimeCwdInput(validated.value) };
+  }
+  if (normalizedKey === "target") {
+    return { target: validateRuntimeTargetInput(validated.value) };
   }
   return {
     backendExtras: {
