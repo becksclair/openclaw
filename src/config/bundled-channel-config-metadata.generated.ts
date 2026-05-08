@@ -1581,6 +1581,27 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               exclusiveMinimum: 0,
               maximum: 120000,
             },
+            realtime: {
+              type: "object",
+              properties: {
+                enabled: {
+                  type: "boolean",
+                },
+                provider: {
+                  type: "string",
+                  minLength: 1,
+                },
+                model: {
+                  type: "string",
+                  minLength: 1,
+                },
+                voice: {
+                  type: "string",
+                  minLength: 1,
+                },
+              },
+              additionalProperties: false,
+            },
             tts: {
               type: "object",
               properties: {
@@ -3027,6 +3048,27 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     exclusiveMinimum: 0,
                     maximum: 120000,
                   },
+                  realtime: {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                      },
+                      provider: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                      model: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                      voice: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
                   tts: {
                     type: "object",
                     properties: {
@@ -3773,9 +3815,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Voice Reconnect Grace (ms)",
         help: "Grace period for a disconnected Discord voice session to enter Signalling or Connecting before OpenClaw destroys it. Default: 15000.",
       },
+      "voice.realtime.enabled": {
+        label: "Discord Realtime Voice Enabled",
+        help: "Use provider-backed full-duplex realtime voice for Discord voice channels. Default: true; set false to use legacy batch STT/TTS.",
+      },
+      "voice.realtime.provider": {
+        label: "Discord Realtime Voice Provider",
+        help: "Optional realtime voice provider override for Discord voice; defaults to shared Talk/voice-call realtime selection.",
+      },
+      "voice.realtime.model": {
+        label: "Discord Realtime Voice Model",
+        help: "Optional realtime model override for Discord voice; defaults to the selected realtime provider configuration.",
+      },
+      "voice.realtime.voice": {
+        label: "Discord Realtime Voice",
+        help: "Optional provider voice override for Discord realtime voice; defaults to the selected realtime provider configuration.",
+      },
       "voice.tts": {
         label: "Discord Voice Text-to-Speech",
-        help: "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
+        help: "Optional TTS overrides for legacy batch Discord voice playback (merged with messages.tts).",
       },
       "pluralkit.enabled": {
         label: "Discord PluralKit Enabled",

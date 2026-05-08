@@ -31,6 +31,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "plugin.approval.resolved": [APPROVALS_SCOPE],
   presence: [],
   shutdown: [],
+  "talk.realtime.relay": [WRITE_SCOPE],
   tick: [],
   "talk.mode": [WRITE_SCOPE],
   "update.available": [],

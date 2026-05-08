@@ -20,6 +20,7 @@ import {
   stopVoiceCaptureState,
 } from "./capture-state.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
+import { DiscordRealtimeVoiceBridgeController } from "./realtime.js";
 import {
   analyzeVoiceReceiveError,
   createVoiceReceiveRecoveryState,
@@ -91,6 +92,7 @@ export class DiscordVoiceManager {
   private autoJoinTask: Promise<void> | null = null;
   private readonly ownerAllowFrom?: string[];
   private readonly speakerContext: DiscordVoiceSpeakerContextResolver;
+  private readonly realtimeVoice: DiscordRealtimeVoiceBridgeController;
 
   constructor(
     private params: {
@@ -112,6 +114,14 @@ export class DiscordVoiceManager {
     this.speakerContext = new DiscordVoiceSpeakerContextResolver({
       client: params.client,
       ownerAllowFrom: this.ownerAllowFrom,
+    });
+    this.realtimeVoice = new DiscordRealtimeVoiceBridgeController({
+      cfg: params.cfg,
+      discordConfig: params.discordConfig,
+      runtime: params.runtime,
+      ownerAllowFrom: this.ownerAllowFrom,
+      speakerContext: this.speakerContext,
+      fetchGuildName: (guildId) => this.fetchGuildName(guildId),
     });
   }
 
@@ -332,6 +342,7 @@ export class DiscordVoiceManager {
         if (speakingEndHandler) {
           connection.receiver.speaking.off("end", speakingEndHandler);
         }
+        this.realtimeVoice.stop(entry);
         stopVoiceCaptureState(entry.capture);
         if (disconnectedHandler) {
           connection.off(voiceSdk.VoiceConnectionStatus.Disconnected, disconnectedHandler);
@@ -501,7 +512,10 @@ export class DiscordVoiceManager {
       `speaker ${userId} start`,
       DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
     );
-    if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing) {
+    if (
+      !this.realtimeVoice.isEnabled() &&
+      entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing
+    ) {
       entry.player.stop(true);
     }
 
@@ -518,6 +532,20 @@ export class DiscordVoiceManager {
     });
 
     try {
+      if (this.realtimeVoice.isEnabled()) {
+        const realtimeResult = await this.realtimeVoice.handleSpeakingStream({
+          entry,
+          userId,
+          stream,
+        });
+        if (realtimeResult === "handled") {
+          this.resetDecryptFailureState(entry);
+          return;
+        }
+        if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing) {
+          entry.player.stop(true);
+        }
+      }
       const pcm = await decodeOpusStream(stream, {
         onVerbose: logVoiceVerbose,
         onWarn: (message) => logger.warn(message),
@@ -562,10 +590,7 @@ export class DiscordVoiceManager {
       runtime: this.params.runtime,
       speakerContext: this.speakerContext,
       fetchGuildName: async (guildId) => {
-        const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
-        return guild && typeof guild.name === "string" && guild.name.trim()
-          ? guild.name
-          : undefined;
+        return this.fetchGuildName(guildId);
       },
       enqueuePlayback: (entry, task) => {
         this.enqueuePlayback(entry, task);
@@ -602,6 +627,11 @@ export class DiscordVoiceManager {
       .finally(() => {
         finishVoiceDecryptRecovery(entry.receiveRecovery);
       });
+  }
+
+  private async fetchGuildName(guildId: string): Promise<string | undefined> {
+    const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
+    return guild && typeof guild.name === "string" && guild.name.trim() ? guild.name : undefined;
   }
 
   private enableDaveReceivePassthrough(

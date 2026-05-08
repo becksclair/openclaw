@@ -507,6 +507,63 @@ describe("CLI attempt execution", () => {
     );
   });
 
+  it("uses embedded runtime and forwards toolsAllow for bounded consult runs", async () => {
+    const sessionKey = "agent:main:direct:bounded-consult";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-bounded-consult",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "bounded" }],
+      meta: { durationMs: 5 },
+    });
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "bounded consult",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-bounded-consult",
+      opts: {
+        senderIsOwner: true,
+        messageProvider: "discord-voice",
+        toolsAllow: ["read", "web_search"],
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "discord",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
+        toolsAllow: ["read", "web_search"],
+      }),
+    );
+  });
+
   it("routes canonical Anthropic models through the configured Claude CLI runtime", async () => {
     const sessionKey = "agent:main:direct:canonical-claude-cli";
     const sessionEntry: SessionEntry = {

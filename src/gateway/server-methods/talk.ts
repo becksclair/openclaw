@@ -221,6 +221,36 @@ function resolveRealtimeTalkAgentId(
   return parsed?.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(config);
 }
 
+function resolveTalkRealtimeConfigResponse(config: OpenClawConfig):
+  | {
+      available: true;
+      provider: string;
+      model?: string;
+      voice?: string;
+    }
+  | undefined {
+  const realtimeConfig = buildTalkRealtimeConfig(config);
+  try {
+    const resolution = resolveConfiguredRealtimeVoiceProvider({
+      configuredProviderId: realtimeConfig.provider,
+      providerConfigs: realtimeConfig.providers,
+      cfg: config,
+      cfgForResolve: config,
+      noRegisteredProviderMessage: "No realtime voice provider registered",
+    });
+    const model = normalizeOptionalString(resolution.providerConfig.model);
+    const voice = normalizeOptionalString(resolution.providerConfig.voice);
+    return {
+      available: true,
+      provider: resolution.provider.id,
+      ...(model ? { model } : {}),
+      ...(voice ? { voice } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function withRealtimeBrowserOverrides(
   providerConfig: RealtimeVoiceProviderConfig,
   params: { model?: string; voice?: string },
@@ -498,6 +528,11 @@ export const talkHandlers: GatewayRequestHandlers = {
       configPayload.ui = { seamColor };
     }
 
+    const realtime = resolveTalkRealtimeConfigResponse(runtimeConfig);
+    if (realtime) {
+      configPayload.realtime = realtime;
+    }
+
     respond(true, { config: configPayload }, undefined);
   },
   "talk.realtime.session": async ({ params, respond, context, client }) => {
@@ -517,6 +552,7 @@ export const talkHandlers: GatewayRequestHandlers = {
       provider?: string;
       model?: string;
       voice?: string;
+      transport?: "gateway-relay";
     };
     try {
       const runtimeConfig = context.getRuntimeConfig();
@@ -538,7 +574,7 @@ export const talkHandlers: GatewayRequestHandlers = {
         personaInstructions: resolveTtsPersonaDeliveryInstructions(runtimeConfig, { agentId }),
       });
       const instructions = buildRealtimeVoiceInstructions(instructionContext);
-      if (resolution.provider.createBrowserSession) {
+      if (typedParams.transport !== "gateway-relay" && resolution.provider.createBrowserSession) {
         const session = await resolution.provider.createBrowserSession({
           providerConfig: resolution.providerConfig,
           instructions,

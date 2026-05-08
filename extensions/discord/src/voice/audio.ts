@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import type { Readable } from "node:stream";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -140,6 +141,84 @@ export async function decodeOpusStream(
     }
   }
   return chunks.length > 0 ? Buffer.concat(chunks) : Buffer.alloc(0);
+}
+
+export async function decodeOpusStreamRealtime(
+  stream: Readable,
+  params: {
+    onPcm24kMono: (pcm: Buffer) => void | Promise<void>;
+    onVerbose: (message: string) => void;
+    onWarn: (message: string) => void;
+  },
+): Promise<void> {
+  const selected = createOpusDecoder({ onWarn: params.onWarn });
+  if (!selected) {
+    return;
+  }
+  params.onVerbose(`opus decoder: ${selected.name}`);
+  try {
+    for await (const chunk of stream) {
+      if (!chunk || !(chunk instanceof Buffer) || chunk.length === 0) {
+        continue;
+      }
+      const decoded = selected.decoder.decode(chunk);
+      if (!decoded || decoded.length === 0) {
+        continue;
+      }
+      const pcm24kMono = convertDiscordPcmToRealtimeInput(decoded);
+      if (pcm24kMono.length > 0) {
+        await params.onPcm24kMono(pcm24kMono);
+      }
+    }
+  } catch (err) {
+    if (shouldLogVerbose()) {
+      logVerbose(`discord voice: opus realtime decode failed: ${formatErrorMessage(err)}`);
+    }
+  }
+}
+
+export function convertDiscordPcmToRealtimeInput(pcm48kStereo: Buffer): Buffer {
+  return downmixStereo48kPcm16ToMono24k(pcm48kStereo);
+}
+
+export function convertRealtimeOutputToDiscordPcm(pcm24kMono: Buffer): Buffer {
+  return upsampleMono24kPcm16ToStereo48k(pcm24kMono);
+}
+
+export function createDiscordRawPcmStream(): PassThrough {
+  return new PassThrough({ highWaterMark: SAMPLE_RATE * CHANNELS * 2 });
+}
+
+function downmixStereo48kPcm16ToMono24k(pcm: Buffer): Buffer {
+  const sourceFrames = Math.floor(pcm.length / 4);
+  const outputSamples = Math.floor(sourceFrames / 2);
+  const output = Buffer.alloc(outputSamples * 2);
+  for (let sample = 0; sample < outputSamples; sample += 1) {
+    const offset = sample * 8;
+    const average = Math.round(
+      (pcm.readInt16LE(offset) +
+        pcm.readInt16LE(offset + 2) +
+        pcm.readInt16LE(offset + 4) +
+        pcm.readInt16LE(offset + 6)) /
+        4,
+    );
+    output.writeInt16LE(Math.max(-32768, Math.min(32767, average)), sample * 2);
+  }
+  return output;
+}
+
+function upsampleMono24kPcm16ToStereo48k(pcm: Buffer): Buffer {
+  const sampleCount = Math.floor(pcm.length / 2);
+  const output = Buffer.alloc(sampleCount * 8);
+  for (let sample = 0; sample < sampleCount; sample += 1) {
+    const value = pcm.readInt16LE(sample * 2);
+    const offset = sample * 8;
+    output.writeInt16LE(value, offset);
+    output.writeInt16LE(value, offset + 2);
+    output.writeInt16LE(value, offset + 4);
+    output.writeInt16LE(value, offset + 6);
+  }
+  return output;
 }
 
 function estimateDurationSeconds(pcm: Buffer): number {

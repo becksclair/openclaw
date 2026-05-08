@@ -1174,6 +1174,11 @@ Auto-join example:
         decryptionFailureTolerance: 24,
         connectTimeoutMs: 30000,
         reconnectGraceMs: 15000,
+        realtime: {
+          provider: "google",
+          model: "gemini-live-2.5-flash",
+          voice: "Puck",
+        },
         tts: {
           provider: "openai",
           openai: { voice: "onyx" },
@@ -1186,9 +1191,10 @@ Auto-join example:
 
 Notes:
 
-- `voice.tts` overrides `messages.tts` for voice playback only.
-- `voice.model` overrides the LLM used for Discord voice channel responses only. Leave it unset to inherit the routed agent model.
-- STT uses `tools.media.audio`; `voice.model` does not affect transcription.
+- Discord voice uses provider-backed full-duplex realtime voice by default. Set `voice.realtime.enabled=false` only when you need the legacy batch STT/TTS path.
+- `voice.realtime.provider`, `model`, and `voice` override the shared realtime voice selection for Discord only. Without an override, Discord voice uses a realtime-capable `talk.provider` first, then the Voice Call realtime fallback.
+- `voice.tts` overrides `messages.tts` for legacy batch voice playback only.
+- `voice.model` overrides the LLM used for legacy batch Discord voice channel responses only. Leave it unset to inherit the routed agent model.
 - Per-channel Discord `systemPrompt` overrides apply to voice transcript turns for that voice channel.
 - Voice transcript turns derive owner status from Discord `allowFrom` (or `dm.allowFrom`); non-owner speakers cannot access owner-only tools (for example `gateway` and `cron`).
 - Discord voice is opt-in for text-only configs; set `channels.discord.voice.enabled=true` (or keep an existing `channels.discord.voice` block) to enable `/vc` commands, the voice runtime, and the `GuildVoiceStates` gateway intent.
@@ -1202,13 +1208,12 @@ Notes:
 
 Voice channel pipeline:
 
-- Discord PCM capture is converted to a WAV temp file.
-- `tools.media.audio` handles STT, for example `openai/gpt-4o-mini-transcribe`.
-- The transcript is sent through Discord ingress and routing while the response LLM runs with a voice-output policy that hides the agent `tts` tool and asks for returned text, because Discord voice owns final TTS playback.
-- `voice.model`, when set, overrides only the response LLM for this voice-channel turn.
-- `voice.tts` is merged over `messages.tts`; the resulting audio is played in the joined channel.
+- Discord Opus receive streams are decoded, downmixed, and resampled into OpenClaw's PCM16 24kHz realtime contract.
+- The selected realtime provider receives live audio and streams PCM responses back into the joined Discord voice channel.
+- Realtime tool calls use the shared agent-consult tool so answers that need files, tools, or careful reasoning can route through the configured Discord agent session and return spoken summaries.
+- When `voice.realtime.enabled=false`, Discord falls back to the legacy batch path: capture a WAV segment, transcribe with `tools.media.audio`, route the transcript through Discord ingress, synthesize with `voice.tts`/`messages.tts`, and play the result in the joined channel.
 
-Credentials are resolved per component: LLM route auth for `voice.model`, STT auth for `tools.media.audio`, and TTS auth for `messages.tts`/`voice.tts`.
+Credentials are resolved per component: realtime provider auth for `voice.realtime`/shared Talk or Voice Call realtime config, LLM route auth for legacy `voice.model`, STT auth for legacy `tools.media.audio`, and TTS auth for legacy `messages.tts`/`voice.tts`.
 
 ### Voice messages
 

@@ -540,6 +540,15 @@ const DiscordVoiceAutoJoinSchema = z
   })
   .strict();
 
+const DiscordRealtimeVoiceSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    provider: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
+    voice: z.string().min(1).optional(),
+  })
+  .strict();
+
 const DiscordVoiceSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -549,6 +558,7 @@ const DiscordVoiceSchema = z
     decryptionFailureTolerance: z.number().int().min(0).optional(),
     connectTimeoutMs: z.number().int().positive().max(120_000).optional(),
     reconnectGraceMs: z.number().int().positive().max(120_000).optional(),
+    realtime: DiscordRealtimeVoiceSchema.optional(),
     tts: TtsConfigSchema.optional(),
   })
   .strict()

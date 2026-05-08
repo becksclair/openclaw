@@ -104,6 +104,21 @@ describe("validateTalkConfigResult", () => {
     ).toBe(true);
   });
 
+  it("accepts realtime voice metadata", () => {
+    expect(
+      validateTalkConfigResult({
+        config: {
+          realtime: {
+            available: true,
+            provider: "google",
+            model: "gemini-live-2.5-flash",
+            voice: "Puck",
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects normalized talk payloads without talk.resolved", () => {
     expect(
       validateTalkConfigResult({
@@ -130,6 +145,7 @@ describe("validateTalkRealtimeSessionParams", () => {
         provider: "openai",
         model: "gpt-realtime-1.5",
         voice: "alloy",
+        transport: "gateway-relay",
       }),
     ).toBe(true);
   });

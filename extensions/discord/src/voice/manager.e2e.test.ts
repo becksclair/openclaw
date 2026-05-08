@@ -577,6 +577,44 @@ describe("DiscordVoiceManager", () => {
     }
   });
 
+  it("stops current playback before falling back to legacy voice when realtime is unavailable", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager(
+      { groupPolicy: "open", voice: { enabled: true } },
+      createClient(),
+      {
+        channels: { discord: {} },
+        commands: { useAccessGroups: false },
+      },
+    );
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1") as
+      | {
+          player: { state: { status: string }; stop: ReturnType<typeof vi.fn> };
+        }
+      | undefined;
+    expect(entry).toBeDefined();
+    if (entry) {
+      entry.player.state.status = "playing";
+    }
+    const stream = {
+      on: vi.fn(),
+      destroy: vi.fn(),
+      async *[Symbol.asyncIterator]() {},
+    };
+    connection.receiver.subscribe.mockReturnValueOnce(stream);
+
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, "u1");
+
+    expect(entry?.player.stop).toHaveBeenCalledWith(true);
+  });
+
   it("passes senderIsOwner=true for allowlisted voice speakers", async () => {
     const client = createClient();
     client.fetchMember.mockResolvedValue({

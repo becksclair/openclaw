@@ -42,6 +42,7 @@ export const TalkRealtimeSessionParamsSchema = Type.Object(
     provider: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
+    transport: Type.Optional(Type.Literal("gateway-relay")),
   },
   { additionalProperties: false },
 );
@@ -187,11 +188,22 @@ const TalkConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const TalkRealtimeConfigSchema = Type.Object(
+  {
+    available: Type.Literal(true),
+    provider: Type.String(),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const TalkConfigResultSchema = Type.Object(
   {
     config: Type.Object(
       {
         talk: Type.Optional(TalkConfigSchema),
+        realtime: Type.Optional(TalkRealtimeConfigSchema),
         session: Type.Optional(
           Type.Object(
             {

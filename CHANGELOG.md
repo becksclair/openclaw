@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.5.6
 
+### Changes
+
+- Voice: add Android realtime Talk Mode through the Gateway relay and make Discord voice channels use the same provider-backed full-duplex realtime path by default. Thanks @becksclair.
+
 ### Fixes
 
 - Talk/realtime: inject the current agent's `SOUL.md`, `IDENTITY.md`, and `USER.md` into realtime provider instructions, then apply the effective selected TTS persona as provider-neutral spoken delivery guidance for `agent:<id>:*` sessions.

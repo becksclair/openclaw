@@ -248,6 +248,93 @@ describe("talk.config handler", () => {
       undefined,
     );
   });
+
+  it("includes realtime voice metadata when a provider is configured", async () => {
+    const runtimeConfig = {
+      talk: {
+        provider: "google",
+        providers: {
+          google: {
+            apiKey: "gemini-key",
+            model: "gemini-live-2.5-flash",
+            voice: "Puck",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const provider = {
+      id: "google",
+      label: "Google Live Voice",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      hash: "test-hash",
+      valid: true,
+      config: runtimeConfig,
+    });
+    mocks.getSpeechProvider.mockReturnValue(undefined);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: {
+        apiKey: "gemini-key",
+        model: "gemini-live-2.5-flash",
+        voice: "Puck",
+      },
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.config"]({
+      req: { type: "req", id: "1", method: "talk.config" },
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => runtimeConfig } as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        config: expect.objectContaining({
+          realtime: {
+            available: true,
+            provider: "google",
+            model: "gemini-live-2.5-flash",
+            voice: "Puck",
+          },
+        }),
+      }),
+      undefined,
+    );
+  });
+
+  it("omits realtime voice metadata when no provider is configured", async () => {
+    const runtimeConfig = {} as OpenClawConfig;
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      hash: "test-hash",
+      valid: true,
+      config: runtimeConfig,
+    });
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockImplementation(() => {
+      throw new Error("No realtime voice provider registered");
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.config"]({
+      req: { type: "req", id: "1", method: "talk.config" },
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => runtimeConfig } as never,
+    });
+
+    const payload = respond.mock.calls[0]?.[1] as { config?: Record<string, unknown> } | undefined;
+    expect(payload?.config).not.toHaveProperty("realtime");
+  });
 });
 
 describe("talk.realtime.session handler", () => {
@@ -358,6 +445,73 @@ describe("talk.realtime.session handler", () => {
         code: "UNAVAILABLE",
         message: "Error: No realtime voice provider registered",
       }),
+    );
+  });
+
+  it("uses the gateway relay when the client requests relay transport", async () => {
+    const createBrowserSession = vi.fn(async () => ({
+      provider: "openai",
+      transport: "webrtc-sdp" as const,
+      clientSecret: "browser-secret",
+    }));
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBrowserSession,
+      createBridge: vi.fn(),
+    };
+    mocks.getRealtimeVoiceProvider.mockReturnValue(provider);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-requested",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.realtime.session"]({
+      req: { type: "req", id: "1", method: "talk.realtime.session" },
+      params: { sessionKey: "main", provider: "openai", transport: "gateway-relay" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              provider: "openai",
+              providers: { openai: { apiKey: "openai-key" } },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expect(createBrowserSession).not.toHaveBeenCalled();
+    expect(mocks.createTalkRealtimeRelaySession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connId: "conn-1",
+        provider,
+        providerConfig: { apiKey: "openai-key" },
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        provider: "openai",
+        transport: "gateway-relay",
+        relaySessionId: "relay-requested",
+      }),
+      undefined,
     );
   });
 

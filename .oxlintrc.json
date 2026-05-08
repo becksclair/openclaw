@@ -13,6 +13,10 @@
     "eslint/no-await-in-loop": "off",
     "eslint/no-constructor-return": "error",
     "eslint/no-div-regex": "error",
+    "eslint/no-underscore-dangle": [
+      "error",
+      { "allow": ["_socket", "__openclawPreauthBudgetKey", "__openclawPreauthBudgetClaimed"] }
+    ],
     "eslint/no-extra-label": "error",
     "eslint/no-empty-pattern": "error",
     "eslint/no-lone-blocks": "error",

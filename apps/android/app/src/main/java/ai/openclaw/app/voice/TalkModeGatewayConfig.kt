@@ -11,16 +11,52 @@ internal data class TalkModeGatewayConfigState(
   val mainSessionKey: String,
   val interruptOnSpeech: Boolean?,
   val silenceTimeoutMs: Long,
+  val realtime: RealtimeTalkConfig?,
+)
+
+internal data class RealtimeTalkConfig(
+  val provider: String,
+  val model: String?,
+  val voice: String?,
 )
 
 internal object TalkModeGatewayConfigParser {
   fun parse(config: JsonObject?): TalkModeGatewayConfigState {
-    val talk = config?.get("talk").asObjectOrNull()
-    val sessionCfg = config?.get("session").asObjectOrNull()
+    val talk = config?.get("talk").configAsObjectOrNull()
+    val sessionCfg = config?.get("session").configAsObjectOrNull()
     return TalkModeGatewayConfigState(
-      mainSessionKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull()),
-      interruptOnSpeech = talk?.get("interruptOnSpeech").asBooleanOrNull(),
+      mainSessionKey = normalizeMainKey(sessionCfg?.get("mainKey").configAsStringOrNull()),
+      interruptOnSpeech = talk?.get("interruptOnSpeech").configAsBooleanOrNull(),
       silenceTimeoutMs = resolvedSilenceTimeoutMs(talk),
+      realtime = parseRealtime(config?.get("realtime").configAsObjectOrNull()),
+    )
+  }
+
+  private fun parseRealtime(realtime: JsonObject?): RealtimeTalkConfig? {
+    val realtimeObj = realtime ?: return null
+    val available = realtimeObj.get("available").configAsBooleanOrNull() ?: return null
+    if (!available) return null
+    val provider =
+      realtimeObj
+        .get("provider")
+        .configAsStringOrNull()
+        ?.trim()
+        .orEmpty()
+    if (provider.isEmpty()) return null
+    return RealtimeTalkConfig(
+      provider = provider,
+      model =
+        realtimeObj
+          .get("model")
+          .configAsStringOrNull()
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() },
+      voice =
+        realtimeObj
+          .get("voice")
+          .configAsStringOrNull()
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() },
     )
   }
 
@@ -36,15 +72,14 @@ internal object TalkModeGatewayConfigParser {
   }
 }
 
-private fun JsonElement?.asStringOrNull(): String? =
+private fun JsonElement?.configAsStringOrNull(): String? =
   this
-    ?.let { element ->
-      element as? JsonPrimitive
-    }?.contentOrNull
+    ?.let { element -> element as? JsonPrimitive }
+    ?.contentOrNull
 
-private fun JsonElement?.asBooleanOrNull(): Boolean? {
+private fun JsonElement?.configAsBooleanOrNull(): Boolean? {
   val primitive = this as? JsonPrimitive ?: return null
   return primitive.booleanOrNull
 }
 
-private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
+private fun JsonElement?.configAsObjectOrNull(): JsonObject? = this as? JsonObject

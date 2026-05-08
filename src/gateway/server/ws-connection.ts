@@ -18,6 +18,7 @@ import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constant
 import { clearNodeWakeState } from "../server-methods/nodes-wake-state.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
+import { closeTalkRealtimeRelaySessionsForConn } from "../talk-realtime-relay.js";
 import { logWs } from "../ws-log.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
@@ -394,6 +395,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       const context = buildRequestContext();
       context.unsubscribeAllSessionEvents(connId);
+      closeTalkRealtimeRelaySessionsForConn(connId);
       if (client?.connect?.role === "node") {
         const nodeId = context.nodeRegistry.unregister(connId);
         if (nodeId) {

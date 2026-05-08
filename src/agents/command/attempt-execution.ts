@@ -438,7 +438,11 @@ export function runAgentAttempt(params: {
     allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
   });
   const authProfileId = runtimeAuthPlan.forwardedAuthProfileId;
-  if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
+  if (
+    !isRawModelRun &&
+    params.opts.toolsAllow === undefined &&
+    isCliProvider(cliExecutionProvider, params.cfg)
+  ) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const resolveReusableCliSessionBinding = async () => {
       if (
@@ -613,6 +617,7 @@ export function runAgentAttempt(params: {
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
     disableTools: params.opts.modelRun === true,
+    toolsAllow: params.opts.toolsAllow,
     onAgentEvent: params.onAgentEvent,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     onUserMessagePersisted: params.onUserMessagePersisted,

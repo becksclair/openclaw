@@ -62,6 +62,23 @@ class TalkModeManager(
   private val json = Json { ignoreUnknownKeys = true }
   private val talkSpeakClient = TalkSpeakClient(session = session, json = json)
   private val talkAudioPlayer = TalkAudioPlayer(context)
+  private val realtimeTalkManager by lazy {
+    RealtimeTalkManager(
+      context = context,
+      scope = scope,
+      session = session,
+      isConnected = isConnected,
+      onStatus = { _statusText.value = it },
+      onListening = { _isListening.value = it },
+      onSpeaking = { _isSpeaking.value = it },
+      onConsult = { argsJson -> runRealtimeConsult(argsJson) },
+      onUnavailable = {
+        if (_isEnabled.value) {
+          start()
+        }
+      },
+    )
+  }
 
   private val _isEnabled = MutableStateFlow(false)
   val isEnabled: StateFlow<Boolean> = _isEnabled
@@ -102,6 +119,7 @@ class TalkModeManager(
   private val completedRunTexts = LinkedHashMap<String, String>()
   private var chatSubscribedSessionKey: String? = null
   private var configLoaded = false
+  private var realtimeConfig: RealtimeTalkConfig? = null
 
   @Volatile private var playbackEnabled = true
   private val playbackGeneration = AtomicLong(0L)
@@ -149,7 +167,16 @@ class TalkModeManager(
     _isEnabled.value = enabled
     if (enabled) {
       Log.d(tag, "enabled")
-      start()
+      scope.launch {
+        reloadConfig()
+        if (!_isEnabled.value) return@launch
+        val realtime = realtimeConfig
+        if (realtime != null) {
+          realtimeTalkManager.start(config = realtime, sessionKey = mainSessionKey.ifBlank { "main" })
+        } else {
+          start()
+        }
+      }
     } else {
       Log.d(tag, "disabled")
       stop()
@@ -211,6 +238,11 @@ class TalkModeManager(
     event: String,
     payloadJson: String?,
   ) {
+    if (event == "talk.realtime.relay") {
+      val parsed = RealtimeTalkRelayEventParser.parse(payloadJson) ?: return
+      realtimeTalkManager.handleRelayEvent(parsed.first, parsed.second)
+      return
+    }
     if (ttsOnAllResponses) {
       Log.d(tag, "gateway event: $event")
     }
@@ -332,6 +364,7 @@ class TalkModeManager(
   }
 
   private fun stop() {
+    realtimeTalkManager.stop()
     stopRequested = true
     finalizeInFlight = false
     listeningMode = false
@@ -555,6 +588,47 @@ class TalkModeManager(
     lines.add("")
     lines.add(transcript)
     return lines.joinToString("\n")
+  }
+
+  private suspend fun runRealtimeConsult(argsJson: String?): String {
+    val message = buildRealtimeConsultPrompt(argsJson)
+    val startedAt = System.currentTimeMillis().toDouble() / 1000.0
+    subscribeChatIfNeeded(session = session, sessionKey = mainSessionKey)
+    val runId = sendChat(message, session)
+    val ok = waitForChatFinal(runId)
+    return consumeRunText(runId)
+      ?: waitForAssistantText(session, startedAt, if (ok) 12_000 else 25_000)
+      ?: "OpenClaw finished with no text."
+  }
+
+  private fun buildRealtimeConsultPrompt(argsJson: String?): String {
+    val args =
+      runCatching { argsJson?.let { json.parseToJsonElement(it).asObjectOrNull() } }
+        .getOrNull()
+    val question =
+      args
+        ?.get("question")
+        .asStringOrNull()
+        ?.trim()
+        .orEmpty()
+    if (question.isEmpty()) throw IllegalArgumentException("openclaw_agent_consult requires a question")
+    val context =
+      args
+        ?.get("context")
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    val responseStyle =
+      args
+        ?.get("responseStyle")
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    return listOfNotNull(
+      question,
+      context?.let { "Context:\n$it" },
+      responseStyle?.let { "Spoken style:\n$it" },
+    ).joinToString("\n\n")
   }
 
   private suspend fun sendChat(
@@ -1074,9 +1148,11 @@ class TalkModeManager(
       val parsed = TalkModeGatewayConfigParser.parse(root?.get("config").asObjectOrNull())
       silenceWindowMs = parsed.silenceTimeoutMs
       parsed.interruptOnSpeech?.let { interruptOnSpeech = it }
+      realtimeConfig = parsed.realtime
       configLoaded = true
     } catch (_: Throwable) {
       silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs
+      realtimeConfig = null
       configLoaded = false
     }
   }

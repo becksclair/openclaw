@@ -341,6 +341,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + LLM + TTS overrides. Text-only Discord configs leave voice off by default; set `channels.discord.voice.enabled=true` to opt in.
 - `channels.discord.voice.model` optionally overrides the LLM model used for Discord voice channel responses.
+- `channels.discord.voice.realtime.enabled` controls provider-backed realtime voice for Discord voice channels. Realtime is enabled by default; set it to `false` only to use the legacy batch STT/TTS path. By default it uses the shared realtime voice selection: a realtime-capable `talk.provider` first, then the Voice Call realtime fallback. Optional `provider`, `model`, and `voice` fields override that selection for Discord voice only.
 - `channels.discord.voice.daveEncryption` and `channels.discord.voice.decryptionFailureTolerance` pass through to `@discordjs/voice` DAVE options (`true` and `24` by default).
 - `channels.discord.voice.connectTimeoutMs` controls the initial `@discordjs/voice` Ready wait for `/vc join` and auto-join attempts (`30000` by default).
 - `channels.discord.voice.reconnectGraceMs` controls how long a disconnected voice session may take to enter reconnect signalling before OpenClaw destroys it (`15000` by default).

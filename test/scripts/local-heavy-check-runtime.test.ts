@@ -23,13 +23,19 @@ const ROOMY_HOST = {
 };
 
 function makeEnv(overrides: Record<string, string | undefined> = {}) {
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     OPENCLAW_LOCAL_CHECK: "1",
     ...overrides,
   };
   if (!Object.hasOwn(overrides, "OPENCLAW_LOCAL_CHECK_MODE")) {
     delete env.OPENCLAW_LOCAL_CHECK_MODE;
+  }
+  if (!Object.hasOwn(overrides, "GOGC")) {
+    delete env.GOGC;
+  }
+  if (!Object.hasOwn(overrides, "GOMEMLIMIT")) {
+    delete env.GOMEMLIMIT;
   }
   return env;
 }

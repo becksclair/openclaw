@@ -15,6 +15,7 @@ Current replay target: `v2026.5.6`.
 - `extensions/acpx-remote` - active seam: keep the local `codex-devbox` remote ACP bridge as a separate nested/excluded plugin lifecycle; do not fold it into the outer repo replay.
 - `c5991de10f` - active seam: keep Control UI read-aloud routed through the Gateway Talk/TTS surface, with Markdown/noisy markup stripped before speech.
 - `realtime-talk-agent-instructions` - active seam: keep Control UI realtime Talk scoped to the active agent and keep provider realtime instructions embedding that agent's `SOUL.md`, `IDENTITY.md`, `USER.md`, and selected TTS persona guidance.
+- `realtime-android-discord-audio` - active seam: keep Android Talk Mode on the Gateway realtime relay when available, and keep Discord voice channels on the same full-duplex provider-backed realtime path by default.
 - `02915314ae` - active seam: keep Telegram transcribed-audio TTS intent through the reply path.
 - `6c4503c385` - active seam: keep agent-scoped TTS conversion config resolution.
 - `da4c5c7c34` - active seam: keep exec safe-bin realpath trust for approved safe binaries reached through symlinks or wrapper paths.
@@ -167,6 +168,51 @@ Rebase notes:
 - Keep realtime providers generic. Provider implementations should receive only the opaque `instructions` string, not agent ids, workspace paths, or provider-specific persona prose.
 - Keep mutable TTS persona selection flowing through the existing TTS resolver and `messages.tts.personas`; do not duplicate canonical persona prose into `talk.providers.*`.
 
+### Android and Discord realtime audio
+
+Carry behavior: Android Talk Mode discovers realtime availability from `talk.config`, starts `talk.realtime.session` with `transport: "gateway-relay"`, streams microphone PCM through relay audio calls, and falls back to legacy batch Talk only when realtime is unavailable. Discord voice channels use the same provider-backed full-duplex realtime bridge by default; `channels.discord.voice.realtime.enabled=false` is the explicit legacy batch STT/TTS escape hatch.
+
+Primary seam files:
+
+- `apps/android/app/src/main/java/ai/openclaw/app/voice/*Realtime*`
+- `apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeGatewayConfig.kt`
+- `apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt`
+- `src/gateway/server-methods/talk.ts`
+- `src/gateway/server-methods-list.ts`
+- `src/gateway/protocol/schema/channels.ts`
+- `src/gateway/server-broadcast.ts`
+- `src/gateway/server/ws-connection.ts`
+- `src/gateway/talk-realtime-relay.ts`
+- `src/config/types.discord.ts`
+- `src/config/zod-schema.providers-core.ts`
+- `src/config/bundled-channel-config-metadata.generated.ts`
+- `extensions/discord/src/config-ui-hints.ts`
+- `extensions/discord/src/voice/audio.ts`
+- `extensions/discord/src/voice/realtime.ts`
+- `extensions/discord/src/voice/manager.ts`
+- `docs/channels/discord.md`
+- `docs/gateway/config-channels.md`
+
+Primary seam tests:
+
+- `apps/android/app/src/test/java/ai/openclaw/app/voice/RealtimeTalkRelayEventParserTest.kt`
+- `apps/android/app/src/test/java/ai/openclaw/app/voice/RealtimeTalkManagerAudioInjectionTest.kt`
+- `apps/android/app/src/test/java/ai/openclaw/app/voice/TalkModeConfigParsingTest.kt`
+- `src/gateway/gateway-misc.test.ts`
+- `src/gateway/protocol/index.test.ts`
+- `src/gateway/server-methods/talk.test.ts`
+- `src/gateway/talk-realtime-relay.test.ts`
+- `extensions/discord/src/voice/manager.e2e.test.ts`
+- `extensions/discord/src/voice/realtime.test.ts`
+
+Rebase notes:
+
+- Keep Discord realtime voice default-on. Do not preserve old disabled-by-default docs or behavior when replaying this seam.
+- Keep the Gateway relay path provider-generic and protocol-visible through `talk.realtime.*`; do not introduce Discord-specific gateway RPCs.
+- Keep batch Android Talk and batch Discord voice available only as fallback or explicit opt-out behavior, not as the normal Discord voice path.
+- Keep relay cleanup tied to Gateway websocket lifecycle so relay sessions close when the client connection closes.
+- Keep Discord receive audio decoded into the shared PCM16 24 kHz realtime contract before sending it to the provider bridge.
+
 ### Telegram transcribed-audio TTS intent
 
 Carry behavior: Telegram voice/audio transcripts preserve the user's TTS/read-aloud intent through the reply path, including cases where inbound media was already transcribed before reply dispatch.
@@ -260,6 +306,10 @@ Rebase notes:
 - `./scripts/verify-codex-devbox-acp.js --help`
 - `pnpm test ui/src/ui/chat/grouped-render.test.ts ui/src/ui/chat/talk-tts.test.ts ui/src/ui/chat/strip-markdown-for-speech.test.ts`
 - `pnpm test src/agents/workspace.test.ts src/realtime-voice/realtime-instructions.test.ts src/realtime-voice/agent-consult-tool.test.ts src/tts/realtime-persona-instructions.test.ts src/gateway/server-methods/talk.test.ts ui/src/ui/app.talk.test.ts ui/src/ui/realtime-talk.test.ts`
+- `pnpm test src/gateway/server-methods/talk.test.ts src/gateway/talk-realtime-relay.test.ts src/gateway/protocol/index.test.ts`
+- `pnpm test src/gateway/gateway-misc.test.ts src/gateway/server-methods/talk.test.ts src/gateway/talk-realtime-relay.test.ts src/gateway/protocol/index.test.ts extensions/discord/src/voice/realtime.test.ts extensions/discord/src/voice/manager.e2e.test.ts`
+- `pnpm android:test`
+- `pnpm config:channels:check`
 - `pnpm tsgo:test:ui`
 - `pnpm ui:build`
 - `pnpm docs:check-mdx docs/web/control-ui.md`

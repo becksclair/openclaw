@@ -174,6 +174,7 @@ export const GATEWAY_EVENTS = [
   "connect.challenge",
   "agent",
   "chat",
+  "talk.realtime.relay",
   "session.message",
   "session.tool",
   "sessions.changed",

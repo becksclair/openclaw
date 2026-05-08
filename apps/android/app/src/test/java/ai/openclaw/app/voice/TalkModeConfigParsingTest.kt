@@ -36,6 +36,48 @@ class TalkModeConfigParsingTest {
   }
 
   @Test
+  fun readsRealtimeRelayConfigWhenAvailable() {
+    val config =
+      json
+        .parseToJsonElement(
+          """
+          {
+            "realtime": {
+              "available": true,
+              "provider": "google",
+              "model": "gemini-live-2.5-flash",
+              "voice": "Puck"
+            }
+          }
+          """.trimIndent(),
+        ).jsonObject
+
+    val realtime = TalkModeGatewayConfigParser.parse(config).realtime
+
+    assertEquals("google", realtime?.provider)
+    assertEquals("gemini-live-2.5-flash", realtime?.model)
+    assertEquals("Puck", realtime?.voice)
+  }
+
+  @Test
+  fun ignoresUnavailableRealtimeRelayConfig() {
+    val config =
+      json
+        .parseToJsonElement(
+          """
+          {
+            "realtime": {
+              "available": false,
+              "provider": "google"
+            }
+          }
+          """.trimIndent(),
+        ).jsonObject
+
+    assertEquals(null, TalkModeGatewayConfigParser.parse(config).realtime)
+  }
+
+  @Test
   fun defaultsSilenceTimeoutMsWhenMissing() {
     assertEquals(
       TalkDefaults.defaultSilenceTimeoutMs,

@@ -129,6 +129,17 @@ export type DiscordVoiceAutoJoinConfig = {
   channelId: string;
 };
 
+export type DiscordRealtimeVoiceConfig = {
+  /** Enable realtime provider-backed Discord voice (default: true). Set false to use legacy batch STT/TTS. */
+  enabled?: boolean;
+  /** Optional realtime voice provider override; defaults to the shared realtime voice selection. */
+  provider?: string;
+  /** Optional realtime model override for Discord voice. */
+  model?: string;
+  /** Optional realtime voice override for Discord voice. */
+  voice?: string;
+};
+
 export type DiscordVoiceConfig = {
   /** Enable Discord voice channel conversations (default: true). */
   enabled?: boolean;
@@ -144,6 +155,8 @@ export type DiscordVoiceConfig = {
   connectTimeoutMs?: number;
   /** Grace period for Discord voice reconnect signalling after a disconnect (default: 15000). */
   reconnectGraceMs?: number;
+  /** Optional realtime provider-backed Discord voice mode. Enabled by default. */
+  realtime?: DiscordRealtimeVoiceConfig;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };
