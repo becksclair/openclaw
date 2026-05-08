@@ -212,6 +212,7 @@ Rebase notes:
 - Keep batch Android Talk and batch Discord voice available only as fallback or explicit opt-out behavior, not as the normal Discord voice path.
 - Keep relay cleanup tied to Gateway websocket lifecycle so relay sessions close when the client connection closes.
 - Keep Discord receive audio decoded into the shared PCM16 24 kHz realtime contract before sending it to the provider bridge.
+- When Bex asks to build the Android app without naming a flavor, build the sideloadable third-party release APK with `cd apps/android && ./gradlew :app:assembleThirdPartyRelease`; do not default to the Play flavor because the third-party flavor keeps SMS and Call Log permissions.
 
 ### Telegram transcribed-audio TTS intent
 
