@@ -14,6 +14,7 @@ import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
 const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
+const MAX_USER_MESSAGE_CHARS = 8 * 1024;
 const MAX_RELAY_SESSIONS_PER_CONN = 2;
 const MAX_RELAY_SESSIONS_GLOBAL = 64;
 const RELAY_EVENT = "talk.realtime.relay";
@@ -82,7 +83,7 @@ function broadcastToOwner(
   connId: string,
   event: TalkRealtimeRelayEvent,
 ): void {
-  context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]), { dropIfSlow: true });
+  context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]));
 }
 
 function closeBridgeQuietly(session: RelaySession): void {
@@ -260,6 +261,21 @@ export function sendTalkRealtimeRelayAudio(params: {
   if (typeof params.timestamp === "number" && Number.isFinite(params.timestamp)) {
     session.bridge.setMediaTimestamp(params.timestamp);
   }
+}
+
+export function sendTalkRealtimeRelayUserMessage(params: {
+  relaySessionId: string;
+  connId: string;
+  text: string;
+}): void {
+  const text = params.text.trim();
+  if (!text) {
+    throw new Error("Realtime relay user message is empty");
+  }
+  if (text.length > MAX_USER_MESSAGE_CHARS) {
+    throw new Error("Realtime relay user message is too large");
+  }
+  getRelaySession(params.relaySessionId, params.connId).bridge.sendUserMessage(text);
 }
 
 export function acknowledgeTalkRealtimeRelayMark(params: {

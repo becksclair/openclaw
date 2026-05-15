@@ -67,6 +67,8 @@ import {
   TalkConfigResultSchema,
   type TalkRealtimeRelayAudioParams,
   TalkRealtimeRelayAudioParamsSchema,
+  type TalkRealtimeRelayUserMessageParams,
+  TalkRealtimeRelayUserMessageParamsSchema,
   type TalkRealtimeRelayMarkParams,
   TalkRealtimeRelayMarkParamsSchema,
   type TalkRealtimeRelayOkResult,
@@ -525,6 +527,8 @@ export const validateTalkRealtimeSessionResult = ajv.compile<TalkRealtimeSession
 export const validateTalkRealtimeRelayAudioParams = ajv.compile<TalkRealtimeRelayAudioParams>(
   TalkRealtimeRelayAudioParamsSchema,
 );
+export const validateTalkRealtimeRelayUserMessageParams =
+  ajv.compile<TalkRealtimeRelayUserMessageParams>(TalkRealtimeRelayUserMessageParamsSchema);
 export const validateTalkRealtimeRelayMarkParams = ajv.compile<TalkRealtimeRelayMarkParams>(
   TalkRealtimeRelayMarkParamsSchema,
 );
@@ -746,6 +750,7 @@ export {
   TalkRealtimeSessionParamsSchema,
   TalkRealtimeSessionResultSchema,
   TalkRealtimeRelayAudioParamsSchema,
+  TalkRealtimeRelayUserMessageParamsSchema,
   TalkRealtimeRelayMarkParamsSchema,
   TalkRealtimeRelayStopParamsSchema,
   TalkRealtimeRelayToolResultParamsSchema,
@@ -860,6 +865,7 @@ export type {
   TalkRealtimeSessionParams,
   TalkRealtimeSessionResult,
   TalkRealtimeRelayAudioParams,
+  TalkRealtimeRelayUserMessageParams,
   TalkRealtimeRelayMarkParams,
   TalkRealtimeRelayStopParams,
   TalkRealtimeRelayToolResultParams,

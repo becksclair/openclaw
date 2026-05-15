@@ -71,7 +71,13 @@ export function createRealtimeVoiceBridgeSession(
     close: () => requireBridge().close(),
     connect: () => requireBridge().connect(),
     sendAudio: (audio) => requireBridge().sendAudio(audio),
-    sendUserMessage: (text) => requireBridge().sendUserMessage?.(text),
+    sendUserMessage: (text) => {
+      const activeBridge = requireBridge();
+      if (!activeBridge.sendUserMessage) {
+        throw new Error("Realtime voice provider does not support text user messages");
+      }
+      activeBridge.sendUserMessage(text);
+    },
     handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
     setMediaTimestamp: (ts) => requireBridge().setMediaTimestamp(ts),
     submitToolResult: (callId, result, options) =>

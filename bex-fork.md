@@ -16,6 +16,7 @@ Current replay target: `v2026.5.6`.
 - `c5991de10f` - active seam: keep Control UI read-aloud routed through the Gateway Talk/TTS surface, with Markdown/noisy markup stripped before speech.
 - `realtime-talk-agent-instructions` - active seam: keep Control UI realtime Talk scoped to the active agent and keep provider realtime instructions embedding that agent's `SOUL.md`, `IDENTITY.md`, `USER.md`, and selected TTS persona guidance.
 - `realtime-android-discord-audio` - active seam: keep Android Talk Mode on the Gateway realtime relay when available, and keep Discord voice channels on the same full-duplex provider-backed realtime path by default.
+- `heartbeat-event-wake-interval` - active seam: keep event/action heartbeat wakes from postponing the next phase-aligned interval heartbeat.
 - `02915314ae` - active seam: keep Telegram transcribed-audio TTS intent through the reply path.
 - `6c4503c385` - active seam: keep agent-scoped TTS conversion config resolution.
 - `da4c5c7c34` - active seam: keep exec safe-bin realpath trust for approved safe binaries reached through symlinks or wrapper paths.
@@ -190,15 +191,25 @@ Carry behavior: Android Talk Mode discovers realtime availability from `talk.con
 
 Primary seam files:
 
+- `apps/android/app/src/debug/AndroidManifest.xml`
+- `apps/android/app/src/debug/java/ai/openclaw/app/DebugAudioTraceReceiver.kt`
+- `apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt`
 - `apps/android/app/src/main/java/ai/openclaw/app/voice/*Realtime*`
+- `apps/android/app/src/main/java/ai/openclaw/app/voice/RealtimeAudioTrace.kt`
 - `apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeGatewayConfig.kt`
 - `apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt`
+- `apps/android/app/src/test/java/ai/openclaw/app/voice/RealtimeAudioPlayerTest.kt`
 - `src/gateway/server-methods/talk.ts`
 - `src/gateway/server-methods-list.ts`
+- `src/gateway/method-scopes.ts`
+- `src/gateway/protocol/index.ts`
 - `src/gateway/protocol/schema/channels.ts`
+- `src/gateway/protocol/schema/protocol-schemas.ts`
+- `src/gateway/protocol/schema/types.ts`
 - `src/gateway/server-broadcast.ts`
 - `src/gateway/server/ws-connection.ts`
 - `src/gateway/talk-realtime-relay.ts`
+- `src/realtime-voice/session-runtime.ts`
 - `src/config/types.discord.ts`
 - `src/config/zod-schema.providers-core.ts`
 - `src/config/bundled-channel-config-metadata.generated.ts`
@@ -206,29 +217,60 @@ Primary seam files:
 - `extensions/discord/src/voice/audio.ts`
 - `extensions/discord/src/voice/realtime.ts`
 - `extensions/discord/src/voice/manager.ts`
+- `extensions/google/realtime-voice-provider.ts`
 - `docs/channels/discord.md`
 - `docs/gateway/config-channels.md`
+- `docs/gateway/protocol.md`
 
 Primary seam tests:
 
+- `apps/android/app/src/test/java/ai/openclaw/app/voice/RealtimeAudioPlayerTest.kt`
 - `apps/android/app/src/test/java/ai/openclaw/app/voice/RealtimeTalkRelayEventParserTest.kt`
 - `apps/android/app/src/test/java/ai/openclaw/app/voice/RealtimeTalkManagerAudioInjectionTest.kt`
 - `apps/android/app/src/test/java/ai/openclaw/app/voice/TalkModeConfigParsingTest.kt`
+- `apps/android/app/src/test/java/ai/openclaw/app/voice/TalkModeManagerTest.kt`
 - `src/gateway/gateway-misc.test.ts`
 - `src/gateway/protocol/index.test.ts`
 - `src/gateway/server-methods/talk.test.ts`
 - `src/gateway/talk-realtime-relay.test.ts`
 - `extensions/discord/src/voice/manager.e2e.test.ts`
 - `extensions/discord/src/voice/realtime.test.ts`
+- `extensions/google/realtime-voice-provider.test.ts`
 
 Rebase notes:
 
 - Keep Discord realtime voice default-on. Do not preserve old disabled-by-default docs or behavior when replaying this seam.
 - Keep the Gateway relay path provider-generic and protocol-visible through `talk.realtime.*`; do not introduce Discord-specific gateway RPCs.
+- Keep `talk.realtime.relayUserMessage` as a relay-owned text-turn path for debug/manual Android injection and providers that support text user messages; unsupported providers should fail explicitly instead of silently dropping the turn.
+- Keep relay audio broadcasts targeted and non-lossy. Do not use `dropIfSlow` for provider audio chunks; a truly slow targeted client should be closed by the Gateway broadcaster rather than receiving a silently corrupted audio stream.
+- Keep Android provider playback ordered, generation-scoped, and mark-aware: queued audio, clear events, drain waits, and relay marks must not cross stopped or cleared realtime sessions.
+- Keep Android realtime playback jitter buffering and PCM boundary smoothing local to the Android playback seam; do not push provider-specific timing hacks into Gateway relay or provider code.
+- Keep Android debug trace and audio/text injection under the debug source set. The production app may expose internal methods used by debug builds, but the exported broadcast receiver and trace controls must stay debug-only.
+- Keep Google Live interrupted output from leaking stale audio after `serverContent.interrupted`; fresh audio may resume only after the provider reports turn completion.
+- Keep Discord provider output behind a bounded queue that respects stream backpressure, restarts idle/destroyed raw streams, and drops queued output on provider clear.
 - Keep batch Android Talk and batch Discord voice available only as fallback or explicit opt-out behavior, not as the normal Discord voice path.
 - Keep relay cleanup tied to Gateway websocket lifecycle so relay sessions close when the client connection closes.
 - Keep Discord receive audio decoded into the shared PCM16 24 kHz realtime contract before sending it to the provider bridge.
 - When Bex asks to build the Android app without naming a flavor, build the sideloadable third-party release APK with `cd apps/android && ./gradlew :app:assembleThirdPartyRelease`; do not default to the Play flavor because the third-party flavor keeps SMS and Call Log permissions.
+
+### Heartbeat event wake interval preservation
+
+Carry behavior: targeted event/action heartbeat wakes count as real heartbeat runs, but they must not postpone an already scheduled phase-aligned interval heartbeat. Frequent cron or event wakes that arrive just before the interval slot must not starve the normal `HEARTBEAT.md` check.
+
+Primary seam files:
+
+- `src/infra/heartbeat-runner.ts`
+- `src/infra/heartbeat-runner.scheduler.test.ts`
+
+Primary seam tests:
+
+- `src/infra/heartbeat-runner.scheduler.test.ts`
+
+Rebase notes:
+
+- Preserve the existing future `agent.nextDueMs` when an event/action wake completes before the interval slot. Only recompute the next phase-aligned interval when the stored slot is already due or past.
+- Do not reintroduce `now + agent.intervalMs` for non-interval wakes; that was the starvation bug for frequent next-heartbeat cron/event wakes.
+- Keep interval wakes phase-aligned through `computeNextHeartbeatPhaseDueMs` and `seekActiveSlotForAgent`.
 
 ### Telegram transcribed-audio TTS intent
 
@@ -325,6 +367,7 @@ Rebase notes:
 - `pnpm test src/agents/workspace.test.ts src/realtime-voice/realtime-instructions.test.ts src/realtime-voice/agent-consult-tool.test.ts src/tts/realtime-persona-instructions.test.ts src/gateway/server-methods/talk.test.ts ui/src/ui/app.talk.test.ts ui/src/ui/realtime-talk.test.ts`
 - `pnpm test src/gateway/server-methods/talk.test.ts src/gateway/talk-realtime-relay.test.ts src/gateway/protocol/index.test.ts`
 - `pnpm test src/gateway/gateway-misc.test.ts src/gateway/server-methods/talk.test.ts src/gateway/talk-realtime-relay.test.ts src/gateway/protocol/index.test.ts extensions/discord/src/voice/realtime.test.ts extensions/discord/src/voice/manager.e2e.test.ts`
+- `pnpm test src/gateway/talk-realtime-relay.test.ts src/gateway/server-methods/talk.test.ts src/infra/heartbeat-runner.scheduler.test.ts extensions/google/realtime-voice-provider.test.ts extensions/discord/src/voice/realtime.test.ts extensions/discord/src/voice/manager.e2e.test.ts`
 - `pnpm android:test`
 - `pnpm config:channels:check`
 - `pnpm tsgo:test:ui`

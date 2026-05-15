@@ -881,6 +881,16 @@ class NodeRuntime(
     setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
   }
 
+  fun debugInjectTalkModeAudioBase64(audioBase64: String) {
+    talkMode.injectRealtimeInputAudioBase64(audioBase64)
+  }
+
+  fun debugInjectTalkModeText(text: String) {
+    talkMode.injectRealtimeUserMessage(text)
+  }
+
+  fun hasActiveTalkModeRealtimeRelay(): Boolean = talkMode.hasActiveRealtimeRelay()
+
   val speakerEnabled: StateFlow<Boolean>
     get() = prefs.speakerEnabled
 

@@ -78,6 +78,17 @@ class TalkModeManagerTest {
     assertEquals(1L, playbackGeneration(manager).get())
   }
 
+  @Test
+  fun realtimeModeSuppressesAllResponseTts() {
+    val manager = createManager()
+
+    manager.ttsOnAllResponses = true
+    setPrivateField(manager, "realtimeModeActive", true)
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-other", text = "realtime already spoke"))
+
+    assertEquals(0L, playbackGeneration(manager).get())
+  }
+
   private fun createManager(): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()

@@ -56,6 +56,14 @@ export const TalkRealtimeRelayAudioParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const TalkRealtimeRelayUserMessageParamsSchema = Type.Object(
+  {
+    relaySessionId: NonEmptyString,
+    text: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 export const TalkRealtimeRelayMarkParamsSchema = Type.Object(
   {
     relaySessionId: NonEmptyString,

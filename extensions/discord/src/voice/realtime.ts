@@ -44,7 +44,7 @@ export type DiscordRealtimeVoiceConfig = {
 
 type ActiveRealtimeSession = {
   bridge: RealtimeVoiceBridgeSession;
-  audioStream: { current: ReturnType<typeof createDiscordRawPcmStream> };
+  output: DiscordRealtimePcmOutput;
   ingress: DiscordRealtimeVoiceIngressContext;
 };
 
@@ -56,11 +56,161 @@ type DiscordRealtimeVoiceIngressContext = {
 };
 
 function closeRealtimeSession(session: ActiveRealtimeSession): void {
-  session.audioStream.current.destroy();
+  session.output.close();
   try {
     session.bridge.close();
   } catch (err) {
     logger.warn(`discord voice: realtime bridge close failed: ${formatErrorMessage(err)}`);
+  }
+}
+
+class DiscordRealtimePcmOutput {
+  private audioStream = { current: createDiscordRawPcmStream() };
+  private queue: Buffer[] = [];
+  private queuedBytes = 0;
+  private pumpRunning = false;
+  private closed = false;
+  private wakeDrain: (() => void) | undefined;
+
+  constructor(
+    private readonly params: {
+      entry: VoiceSessionEntry;
+      voiceSdk: ReturnType<typeof loadDiscordVoiceSdk>;
+    },
+  ) {}
+
+  start(): void {
+    this.playAudioStream();
+  }
+
+  isOpen(): boolean {
+    return !this.closed;
+  }
+
+  sendAudio(audio: Buffer): void {
+    if (this.closed) {
+      return;
+    }
+    const pcm = convertRealtimeOutputToDiscordPcm(audio);
+    this.queue.push(pcm);
+    this.queuedBytes += pcm.length;
+    if (this.totalBufferedBytes() > MAX_DISCORD_REALTIME_OUTPUT_BUFFER_BYTES) {
+      logger.warn("discord voice: realtime output backlog exceeded; resetting playback");
+      this.resetAudioStream({ dropQueue: true });
+      return;
+    }
+    this.pump();
+  }
+
+  clear(): void {
+    if (this.closed) {
+      return;
+    }
+    this.resetAudioStream({ dropQueue: true });
+  }
+
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.queue = [];
+    this.queuedBytes = 0;
+    this.wakeDrain?.();
+    this.wakeDrain = undefined;
+    this.audioStream.current.destroy();
+  }
+
+  private totalBufferedBytes(): number {
+    return this.queuedBytes + this.audioStream.current.writableLength;
+  }
+
+  private playAudioStream(): void {
+    this.params.entry.player.play(
+      this.params.voiceSdk.createAudioResource(this.audioStream.current, {
+        inputType: this.params.voiceSdk.StreamType.Raw,
+      }),
+    );
+  }
+
+  private resetAudioStream(options: { dropQueue: boolean }): void {
+    if (options.dropQueue) {
+      this.queue = [];
+      this.queuedBytes = 0;
+    }
+    this.wakeDrain?.();
+    this.wakeDrain = undefined;
+    this.audioStream.current.destroy();
+    this.audioStream.current = createDiscordRawPcmStream();
+    this.playAudioStream();
+  }
+
+  private ensureStreamReady(): void {
+    if (this.audioStream.current.destroyed) {
+      this.resetAudioStream({ dropQueue: false });
+      return;
+    }
+    if (this.params.entry.player.state.status === this.params.voiceSdk.AudioPlayerStatus.Idle) {
+      this.resetAudioStream({ dropQueue: false });
+    }
+  }
+
+  private pump(): void {
+    if (this.pumpRunning) {
+      return;
+    }
+    this.pumpRunning = true;
+    void this.pumpLoop();
+  }
+
+  private async pumpLoop(): Promise<void> {
+    try {
+      while (!this.closed && this.queue.length > 0) {
+        this.ensureStreamReady();
+        if (this.totalBufferedBytes() > MAX_DISCORD_REALTIME_OUTPUT_BUFFER_BYTES) {
+          logger.warn("discord voice: realtime output stream exceeded; resetting playback");
+          this.resetAudioStream({ dropQueue: true });
+          continue;
+        }
+        const chunk = this.queue.shift();
+        if (!chunk) {
+          continue;
+        }
+        this.queuedBytes -= chunk.length;
+        const stream = this.audioStream.current;
+        if (!stream.write(chunk)) {
+          await this.waitForDrain(stream);
+        }
+      }
+    } finally {
+      this.pumpRunning = false;
+      if (!this.closed && this.queue.length > 0) {
+        this.pump();
+      }
+    }
+  }
+
+  private async waitForDrain(stream: ReturnType<typeof createDiscordRawPcmStream>): Promise<void> {
+    await new Promise<void>((resolve) => {
+      let resolved = false;
+      const finish = () => {
+        if (resolved) {
+          return;
+        }
+        resolved = true;
+        stream.off("drain", finish);
+        stream.off("close", finish);
+        stream.off("error", finish);
+        if (this.wakeDrain === finish) {
+          this.wakeDrain = undefined;
+        }
+        resolve();
+      };
+      this.wakeDrain = finish;
+      stream.once("drain", finish);
+      stream.once("close", finish);
+      stream.once("error", finish);
+    });
   }
 }
 
@@ -204,17 +354,7 @@ export class DiscordRealtimeVoiceBridgeController {
     const providerConfig = withRealtimeOverrides(resolution.providerConfig, this.realtimeConfig);
     this.stop(entry);
     const voiceSdk = loadDiscordVoiceSdk();
-    const audioStream = { current: createDiscordRawPcmStream() };
-    const playAudioStream = () => {
-      entry.player.play(
-        voiceSdk.createAudioResource(audioStream.current, { inputType: voiceSdk.StreamType.Raw }),
-      );
-    };
-    const resetAudioStream = () => {
-      audioStream.current.destroy();
-      audioStream.current = createDiscordRawPcmStream();
-      playAudioStream();
-    };
+    const output = new DiscordRealtimePcmOutput({ entry, voiceSdk });
     let active: ActiveRealtimeSession | undefined;
     const isActive = () => active !== undefined && this.active.get(key) === active;
     const bridge = createRealtimeVoiceBridgeSession({
@@ -222,27 +362,18 @@ export class DiscordRealtimeVoiceBridgeController {
       providerConfig,
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       audioSink: {
-        isOpen: () => isActive() && !audioStream.current.destroyed,
+        isOpen: () => isActive() && output.isOpen(),
         sendAudio: (audio) => {
           if (!isActive()) {
             return;
           }
-          if (audioStream.current.destroyed) {
-            resetAudioStream();
-          }
-          if (audioStream.current.writableLength > MAX_DISCORD_REALTIME_OUTPUT_BUFFER_BYTES) {
-            resetAudioStream();
-          }
-          audioStream.current.write(convertRealtimeOutputToDiscordPcm(audio));
-          if (audioStream.current.writableLength > MAX_DISCORD_REALTIME_OUTPUT_BUFFER_BYTES) {
-            resetAudioStream();
-          }
+          output.sendAudio(audio);
         },
         clearAudio: () => {
           if (!isActive()) {
             return;
           }
-          resetAudioStream();
+          output.clear();
         },
       },
       instructions: buildDiscordRealtimeInstructions(entry),
@@ -265,13 +396,13 @@ export class DiscordRealtimeVoiceBridgeController {
           return;
         }
         this.active.delete(key);
-        audioStream.current.destroy();
+        output.close();
       },
     });
-    active = { audioStream, bridge, ingress };
+    active = { output, bridge, ingress };
     this.active.set(key, active);
     try {
-      playAudioStream();
+      output.start();
       await bridge.connect();
       logVoiceVerbose(
         `realtime ready: guild ${entry.guildId} channel ${entry.channelId} user ${userId} provider=${resolution.provider.id}`,

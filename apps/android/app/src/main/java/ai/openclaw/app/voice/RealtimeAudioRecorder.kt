@@ -6,7 +6,11 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.util.Base64
+import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +31,9 @@ internal class RealtimeAudioRecorder(
 ) : RealtimeAudioCapture {
   private var recorder: AudioRecord? = null
   private var recordJob: Job? = null
+  private var echoCanceler: AcousticEchoCanceler? = null
+  private var noiseSuppressor: NoiseSuppressor? = null
+  private var automaticGainControl: AutomaticGainControl? = null
 
   override fun start(onAudioBase64: suspend (String) -> Unit) {
     if (recordJob != null) return
@@ -58,11 +65,13 @@ internal class RealtimeAudioRecorder(
       active.release()
       throw IllegalStateException("Realtime AudioRecord unavailable")
     }
+    enableAudioEffects(active.audioSessionId)
     recorder = active
     try {
       active.startRecording()
     } catch (err: Throwable) {
       recorder = null
+      releaseAudioEffects()
       active.release()
       throw err
     }
@@ -83,6 +92,7 @@ internal class RealtimeAudioRecorder(
             recorder = null
             recordJob = null
             runCatching { active.stop() }
+            releaseAudioEffects()
             active.release()
           }
         }
@@ -96,7 +106,40 @@ internal class RealtimeAudioRecorder(
     recorder = null
     active?.let {
       runCatching { it.stop() }
+      releaseAudioEffects()
       it.release()
     }
+  }
+
+  private fun enableAudioEffects(audioSessionId: Int) {
+    echoCanceler = createAudioEffect("AEC", AcousticEchoCanceler.isAvailable()) { AcousticEchoCanceler.create(audioSessionId) }
+    noiseSuppressor = createAudioEffect("NS", NoiseSuppressor.isAvailable()) { NoiseSuppressor.create(audioSessionId) }
+    automaticGainControl = createAudioEffect("AGC", AutomaticGainControl.isAvailable()) { AutomaticGainControl.create(audioSessionId) }
+  }
+
+  private fun releaseAudioEffects() {
+    echoCanceler?.release()
+    noiseSuppressor?.release()
+    automaticGainControl?.release()
+    echoCanceler = null
+    noiseSuppressor = null
+    automaticGainControl = null
+  }
+
+  private fun <T : android.media.audiofx.AudioEffect> createAudioEffect(
+    name: String,
+    available: Boolean,
+    create: () -> T?,
+  ): T? {
+    if (!available) return null
+    return runCatching {
+      create()?.apply { enabled = true }
+    }.onFailure { err ->
+      Log.d(tag, "$name unavailable: ${err.message ?: err::class.simpleName}")
+    }.getOrNull()
+  }
+
+  private companion object {
+    private const val tag = "RealtimeAudioRecorder"
   }
 }

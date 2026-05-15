@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Heartbeats: keep event/action wakes from postponing the next phase-aligned interval heartbeat, so frequent cron or next-heartbeat events cannot starve scheduled `HEARTBEAT.md` checks.
 - Talk/realtime: inject the current agent's `SOUL.md`, `IDENTITY.md`, and `USER.md` into realtime provider instructions, then apply the effective selected TTS persona as provider-neutral spoken delivery guidance for `agent:<id>:*` sessions.
 - Doctor/OpenAI config: keep the 2026.5.6 release branch clear of the legacy Codex route rewrite that could change OpenAI model config during `doctor --fix`, preserving existing OpenAI routes unless a supported repair path applies.
 - Plugins/runtime fetch: drop third-party symbol metadata from plain request header dictionaries before passing them into native `fetch` or `Headers`, so SDK and guarded/proxy fetch paths do not reject otherwise valid plugin requests. Fixes #77846. Thanks @shakkernerd.

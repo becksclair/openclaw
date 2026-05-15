@@ -413,6 +413,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private consecutiveSilenceMs = 0;
   private audioStreamEnded = false;
   private pendingFunctionNames = new Map<string, string>();
+  private interruptedOutputTurn = false;
   private readonly audioFormat: RealtimeVoiceAudioFormat;
   private resumptionHandle: string | undefined;
 
@@ -426,6 +427,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.sessionReadyFired = false;
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
+    this.interruptedOutputTurn = false;
     this.pendingFunctionNames.clear();
 
     const ai = createGoogleGenAI({
@@ -492,13 +494,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.audioStreamEnded = false;
     }
 
-    const pcm16k = this.toGoogleInputPcm16k(audio);
-    this.session.sendRealtimeInput({
-      audio: {
-        data: pcm16k.toString("base64"),
-        mimeType: `audio/pcm;rate=${GOOGLE_REALTIME_INPUT_SAMPLE_RATE}`,
-      },
-    });
+    this.sendAudioInput(audio);
 
     if (!silent) {
       return;
@@ -599,6 +595,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.pendingAudio = [];
     this.consecutiveSilenceMs = 0;
     this.audioStreamEnded = false;
+    this.interruptedOutputTurn = false;
     this.pendingFunctionNames.clear();
     const session = this.session;
     this.session = null;
@@ -630,6 +627,16 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.audioFormat.sampleRateHz,
       GOOGLE_REALTIME_INPUT_SAMPLE_RATE,
     );
+  }
+
+  private sendAudioInput(audio: Buffer): void {
+    const pcm16k = this.toGoogleInputPcm16k(audio);
+    this.session?.sendRealtimeInput({
+      audio: {
+        data: pcm16k.toString("base64"),
+        mimeType: `audio/pcm;rate=${GOOGLE_REALTIME_INPUT_SAMPLE_RATE}`,
+      },
+    });
   }
 
   private toOutputAudio(pcm: Buffer, sampleRate: number): Buffer {
@@ -678,6 +685,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private handleServerContent(content: LiveServerContent): void {
     if (content.interrupted) {
+      this.interruptedOutputTurn = true;
       this.config.onClearAudio();
     }
 
@@ -703,9 +711,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         const pcm = Buffer.from(part.inlineData.data, "base64");
         const sampleRate = parsePcmSampleRate(part.inlineData.mimeType);
         const audio = this.toOutputAudio(pcm, sampleRate);
-        if (audio.length > 0) {
+        if (audio.length > 0 && !this.interruptedOutputTurn) {
           this.config.onAudio(audio);
-          this.config.onMark?.(`audio-${randomUUID()}`);
         }
         continue;
       }
@@ -719,7 +726,11 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
 
     if (!emittedAssistantText && content.turnComplete && content.waitingForInput === false) {
+      this.interruptedOutputTurn = false;
       return;
+    }
+    if (content.turnComplete) {
+      this.interruptedOutputTurn = false;
     }
   }
 

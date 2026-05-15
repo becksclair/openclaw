@@ -11,6 +11,7 @@ import {
   clearTalkRealtimeRelaySessionsForTest,
   createTalkRealtimeRelaySession,
   sendTalkRealtimeRelayAudio,
+  sendTalkRealtimeRelayUserMessage,
   stopTalkRealtimeRelaySession,
   submitTalkRealtimeRelayToolResult,
 } from "./talk-realtime-relay.js";
@@ -148,6 +149,11 @@ describe("talk realtime gateway relay", () => {
       audioBase64: Buffer.from("audio-in").toString("base64"),
       timestamp: 123,
     });
+    sendTalkRealtimeRelayUserMessage({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      text: " Send a short reply. ",
+    });
     acknowledgeTalkRealtimeRelayMark({ relaySessionId: session.relaySessionId, connId: "conn-1" });
     submitTalkRealtimeRelayToolResult({
       relaySessionId: session.relaySessionId,
@@ -159,9 +165,52 @@ describe("talk realtime gateway relay", () => {
 
     expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
     expect(bridge.setMediaTimestamp).toHaveBeenCalledWith(123);
+    expect(bridge.sendUserMessage).toHaveBeenCalledWith("Send a short reply.");
     expect(bridge.acknowledgeMark).toHaveBeenCalled();
     expect(bridge.submitToolResult).toHaveBeenCalledWith("call-1", { ok: true }, undefined);
     expect(bridge.close).toHaveBeenCalled();
+  });
+
+  it("broadcasts relay audio without lossy slow-consumer dropping", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider = createRelayTestProvider((req) => {
+      bridgeRequest = req;
+      return createRelayTestBridge();
+    });
+    const broadcasts: Array<{
+      payload: unknown;
+      opts?: { dropIfSlow?: boolean };
+    }> = [];
+    const context = {
+      broadcastToConnIds: (
+        _event: string,
+        payload: unknown,
+        _connIds: ReadonlySet<string>,
+        opts?: { dropIfSlow?: boolean },
+      ) => {
+        broadcasts.push({ payload, opts });
+      },
+    } as never;
+
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+
+    bridgeRequest?.onAudio(Buffer.from("audio-out"));
+
+    expect(broadcasts).toContainEqual({
+      payload: {
+        relaySessionId: session.relaySessionId,
+        type: "audio",
+        audioBase64: Buffer.from("audio-out").toString("base64"),
+      },
+      opts: undefined,
+    });
   });
 
   it("rejects relay control from a different connection without closing the owner session", () => {
@@ -215,6 +264,28 @@ describe("talk realtime gateway relay", () => {
       }),
     ).toThrow("Realtime relay audio frame is empty");
     expect(bridge.sendAudio).not.toHaveBeenCalled();
+  });
+
+  it("rejects empty text relay turns", () => {
+    const bridge = createRelayTestBridge({ sendUserMessage: vi.fn() });
+    const provider = createRelayTestProvider(() => bridge);
+    const session = createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds: vi.fn() } as never,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+
+    expect(() =>
+      sendTalkRealtimeRelayUserMessage({
+        relaySessionId: session.relaySessionId,
+        connId: "conn-1",
+        text: "   ",
+      }),
+    ).toThrow("Realtime relay user message is empty");
+    expect(bridge.sendUserMessage).not.toHaveBeenCalled();
   });
 
   it("caps active relay sessions per browser connection", () => {

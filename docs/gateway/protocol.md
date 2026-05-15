@@ -363,6 +363,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
   <Accordion title="Talk and TTS">
     - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
     - `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI clients.
+    - `talk.realtime.session` starts a realtime Talk session. Gateway relay clients stream microphone PCM through `talk.realtime.relayAudio`, can submit text turns through `talk.realtime.relayUserMessage`, acknowledge output marks through `talk.realtime.relayMark`, submit realtime tool results through `talk.realtime.relayToolResult`, and close the relay through `talk.realtime.relayStop`.
     - `talk.speak` synthesizes speech through the active Talk speech provider.
     - `tts.status` returns TTS enabled state, active provider, fallback providers, and provider config state.
     - `tts.providers` returns the visible TTS provider inventory.

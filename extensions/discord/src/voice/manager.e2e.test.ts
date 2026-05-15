@@ -411,6 +411,18 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
+  it("keeps voice playback tolerant of realtime provider output jitter", async () => {
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(createAudioPlayerMock).toHaveBeenCalledWith({
+      behaviors: {
+        maxMissedFrames: 500,
+      },
+    });
+  });
+
   it("uses the default timeout for initial voice connection readiness", async () => {
     const connection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(connection);

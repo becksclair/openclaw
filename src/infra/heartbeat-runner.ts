@@ -1973,9 +1973,19 @@ export function startHeartbeatRunner(opts: {
             intervalMs: agent.intervalMs,
             phaseMs: agent.phaseMs,
           })
-        : // Targeted and action-driven wakes still count as a fresh heartbeat run
-          // for cooldown purposes, so keep the existing now + interval behavior.
-          now + agent.intervalMs;
+        : // Event/action wakes are real runs for cooldown bookkeeping, but they
+          // must not postpone an already-scheduled interval heartbeat. Otherwise
+          // a frequent next-heartbeat cron/event that lands just before the
+          // phase-aligned slot can keep pushing the normal HEARTBEAT.md check
+          // forward forever. Preserve a future phase slot; if the slot is
+          // already due/past, advance to the next phase-aligned interval.
+          agent.nextDueMs > now
+          ? agent.nextDueMs
+          : computeNextHeartbeatPhaseDueMs({
+              nowMs: now,
+              intervalMs: agent.intervalMs,
+              phaseMs: agent.phaseMs,
+            });
     agent.nextDueMs = seekActiveSlotForAgent(agent, rawDueMs);
   };
 

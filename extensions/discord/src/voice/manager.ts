@@ -47,6 +47,7 @@ import {
 import { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
 const logger = createSubsystemLogger("discord/voice");
+const VOICE_PLAYER_MAX_MISSED_FRAMES = 500;
 
 type DiscordVoiceSdk = ReturnType<typeof loadDiscordVoiceSdk>;
 type DiscordVoiceConnection = ReturnType<DiscordVoiceSdk["joinVoiceChannel"]>;
@@ -298,7 +299,11 @@ export class DiscordVoiceManager {
       peer: { kind: "channel", id: sessionChannelId },
     });
 
-    const player = voiceSdk.createAudioPlayer();
+    const player = voiceSdk.createAudioPlayer({
+      behaviors: {
+        maxMissedFrames: VOICE_PLAYER_MAX_MISSED_FRAMES,
+      },
+    });
     connection.subscribe(player);
 
     let speakingHandler: ((userId: string) => void) | undefined;

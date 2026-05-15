@@ -539,10 +539,12 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
   it("can keep Google PCM output as PCM16 24 kHz audio", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const onAudio = vi.fn();
+    const onMark = vi.fn();
     const bridge = provider.createBridge({
       providerConfig: { apiKey: "gemini-key" },
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       onAudio,
+      onMark,
       onClearAudio: vi.fn(),
     });
     const pcm24k = Buffer.alloc(480);
@@ -566,6 +568,78 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
     expect(onAudio).toHaveBeenCalledTimes(1);
     expect(onAudio.mock.calls[0]?.[0]).toEqual(pcm24k);
+    expect(onMark).not.toHaveBeenCalled();
+  });
+
+  it("drops Google PCM output from an interrupted Live turn", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onAudio = vi.fn();
+    const onClearAudio = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      onAudio,
+      onClearAudio,
+    });
+    const interruptedPcm = Buffer.alloc(480, 1);
+    const freshPcm = Buffer.alloc(480, 2);
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: { sessionId: "session-1" },
+    });
+    lastConnectParams().callbacks.onmessage({
+      serverContent: {
+        interrupted: true,
+        modelTurn: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: "audio/L16;codec=pcm;rate=24000",
+                data: interruptedPcm.toString("base64"),
+              },
+            },
+          ],
+        },
+      },
+    });
+    lastConnectParams().callbacks.onmessage({
+      serverContent: {
+        modelTurn: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: "audio/L16;codec=pcm;rate=24000",
+                data: interruptedPcm.toString("base64"),
+              },
+            },
+          ],
+        },
+      },
+    });
+    lastConnectParams().callbacks.onmessage({
+      serverContent: {
+        turnComplete: true,
+      },
+    });
+    lastConnectParams().callbacks.onmessage({
+      serverContent: {
+        modelTurn: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: "audio/L16;codec=pcm;rate=24000",
+                data: freshPcm.toString("base64"),
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(onClearAudio).toHaveBeenCalledTimes(1);
+    expect(onAudio).toHaveBeenCalledTimes(1);
+    expect(onAudio).toHaveBeenCalledWith(freshPcm);
   });
 
   it("does not forward Google thought text as assistant transcript", async () => {

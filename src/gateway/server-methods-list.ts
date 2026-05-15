@@ -59,6 +59,7 @@ const BASE_METHODS = [
   "talk.config",
   "talk.realtime.session",
   "talk.realtime.relayAudio",
+  "talk.realtime.relayUserMessage",
   "talk.realtime.relayMark",
   "talk.realtime.relayStop",
   "talk.realtime.relayToolResult",

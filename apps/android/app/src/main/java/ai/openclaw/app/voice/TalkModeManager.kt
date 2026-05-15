@@ -73,6 +73,7 @@ class TalkModeManager(
       onSpeaking = { _isSpeaking.value = it },
       onConsult = { argsJson -> runRealtimeConsult(argsJson) },
       onUnavailable = {
+        realtimeModeActive = false
         if (_isEnabled.value) {
           start()
         }
@@ -120,6 +121,8 @@ class TalkModeManager(
   private var chatSubscribedSessionKey: String? = null
   private var configLoaded = false
   private var realtimeConfig: RealtimeTalkConfig? = null
+
+  @Volatile private var realtimeModeActive = false
 
   @Volatile private var playbackEnabled = true
   private val playbackGeneration = AtomicLong(0L)
@@ -172,8 +175,12 @@ class TalkModeManager(
         if (!_isEnabled.value) return@launch
         val realtime = realtimeConfig
         if (realtime != null) {
+          realtimeModeActive = true
+          Log.d(tag, "starting realtime provider=${realtime.provider} model=${realtime.model ?: "default"}")
           realtimeTalkManager.start(config = realtime, sessionKey = mainSessionKey.ifBlank { "main" })
         } else {
+          realtimeModeActive = false
+          Log.d(tag, "starting legacy talk mode; realtime unavailable")
           start()
         }
       }
@@ -243,10 +250,11 @@ class TalkModeManager(
       realtimeTalkManager.handleRelayEvent(parsed.first, parsed.second)
       return
     }
+    val allowAllResponseTts = ttsOnAllResponses && !realtimeModeActive
     if (ttsOnAllResponses) {
       Log.d(tag, "gateway event: $event")
     }
-    if (event == "agent" && ttsOnAllResponses) {
+    if (event == "agent" && allowAllResponseTts) {
       return
     }
     if (event != "chat") return
@@ -271,7 +279,7 @@ class TalkModeManager(
     val pending = pendingRunId
     val knownRun = pending == runId || hasRunCompletion(runId)
     if (!knownRun) {
-      if (ttsOnAllResponses && state == "final") {
+      if (allowAllResponseTts && state == "final") {
         val text = extractTextFromChatEventMessage(obj["message"])
         if (!text.isNullOrBlank()) {
           playTtsForText(text)
@@ -305,6 +313,16 @@ class TalkModeManager(
     pendingFinal = null
     pendingRunId = null
   }
+
+  fun injectRealtimeInputAudioBase64(audioBase64: String) {
+    realtimeTalkManager.injectInputAudioBase64(audioBase64)
+  }
+
+  fun injectRealtimeUserMessage(text: String) {
+    realtimeTalkManager.sendUserMessage(text)
+  }
+
+  fun hasActiveRealtimeRelay(): Boolean = realtimeModeActive && realtimeTalkManager.hasActiveRelaySession()
 
   fun setPlaybackEnabled(enabled: Boolean) {
     if (playbackEnabled == enabled) return
@@ -364,6 +382,7 @@ class TalkModeManager(
   }
 
   private fun stop() {
+    realtimeModeActive = false
     realtimeTalkManager.stop()
     stopRequested = true
     finalizeInFlight = false
@@ -1149,8 +1168,13 @@ class TalkModeManager(
       silenceWindowMs = parsed.silenceTimeoutMs
       parsed.interruptOnSpeech?.let { interruptOnSpeech = it }
       realtimeConfig = parsed.realtime
+      Log.d(
+        tag,
+        "config loaded realtime=${parsed.realtime?.provider ?: "unavailable"}",
+      )
       configLoaded = true
-    } catch (_: Throwable) {
+    } catch (err: Throwable) {
+      Log.w(tag, "config load failed: ${err.message ?: err::class.simpleName}")
       silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs
       realtimeConfig = null
       configLoaded = false

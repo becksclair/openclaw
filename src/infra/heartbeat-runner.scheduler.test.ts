@@ -515,6 +515,40 @@ describe("startHeartbeatRunner", () => {
   // `reason === "interval"`, and the targeted branch has no cooldown gate at
   // all. Observed in production: heartbeat configured `every: 30m` fires every
   // ~10s, pegging the gateway event loop with eventLoopDelayMaxMs >6s spikes.
+  it("does not let event wakes postpone the next scheduled interval heartbeat", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    const firstDueMs = resolveDueFromNow(0, 30 * 60_000, "main");
+    const justBeforeDueMs = Math.max(0, firstDueMs - 10_000);
+
+    await vi.advanceTimersByTimeAsync(justBeforeDueMs);
+    requestHeartbeat({
+      source: "cron",
+      intent: "event",
+      reason: "cron:job-123",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ reason: "cron:job-123" }));
+
+    await vi.advanceTimersByTimeAsync(firstDueMs - Date.now() + 1);
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(runSpy.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ reason: "interval" }));
+
+    runner.stop();
+  });
+
   it("does not bypass interval cooldown for repeated exec-event wakes within nextDueMs", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   resolveTtsPersonaDeliveryInstructions: vi.fn(),
   resolveRealtimeVoiceInstructionContext: vi.fn(),
   buildRealtimeVoiceInstructions: vi.fn(),
+  sendTalkRealtimeRelayUserMessage: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -52,6 +53,7 @@ vi.mock("../talk-realtime-relay.js", async (importOriginal) => {
   return {
     ...actual,
     createTalkRealtimeRelaySession: mocks.createTalkRealtimeRelaySession,
+    sendTalkRealtimeRelayUserMessage: mocks.sendTalkRealtimeRelayUserMessage,
   };
 });
 
@@ -647,5 +649,31 @@ describe("talk.realtime.session handler", () => {
     const relayInstructions = relayCall?.[0].instructions;
     expect(browserInstructions).toBe(relayInstructions);
     expect(relayInstructions).toBe("relay realtime instructions");
+  });
+});
+
+describe("talk.realtime.relayUserMessage handler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("forwards text turns to the active realtime relay session", async () => {
+    const respond = vi.fn();
+
+    await talkHandlers["talk.realtime.relayUserMessage"]({
+      req: { type: "req", id: "1", method: "talk.realtime.relayUserMessage" },
+      params: { relaySessionId: "relay-1", text: "Hello Sky." },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {} as never,
+    });
+
+    expect(mocks.sendTalkRealtimeRelayUserMessage).toHaveBeenCalledWith({
+      relaySessionId: "relay-1",
+      connId: "conn-1",
+      text: "Hello Sky.",
+    });
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 });

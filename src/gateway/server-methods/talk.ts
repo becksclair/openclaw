@@ -40,6 +40,7 @@ import {
   validateTalkRealtimeRelayMarkParams,
   validateTalkRealtimeRelayStopParams,
   validateTalkRealtimeRelayToolResultParams,
+  validateTalkRealtimeRelayUserMessageParams,
   validateTalkRealtimeSessionParams,
   validateTalkSpeakParams,
 } from "../protocol/index.js";
@@ -47,6 +48,7 @@ import {
   acknowledgeTalkRealtimeRelayMark,
   createTalkRealtimeRelaySession,
   sendTalkRealtimeRelayAudio,
+  sendTalkRealtimeRelayUserMessage,
   stopTalkRealtimeRelaySession,
   submitTalkRealtimeRelayToolResult,
 } from "../talk-realtime-relay.js";
@@ -637,6 +639,34 @@ export const talkHandlers: GatewayRequestHandlers = {
         connId,
         audioBase64: params.audioBase64,
         timestamp: params.timestamp,
+      });
+      respond(true, { ok: true }, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  "talk.realtime.relayUserMessage": async ({ params, respond, client }) => {
+    if (!validateTalkRealtimeRelayUserMessageParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid talk.realtime.relayUserMessage params: ${formatValidationErrors(validateTalkRealtimeRelayUserMessageParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const connId = client?.connId;
+    if (!connId) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "realtime relay unavailable"));
+      return;
+    }
+    try {
+      sendTalkRealtimeRelayUserMessage({
+        relaySessionId: params.relaySessionId,
+        connId,
+        text: params.text,
       });
       respond(true, { ok: true }, undefined);
     } catch (err) {

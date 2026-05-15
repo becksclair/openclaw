@@ -137,6 +137,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "talk.mode",
     "talk.realtime.session",
     "talk.realtime.relayAudio",
+    "talk.realtime.relayUserMessage",
     "talk.realtime.relayMark",
     "talk.realtime.relayStop",
     "talk.realtime.relayToolResult",
