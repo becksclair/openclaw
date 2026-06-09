@@ -345,6 +345,7 @@ export type CodexDynamicToolBridge = {
     heartbeatToolResponse?: HeartbeatToolResponse;
     toolMediaUrls: string[];
     toolAudioAsVoice: boolean;
+    toolTrustedLocalMedia: boolean;
     successfulCronAdds?: number;
     quarantinedTools: CodexDynamicToolSchemaQuarantine[];
   };
@@ -412,6 +413,7 @@ export function createCodexDynamicToolBridge(params: {
     toolMediaUrls: [],
     toolAudioAsVoice: false,
     quarantinedTools,
+    toolTrustedLocalMedia: false,
   };
   const middlewareRunner = createAgentToolResultMiddlewareRunner({
     runtime: "codex",
@@ -1067,6 +1069,9 @@ function collectToolTelemetry(params: {
       }
       if (media.audioAsVoice) {
         params.telemetry.toolAudioAsVoice = true;
+      }
+      if (media.trustedLocalMedia && mediaUrls.length > 0) {
+        params.telemetry.toolTrustedLocalMedia = true;
       }
     }
   }

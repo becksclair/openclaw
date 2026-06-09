@@ -273,7 +273,7 @@ describe("Session Store Cache", () => {
     structuredCloneSpy.mockRestore();
   });
 
-  it("parses serialized stores only when cloning object-cache hits", () => {
+  it("clones object-cache hits without reparsing serialized stores", () => {
     const testStore = createSingleSessionStore(
       createSessionEntry({
         origin: { provider: "openai" },
@@ -296,7 +296,7 @@ describe("Session Store Cache", () => {
       const cached = readSessionStoreCache({ storePath });
 
       expect(cached?.["session:1"].origin?.provider).toBe("openai");
-      expect(parseSpy).toHaveBeenCalledOnce();
+      expect(parseSpy).not.toHaveBeenCalled();
     } finally {
       parseSpy.mockRestore();
     }

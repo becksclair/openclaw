@@ -39,13 +39,18 @@ function createTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
   } as unknown as AnyAgentTool;
 }
 
-function mediaResult(mediaUrl: string, audioAsVoice?: boolean): AgentToolResult<unknown> {
+function mediaResult(
+  mediaUrl: string,
+  audioAsVoice?: boolean,
+  trustedLocalMedia?: boolean,
+): AgentToolResult<unknown> {
   return {
     content: [{ type: "text", text: "Generated media reply." }],
     details: {
       media: {
         mediaUrl,
         ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
+        ...(trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
       },
     },
   };
@@ -892,6 +897,7 @@ describe("createCodexDynamicToolBridge", () => {
       expect(result).toEqual(expectInputText("Generated media reply."));
       expect(bridge.telemetry.toolMediaUrls).toEqual([mediaUrl]);
       expect(bridge.telemetry.toolAudioAsVoice).toBe(audioAsVoice === true);
+      expect(bridge.telemetry.toolTrustedLocalMedia).toBe(false);
     },
   );
 
@@ -902,6 +908,7 @@ describe("createCodexDynamicToolBridge", () => {
         media: {
           mediaUrl: "/tmp/reply.opus",
           audioAsVoice: true,
+          trustedLocalMedia: true,
         },
       },
     } satisfies AgentToolResult<unknown>;
@@ -928,6 +935,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
     expect(bridge.telemetry.toolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(bridge.telemetry.toolAudioAsVoice).toBe(true);
+    expect(bridge.telemetry.toolTrustedLocalMedia).toBe(true);
   });
 
   it("records messaging tool side effects while returning concise text to app-server", async () => {

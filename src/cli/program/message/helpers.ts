@@ -133,6 +133,7 @@ function resolveMessagePluginPreloadPlan(
   // Gateway-owned actions can execute without loading channel plugins in the CLI process;
   // dry-runs, broadcasts, and local actions need registry metadata before building payloads.
   if (
+    action === "send" ||
     opts.dryRun === true ||
     ACTIONS_REQUIRING_CONFIGURED_CHANNEL_PRELOAD.has(action) ||
     !isGatewayOwnedMessageAction(action, scopedChannel)

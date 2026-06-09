@@ -264,7 +264,18 @@ function loadCurrentPluginRegistrySnapshotResult(
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
   });
-  if (!current || current.registryDiagnostics.length > 0) {
+  if (!current) {
+    return undefined;
+  }
+  if (
+    current.registryDiagnostics.some(
+      (diagnostic) => diagnostic.code === "persisted-registry-missing",
+    ) &&
+    readPersistedInstalledPluginIndexSync({
+      env,
+      ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+    })
+  ) {
     return undefined;
   }
   return {

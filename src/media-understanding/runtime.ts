@@ -4,6 +4,7 @@ import path from "node:path";
 import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { buildMediaAudioRuntimeConfig } from "./audio-runtime-config.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
@@ -29,8 +30,10 @@ import type {
   ExtractStructuredWithModelParams,
   RunMediaUnderstandingFileParams,
   RunMediaUnderstandingFileResult,
+  TranscribeAudioBufferParams,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
+import type { MediaAttachment } from "./types.js";
 export type {
   DescribePreparedImageWithModelParams,
   DescribeImageFileParams,
@@ -41,11 +44,13 @@ export type {
   ExtractStructuredWithModelParams,
   RunMediaUnderstandingFileParams,
   RunMediaUnderstandingFileResult,
+  TranscribeAudioBufferParams,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
 
 type MediaUnderstandingCapability = "image" | "audio" | "video";
 type MediaUnderstandingOutput = Awaited<ReturnType<typeof runCapability>>["outputs"][number];
+type RunCapabilityParams = Parameters<typeof runCapability>[0];
 
 const KIND_BY_CAPABILITY: Record<MediaUnderstandingCapability, MediaUnderstandingOutput["kind"]> = {
   audio: "audio.transcription",
@@ -136,6 +141,68 @@ function hasStructuredImageInput(input: ExtractStructuredWithModelParams["input"
   return input.some((entry) => entry.type === "image");
 }
 
+async function runMediaUnderstandingAttachments(params: {
+  capability: MediaUnderstandingCapability;
+  cfg: OpenClawConfig;
+  ctx: RunCapabilityParams["ctx"];
+  media: MediaAttachment[];
+  cacheOptions?: Parameters<typeof createMediaAttachmentCache>[1];
+  agentDir?: string;
+  workspaceDir?: string;
+  activeModel?: RunCapabilityParams["activeModel"];
+}): Promise<RunMediaUnderstandingFileResult> {
+  const config = params.cfg.tools?.media?.[params.capability];
+  if (config?.enabled === false) {
+    return {
+      text: undefined,
+      provider: undefined,
+      model: undefined,
+      output: undefined,
+      decision: { capability: params.capability, outcome: "disabled", attachments: [] },
+    };
+  }
+
+  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
+  const cache = createMediaAttachmentCache(params.media, params.cacheOptions);
+
+  try {
+    const result = await runCapability({
+      capability: params.capability,
+      cfg: params.cfg,
+      ctx: params.ctx,
+      attachments: cache,
+      media: params.media,
+      agentDir: params.agentDir,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      providerRegistry,
+      config,
+      activeModel: params.activeModel,
+    });
+    if (result.outputs.length === 0 && result.decision.outcome === "failed") {
+      throw new Error(
+        resolveDecisionFailureReason(result.decision) ??
+          `${params.capability} understanding failed`,
+      );
+    }
+    const output = result.outputs.find(
+      (entry) => entry.kind === KIND_BY_CAPABILITY[params.capability],
+    );
+    const text = output?.text?.trim();
+    const fileResult: RunMediaUnderstandingFileResult = {
+      text: text || undefined,
+      provider: output?.provider,
+      model: output?.model,
+      output,
+    };
+    if (result.decision) {
+      fileResult.decision = result.decision;
+    }
+    return fileResult;
+  } finally {
+    await cache.cleanup();
+  }
+}
+
 /** Runs media understanding for one local file or remote URL and returns the first matching output. */
 export async function runMediaUnderstandingFile(
   params: RunMediaUnderstandingFileParams,
@@ -183,59 +250,19 @@ export async function runMediaUnderstandingFile(
       decision: { capability: params.capability, outcome: "no-attachment", attachments: [] },
     };
   }
-  const config = cfg.tools?.media?.[params.capability];
-  if (config?.enabled === false) {
-    return {
-      text: undefined,
-      provider: undefined,
-      model: undefined,
-      output: undefined,
-      decision: { capability: params.capability, outcome: "disabled", attachments: [] },
-    };
-  }
-
-  const providerRegistry = buildProviderRegistry(undefined, cfg);
-  const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
-    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
+  return await runMediaUnderstandingAttachments({
+    capability: params.capability,
+    cfg,
+    ctx,
+    media: attachments,
+    cacheOptions: {
+      localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
+      ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
+    },
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    activeModel: params.activeModel,
   });
-
-  try {
-    const result = await runCapability({
-      capability: params.capability,
-      cfg,
-      ctx,
-      attachments: cache,
-      media: attachments,
-      agentDir: params.agentDir,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-      providerRegistry,
-      config,
-      activeModel: params.activeModel,
-    });
-    if (result.outputs.length === 0 && result.decision.outcome === "failed") {
-      throw new Error(
-        resolveDecisionFailureReason(result.decision) ??
-          `${params.capability} understanding failed`,
-      );
-    }
-    const output = result.outputs.find(
-      (entry) => entry.kind === KIND_BY_CAPABILITY[params.capability],
-    );
-    const text = output?.text?.trim();
-    const fileResult: RunMediaUnderstandingFileResult = {
-      text: text || undefined,
-      provider: output?.provider,
-      model: output?.model,
-      output,
-    };
-    if (result.decision) {
-      fileResult.decision = result.decision;
-    }
-    return fileResult;
-  } finally {
-    await cache.cleanup();
-  }
 }
 
 /** Describes one image file or URL through the configured image-understanding pipeline. */
@@ -378,25 +405,40 @@ export async function describeVideoFile(
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
-  const cfg =
-    params.language || params.prompt
-      ? {
-          ...params.cfg,
-          tools: {
-            ...params.cfg.tools,
-            media: {
-              ...params.cfg.tools?.media,
-              audio: {
-                ...params.cfg.tools?.media?.audio,
-                ...(params.language ? { _requestLanguageOverride: params.language } : {}),
-                ...(params.prompt ? { _requestPromptOverride: params.prompt } : {}),
-                ...(params.language ? { language: params.language } : {}),
-                ...(params.prompt ? { prompt: params.prompt } : {}),
-              },
-            },
-          },
-        }
-      : params.cfg;
+  const cfg = buildTranscribeAudioConfig(params);
   const result = await runMediaUnderstandingFile({ ...params, cfg, capability: "audio" });
   return result;
+}
+
+export async function transcribeAudioBuffer(
+  params: TranscribeAudioBufferParams,
+): Promise<RunMediaUnderstandingFileResult> {
+  const cfg = buildTranscribeAudioConfig(params);
+  const media = [
+    {
+      buffer: params.buffer,
+      fileName: params.fileName,
+      mime: params.mime,
+      index: 0,
+    },
+  ];
+  return await runMediaUnderstandingAttachments({
+    capability: "audio",
+    cfg,
+    ctx: { MediaType: params.mime },
+    media,
+    cacheOptions: { ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy },
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    activeModel: params.activeModel,
+  });
+}
+
+function buildTranscribeAudioConfig(params: {
+  cfg: OpenClawConfig;
+  language?: string;
+  prompt?: string;
+  timeoutMs?: number;
+}): OpenClawConfig {
+  return buildMediaAudioRuntimeConfig(params.cfg, params);
 }

@@ -130,6 +130,31 @@ describe("exec safe bin trust", () => {
     });
   });
 
+  it("requires symlink and real target directories to both be trusted", () => {
+    const trusted = new Set([path.resolve("/usr/bin"), path.resolve("/bin")]);
+    expect(
+      isTrustedSafeBinPath({
+        resolvedPath: "/usr/bin/jq",
+        resolvedRealPath: "/bin/jq",
+        trustedDirs: trusted,
+      }),
+    ).toBe(true);
+    expect(
+      isTrustedSafeBinPath({
+        resolvedPath: "/tmp/shadow-bin/jq",
+        resolvedRealPath: "/bin/jq",
+        trustedDirs: trusted,
+      }),
+    ).toBe(false);
+    expect(
+      isTrustedSafeBinPath({
+        resolvedPath: "/usr/bin/jq",
+        resolvedRealPath: "/tmp/shadow-bin/jq",
+        trustedDirs: trusted,
+      }),
+    ).toBe(false);
+  });
+
   it("does not trust PATH entries by default", () => {
     const injected = `/tmp/openclaw-path-injected-${Date.now()}`;
 

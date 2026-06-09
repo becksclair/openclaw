@@ -61,6 +61,7 @@ export type CodexAppServerToolTelemetry = {
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
+  toolTrustedLocalMedia?: boolean;
   successfulCronAdds?: number;
 };
 
@@ -421,6 +422,7 @@ export class CodexAppServerEventProjector {
       heartbeatToolResponse: toolTelemetry.heartbeatToolResponse,
       toolMediaUrls: this.buildToolMediaUrls(toolTelemetry),
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
+      toolTrustedLocalMedia: toolTelemetry.toolTrustedLocalMedia,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       cloudCodeAssistFormatError: false,
       attemptUsage: this.tokenUsage,

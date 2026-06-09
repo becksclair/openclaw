@@ -49,6 +49,7 @@ import {
 import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import { markGeneratedTtsLocalMediaTrusted } from "./tts-trusted-media.js";
 
 const dispatchAcpManagerRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-manager.runtime.js"),
@@ -343,12 +344,14 @@ async function finalizeAcpTurnOutput(params: {
         const delivered = await params.delivery.deliver(
           "final",
           markReplyPayloadAsTtsSupplement(
-            {
-              mediaUrl: ttsSyntheticReply.mediaUrl,
-              audioAsVoice: ttsSyntheticReply.audioAsVoice,
-              spokenText: accumulatedBlockTtsText,
-              trustedLocalMedia: true,
-            },
+            markGeneratedTtsLocalMediaTrusted({
+              input: { text: accumulatedBlockTtsText },
+              output: {
+                mediaUrl: ttsSyntheticReply.mediaUrl,
+                audioAsVoice: ttsSyntheticReply.audioAsVoice,
+                spokenText: accumulatedBlockTtsText,
+              },
+            }),
             accumulatedBlockTtsText,
             { visibleTextAlreadyDelivered: true },
           ),

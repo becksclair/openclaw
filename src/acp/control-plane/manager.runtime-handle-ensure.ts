@@ -42,6 +42,7 @@ export async function ensureManagerRuntimeHandle(params: {
   const mode = params.meta.mode;
   const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
   const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
+  const target = normalizeText(runtimeOptions.target);
   const model = normalizeText(runtimeOptions.model);
   const thinking = normalizeText(runtimeOptions.thinking);
   const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
@@ -52,6 +53,7 @@ export async function ensureManagerRuntimeHandle(params: {
     const agentMatches = cached.agent === agent;
     const modeMatches = cached.mode === mode;
     const cwdMatches = (cached.cwd ?? "") === (cwd ?? "");
+    const targetMatches = (cached.target ?? "") === (target ?? "");
     const configMatches = cached.configSignature === configSignature;
     const handleMatchesMeta = params.runtimeHandles.handleMatchesMeta({
       handle: cached.handle,
@@ -62,6 +64,7 @@ export async function ensureManagerRuntimeHandle(params: {
       agentMatches &&
       modeMatches &&
       cwdMatches &&
+      targetMatches &&
       configMatches &&
       handleMatchesMeta &&
       (await params.runtimeHandles.isReusable({
@@ -109,6 +112,7 @@ export async function ensureManagerRuntimeHandle(params: {
           ...(model ? { model } : {}),
           ...(thinking ? { thinking } : {}),
           cwd,
+          ...(target ? { target } : {}),
         }),
       fallbackCode: "ACP_SESSION_INIT_FAILED",
       fallbackMessage: "Could not initialize ACP session runtime.",
@@ -217,6 +221,7 @@ export async function ensureManagerRuntimeHandle(params: {
     agent,
     mode,
     cwd: effectiveCwd,
+    ...(target ? { target } : {}),
     configSignature,
     appliedControlSignature: undefined,
   });

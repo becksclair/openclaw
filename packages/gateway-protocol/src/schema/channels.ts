@@ -289,6 +289,9 @@ export const TalkSessionCreateParamsSchema = Type.Object(
     mode: Type.Optional(TalkModeSchema),
     transport: Type.Optional(TalkTransportSchema),
     brain: Type.Optional(TalkBrainSchema),
+    transcriptionMode: Type.Optional(
+      Type.Union([Type.Literal("streaming"), Type.Literal("buffered")]),
+    ),
     ttlMs: Type.Optional(Type.Integer({ minimum: 1000, maximum: 3600000 })),
   },
   { additionalProperties: false },

@@ -96,6 +96,7 @@ import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import type { ChatStreamSegment } from "./chat/stream-text.ts";
+import { speakText } from "./chat/talk-tts.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
@@ -1358,6 +1359,18 @@ export class OpenClawApp extends LitElement {
   resetRealtimeTalkConversation() {
     this.realtimeTalkConversationState = createRealtimeTalkConversationState();
     this.realtimeTalkConversation = [];
+  }
+
+  async handleReadAloud(text: string) {
+    if (!this.client || !this.connected) {
+      this.lastError = "Gateway not connected";
+      return;
+    }
+    await speakText(text, this.client, {
+      onError: (error) => {
+        this.lastError = error;
+      },
+    });
   }
 
   async steerQueuedChatMessage(id: string) {

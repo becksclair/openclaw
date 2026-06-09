@@ -45,6 +45,7 @@ const {
   loadWebMedia,
   maybePersistResolvedTelegramTarget,
   probeVideoDimensions,
+  transcodeAudioBufferToOpus,
 } = getTelegramSendTestMocks();
 const telegramSendModule = await importTelegramSendModule();
 const { resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env");
@@ -2566,6 +2567,7 @@ describe("sendMessageTelegram", () => {
       replyToMessageId?: number;
       expectedMethod: "sendAudio" | "sendVoice";
       expectedOptions: Record<string, unknown>;
+      expectedTranscode?: boolean;
     }> = [
       {
         name: "default audio send",
@@ -2597,15 +2599,16 @@ describe("sendMessageTelegram", () => {
         },
       },
       {
-        name: "asVoice fallback for non-voice media",
+        name: "asVoice transcodes wav voice media",
         chatId: "123",
         text: "caption",
         mediaUrl: "https://example.com/clip.wav",
         contentType: "audio/wav",
         fileName: "clip.wav",
         asVoice: true,
-        expectedMethod: "sendAudio" as const,
+        expectedMethod: "sendVoice" as const,
         expectedOptions: { caption: "caption", parse_mode: "HTML" },
+        expectedTranscode: true,
       },
       {
         name: "asVoice accepts mp3",
@@ -2649,6 +2652,7 @@ describe("sendMessageTelegram", () => {
         contentType: testCase.contentType,
         fileName: testCase.fileName,
       });
+      transcodeAudioBufferToOpus.mockClear();
 
       await sendMessageTelegram(testCase.chatId, testCase.text, {
         cfg: TELEGRAM_TEST_CFG,
@@ -2673,6 +2677,16 @@ describe("sendMessageTelegram", () => {
         testCase.expectedOptions,
       );
       expect(notCalled, testCase.name).not.toHaveBeenCalled();
+      if ("expectedTranscode" in testCase && testCase.expectedTranscode) {
+        expect(transcodeAudioBufferToOpus).toHaveBeenCalledWith({
+          audioBuffer: Buffer.from("audio"),
+          inputFileName: "clip.wav",
+          outputFileName: "voice.ogg",
+          tempPrefix: "telegram-voice-",
+        });
+      } else {
+        expect(transcodeAudioBufferToOpus, testCase.name).not.toHaveBeenCalled();
+      }
     }
   });
 

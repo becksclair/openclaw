@@ -1,5 +1,3 @@
-// Gateway server implementation builds runtime state, method registries, HTTP
-// and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -23,6 +21,7 @@ import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
 import { isNixMode, normalizeStateDirEnv } from "../config/paths.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -44,7 +43,11 @@ import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  captureCurrentPluginMetadataSnapshotState,
+  restoreCurrentPluginMetadataSnapshotState,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import { cleanupRetainedManagedNpmInstallGenerations } from "../plugins/managed-npm-retention.js";
@@ -59,7 +62,7 @@ import { getTotalQueueSize, isGatewayDraining } from "../process/command-queue.j
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeConfigSnapshot,
+  getActiveSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
@@ -121,20 +124,10 @@ import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
-type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
-
-let gatewayModelCatalogModulePromise: Promise<typeof import("./server-model-catalog.js")> | null =
-  null;
-
-const loadGatewayModelCatalogModule = async () => {
-  gatewayModelCatalogModulePromise ??= import("./server-model-catalog.js");
-  return await gatewayModelCatalogModulePromise;
-};
-
 export async function resetModelCatalogCacheForTest(): Promise<void> {
-  const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
-    await loadGatewayModelCatalogModule();
-  await resetModelCatalogCacheForTestLocal();
+  const { resetModelCatalogCacheForTest: resetServerModelCatalogCacheForTest } =
+    await import("./server-model-catalog.js");
+  await resetServerModelCatalogCacheForTest();
 }
 
 ensureOpenClawCliOnPath();
@@ -208,18 +201,15 @@ function loadGatewayCloseModule(): Promise<typeof import("./server-close.runtime
   return gatewayCloseModulePromise;
 }
 
+type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
+
+let gatewayModelCatalogModulePromise: Promise<typeof import("./server-model-catalog.js")> | null =
+  null;
+
 const loadGatewayModelCatalog: LoadGatewayModelCatalog = async (...args) => {
-  const mod = await loadGatewayModelCatalogModule();
+  gatewayModelCatalogModulePromise ??= import("./server-model-catalog.js");
+  const mod = await gatewayModelCatalogModulePromise;
   return mod.loadGatewayModelCatalog(...args);
-};
-
-let gatewayPluginBootstrapModulePromise: Promise<
-  typeof import("./server-plugin-bootstrap.js")
-> | null = null;
-
-const loadGatewayPluginBootstrapModule = async () => {
-  gatewayPluginBootstrapModulePromise ??= import("./server-plugin-bootstrap.js");
-  return await gatewayPluginBootstrapModulePromise;
 };
 
 const logHealth = log.child("health");
@@ -630,9 +620,6 @@ export async function startGatewayServer(
   const activateRuntimeSecrets = createRuntimeSecretsActivator({
     logSecrets,
     emitStateEvent: emitSecretsStateEvent,
-    ...(startupConfigLoad.pluginMetadataSnapshot
-      ? { pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot }
-      : {}),
   });
 
   let cfgAtStart: OpenClawConfig;
@@ -650,7 +637,6 @@ export async function startGatewayServer(
         authOverride: opts.auth,
         tailscaleOverride: opts.tailscale,
         activateRuntimeSecrets,
-        log,
         measure: (name, run, measureOptions) => startupTrace.measure(name, run, measureOptions),
       }),
     { omitErrorMessage: true },
@@ -711,7 +697,6 @@ export async function startGatewayServer(
       minimalTestGateway,
       log,
       loadRuntimePlugins: false,
-      loadSetupRuntimePlugins: true,
     }),
   );
   const {
@@ -798,8 +783,7 @@ export async function startGatewayServer(
   const getResolvedAuth = () =>
     resolveGatewayAuth({
       authConfig:
-        getActiveSecretsRuntimeConfigSnapshot()?.config.gateway?.auth ??
-        getRuntimeConfig().gateway?.auth,
+        getActiveSecretsRuntimeSnapshot()?.config.gateway?.auth ?? getRuntimeConfig().gateway?.auth,
       authOverride: opts.auth,
       env: process.env,
       tailscaleMode,
@@ -876,9 +860,9 @@ export async function startGatewayServer(
   const { createChannelManager } = await import("./server-channels.js");
   const channelManager = createChannelManager({
     getRuntimeConfig: () => {
-      const runtimeConfigLocal = getRuntimeConfig();
       return resolveGatewayPluginConfig({
-        config: runtimeConfigLocal,
+        config: getRuntimeConfig(),
+        env: process.env,
       });
     },
     channelLogs,
@@ -1029,11 +1013,9 @@ export async function startGatewayServer(
   };
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
-  const refreshGatewayHealthSnapshotWithRuntime: typeof refreshGatewayHealthSnapshot = (
-    optsResult,
-  ) =>
+  const refreshGatewayHealthSnapshotWithRuntime: typeof refreshGatewayHealthSnapshot = (options) =>
     refreshGatewayHealthSnapshot({
-      ...optsResult,
+      ...options,
       getRuntimeSnapshot,
       getEventLoopHealth: readinessEventLoopHealth.snapshot,
     });
@@ -1051,7 +1033,7 @@ export async function startGatewayServer(
       await gatewayLifetimeSidecar.stop();
     }
   };
-  const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
+  const createCloseHandler = () => async (closeOptions?: GatewayCloseOptions) => {
     const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
     const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
       await loadGatewayCloseModule();
@@ -1112,7 +1094,7 @@ export async function startGatewayServer(
       httpServer,
       httpServers,
       drainActiveSessionsForShutdown,
-    })(optsValue);
+    })(closeOptions);
   };
   let clearFallbackGatewayContextForServer = () => {};
   const closeOnStartupFailure = async () => {
@@ -1209,24 +1191,28 @@ export async function startGatewayServer(
     );
     Object.assign(runtimeState, runtimeServices);
 
-    const { execApprovalManager, pluginApprovalManager, extraHandlers, coreGatewayHandlers } =
-      await startupTrace.measure("gateway.handlers", async () => {
-        const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: coreGatewayHandlersLocal }] =
-          await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
-        return {
-          ...createGatewayAuxHandlers({
-            log,
-            activateRuntimeSecrets,
-            sharedGatewaySessionGenerationState,
-            resolveSharedGatewaySessionGenerationForConfig,
-            clients,
-            startChannel,
-            stopChannel,
-            logChannels,
-          }),
-          coreGatewayHandlers: coreGatewayHandlersLocal,
-        };
-      });
+    const {
+      execApprovalManager,
+      pluginApprovalManager,
+      extraHandlers,
+      coreGatewayHandlers: resolvedCoreGatewayHandlers,
+    } = await startupTrace.measure("gateway.handlers", async () => {
+      const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: importedCoreGatewayHandlers }] =
+        await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
+      return {
+        ...createGatewayAuxHandlers({
+          log,
+          activateRuntimeSecrets,
+          sharedGatewaySessionGenerationState,
+          resolveSharedGatewaySessionGenerationForConfig,
+          clients,
+          startChannel,
+          stopChannel,
+          logChannels,
+        }),
+        coreGatewayHandlers: importedCoreGatewayHandlers,
+      };
+    });
     const attachedGatewayExtraHandlers: GatewayRequestHandlers = {
       ...pluginRegistry.gatewayHandlers,
       ...extraHandlers,
@@ -1235,7 +1221,7 @@ export async function startGatewayServer(
     const buildAttachedGatewayMethodRegistry = (
       nextPluginRegistry: typeof pluginRegistry,
     ): GatewayMethodRegistry => {
-      const coreDescriptorHandlers: GatewayRequestHandlers = { ...coreGatewayHandlers };
+      const coreDescriptorHandlers: GatewayRequestHandlers = { ...resolvedCoreGatewayHandlers };
       const auxHandlers: GatewayRequestHandlers = {};
       for (const [method, handler] of Object.entries(extraHandlers)) {
         if (isCoreGatewayMethodClassified(method)) {
@@ -1339,62 +1325,79 @@ export async function startGatewayServer(
       const [{ loadPluginLookUpTable }, { prepareGatewayPluginLoad }, { startPluginServices }] =
         await Promise.all([
           import("../plugins/plugin-lookup-table.js"),
-          loadGatewayPluginBootstrapModule(),
+          import("./server-plugin-bootstrap.js"),
           import("../plugins/services.js"),
         ]);
-      const nextPluginLookUpTable = loadPluginLookUpTable({
-        config: params.nextConfig,
-        workspaceDir: defaultWorkspaceDir,
-        env: process.env,
-        activationSourceConfig: params.nextConfig,
-      });
-      const nextStartupPluginIds = new Set(nextPluginLookUpTable.startup.pluginIds);
-      const nextStartupChannelIds = new Set<ChannelId>();
-      for (const plugin of nextPluginLookUpTable.manifestRegistry.plugins) {
-        if (!nextStartupPluginIds.has(plugin.id)) {
-          continue;
+      const previousPluginMetadataState = captureCurrentPluginMetadataSnapshotState();
+      clearPluginMetadataLifecycleCaches();
+      let nextPluginLookUpTable: ReturnType<typeof loadPluginLookUpTable>;
+      let loaded: ReturnType<typeof prepareGatewayPluginLoad>;
+      let nextPluginRuntimeConfig: OpenClawConfig;
+      try {
+        nextPluginLookUpTable = loadPluginLookUpTable({
+          config: params.nextConfig,
+          workspaceDir: defaultWorkspaceDir,
+          env: process.env,
+          activationSourceConfig: params.nextConfig,
+        });
+        const nextStartupPluginIds = new Set(nextPluginLookUpTable.startup.pluginIds);
+        const nextStartupChannelIds = new Set<ChannelId>();
+        for (const plugin of nextPluginLookUpTable.manifestRegistry.plugins) {
+          if (!nextStartupPluginIds.has(plugin.id)) {
+            continue;
+          }
+          if (plugin.channels.length === 0) {
+            nextStartupChannelIds.add(plugin.id);
+            continue;
+          }
+          for (const channelId of plugin.channels) {
+            nextStartupChannelIds.add(channelId);
+          }
         }
-        if (plugin.channels.length === 0) {
-          nextStartupChannelIds.add(plugin.id);
-          continue;
+        const channelsToStopBeforeReplace = new Set<ChannelId>();
+        for (const channelId of beforeChannelIds) {
+          const targetIds = beforeChannelTargets.get(channelId) ?? new Set([channelId]);
+          if (
+            !nextStartupChannelIds.has(channelId) ||
+            pluginConfigTargetsChanged(targetIds, params.changedPaths)
+          ) {
+            channelsToStopBeforeReplace.add(channelId);
+          }
         }
-        for (const channelId of plugin.channels) {
-          nextStartupChannelIds.add(channelId);
+        await params.beforeReplace(channelsToStopBeforeReplace);
+        // If an in-process restart signalled abort during beforeReplace,
+        // stop before any plugin metadata/runtime side effects continue.
+        if (params.isAborted?.()) {
+          return {
+            restartChannels: new Set(),
+            activeChannels: new Set(beforeChannelIds),
+            cancelled: true,
+          };
         }
-      }
-      const channelsToStopBeforeReplace = new Set<ChannelId>();
-      for (const channelId of beforeChannelIds) {
-        const targetIds = beforeChannelTargets.get(channelId) ?? new Set([channelId]);
-        if (
-          !nextStartupChannelIds.has(channelId) ||
-          pluginConfigTargetsChanged(targetIds, params.changedPaths)
-        ) {
-          channelsToStopBeforeReplace.add(channelId);
-        }
-      }
-      await params.beforeReplace(channelsToStopBeforeReplace);
-      // If an in-process restart signalled abort during beforeReplace,
-      // stop before any plugin metadata/runtime side effects continue.
-      if (params.isAborted?.()) {
-        return {
-          restartChannels: new Set(),
-          activeChannels: new Set(beforeChannelIds),
-          cancelled: true,
-        };
+        nextPluginRuntimeConfig = applyPluginAutoEnable({
+          config: params.nextConfig,
+          env: process.env,
+          manifestRegistry: nextPluginLookUpTable.manifestRegistry,
+          discovery: nextPluginLookUpTable.discovery,
+        }).config;
+        loaded = prepareGatewayPluginLoad({
+          cfg: params.nextConfig,
+          workspaceDir: defaultWorkspaceDir,
+          log,
+          coreGatewayMethodNames,
+          hostServices: pluginHostServices,
+          baseMethods,
+          pluginLookUpTable: nextPluginLookUpTable,
+        });
+      } catch (err) {
+        restoreCurrentPluginMetadataSnapshotState(previousPluginMetadataState);
+        throw err;
       }
       setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
         config: params.nextConfig,
+        compatibleConfigs: [nextPluginRuntimeConfig],
         env: process.env,
         workspaceDir: defaultWorkspaceDir,
-      });
-      const loaded = prepareGatewayPluginLoad({
-        cfg: params.nextConfig,
-        workspaceDir: defaultWorkspaceDir,
-        log,
-        coreGatewayMethodNames,
-        hostServices: pluginHostServices,
-        baseMethods,
-        pluginLookUpTable: nextPluginLookUpTable,
       });
       const previousPluginServices = runtimeState.pluginServices;
       runtimeState.pluginServices = null;
@@ -1527,7 +1530,7 @@ export async function startGatewayServer(
 
     if (!minimalTestGateway) {
       if (runtimePluginsLoaded && deferredConfiguredChannelPluginIds.length > 0) {
-        const { reloadDeferredGatewayPlugins } = await loadGatewayPluginBootstrapModule();
+        const { reloadDeferredGatewayPlugins } = await import("./server-plugin-bootstrap.js");
         const loaded = await startupTrace.measure("gateway.deferred-plugins", () =>
           reloadDeferredGatewayPlugins({
             cfg: gatewayPluginConfigAtStart,
@@ -1645,7 +1648,6 @@ export async function startGatewayServer(
             broadcast,
             tailscaleMode,
             resetOnExit: tailscaleConfig.resetOnExit ?? false,
-            serviceName: tailscaleConfig.serviceName,
             preserveFunnel: tailscaleConfig.preserveFunnel ?? false,
             controlUiBasePath,
             logTailscale,
@@ -1834,7 +1836,7 @@ export async function startGatewayServer(
   const close = createCloseHandler();
 
   return {
-    close: async (optsLocal) => {
+    close: async (closeOptions) => {
       try {
         markClosePreludeStarted();
         await stopRegisteredGatewayLifetimeSidecars();
@@ -1842,12 +1844,12 @@ export async function startGatewayServer(
         // Run gateway_stop plugin hook before shutdown
         const { runGlobalGatewayStopSafely } = await import("../plugins/hook-runner-global.js");
         await runGlobalGatewayStopSafely({
-          event: { reason: optsLocal?.reason ?? "gateway stopping" },
+          event: { reason: closeOptions?.reason ?? "gateway stopping" },
           ctx: { port },
           onError: (err) => log.warn(`gateway_stop hook failed: ${String(err)}`),
         });
         await runClosePrelude();
-        await close(optsLocal);
+        await close(closeOptions);
       } finally {
         clearFallbackGatewayContextForServer();
       }

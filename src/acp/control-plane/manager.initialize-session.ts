@@ -43,8 +43,10 @@ export async function runManagerInitializeSession(params: {
   const initialRuntimeOptions = validateRuntimeOptionPatch({
     ...input.runtimeOptions,
     ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+    ...(input.target !== undefined ? { target: input.target } : {}),
   });
   const requestedCwd = initialRuntimeOptions.cwd;
+  const requestedTarget = initialRuntimeOptions.target;
   const requestedModel = initialRuntimeOptions.model;
   const requestedThinking = initialRuntimeOptions.thinking;
   params.enforceConcurrentSessionLimit({
@@ -61,6 +63,7 @@ export async function runManagerInitializeSession(params: {
         ...(requestedModel ? { model: requestedModel } : {}),
         ...(requestedThinking ? { thinking: requestedThinking } : {}),
         cwd: requestedCwd,
+        ...(requestedTarget ? { target: requestedTarget } : {}),
       }),
     fallbackCode: "ACP_SESSION_INIT_FAILED",
     fallbackMessage: "Could not initialize ACP session runtime.",
@@ -121,6 +124,7 @@ export async function runManagerInitializeSession(params: {
     agent,
     mode: input.mode,
     cwd: effectiveCwd,
+    ...(requestedTarget ? { target: requestedTarget } : {}),
     configSignature: resolveRuntimeConfigCacheKey(input.cfg),
   });
   return {

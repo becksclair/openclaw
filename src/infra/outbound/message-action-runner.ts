@@ -804,6 +804,7 @@ async function handleInternalSourceReplySendAction(
       (input.sessionKey
         ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
         : undefined),
+    dryRun,
   });
   const payload = {
     status: "ok",
@@ -890,6 +891,7 @@ async function buildSendPayloadParts(params: {
   target?: string;
   accountId?: string | null;
   agentId?: string;
+  dryRun?: boolean;
 }): Promise<SendPayloadParts> {
   const { actionParams, input } = params;
   if (actionParams.pin === true && actionParams.delivery == null) {
@@ -1024,7 +1026,7 @@ async function buildSendPayloadParts(params: {
       : undefined;
   const presentation = normalizeMessagePresentation(actionParams.presentation);
   const interactive = normalizeInteractiveReply(actionParams.interactive);
-  return {
+  const parts: SendPayloadParts = {
     message,
     payload: {
       text: message,
@@ -1044,6 +1046,7 @@ async function buildSendPayloadParts(params: {
     ...(bestEffort !== undefined ? { bestEffort } : {}),
     ...(silent !== undefined ? { silent } : {}),
   };
+  return parts;
 }
 
 // Detects leftover `{variable}` placeholders after prefix interpolation. Non-global so
@@ -1074,6 +1077,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     target: to,
     accountId,
     agentId,
+    dryRun,
   });
 
   // `message(action=send)` crosses into other conversations, so mirror the direct-reply

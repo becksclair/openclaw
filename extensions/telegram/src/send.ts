@@ -85,7 +85,7 @@ import {
   normalizeTelegramLookupTarget,
   parseTelegramTarget,
 } from "./targets.js";
-import { resolveTelegramVoiceSend } from "./voice.js";
+import { prepareTelegramVoiceMedia } from "./voice.js";
 
 export { buildInlineKeyboard } from "./inline-keyboard.js";
 
@@ -1248,9 +1248,24 @@ export async function sendMessageTelegram(
       sendImageAsPhoto = await shouldSendTelegramImageAsPhoto(media.buffer);
     }
     const isVideoNote = deliveryKind === "video" && opts.asVideoNote === true;
-    const fileName =
+    let fileName =
       media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
-    const file = new InputFileCtor(media.buffer, fileName);
+    let mediaBuffer = media.buffer;
+    const voiceMedia =
+      kind === "audio"
+        ? await prepareTelegramVoiceMedia({
+            wantsVoice: opts.asVoice === true,
+            buffer: mediaBuffer,
+            contentType: media.contentType,
+            fileName,
+            logFallback: logVerbose,
+          })
+        : undefined;
+    if (voiceMedia) {
+      mediaBuffer = voiceMedia.buffer;
+      fileName = voiceMedia.fileName ?? fileName;
+    }
+    const file = new InputFileCtor(mediaBuffer, fileName);
     let caption: string | undefined;
     let followUpText: string | undefined;
 
@@ -1358,13 +1373,7 @@ export async function sendMessageTelegram(
         };
       }
       if (kind === "audio") {
-        const { useVoice } = resolveTelegramVoiceSend({
-          wantsVoice: opts.asVoice === true, // default false (backward compatible)
-          contentType: media.contentType,
-          fileName,
-          logFallback: logVerbose,
-        });
-        if (useVoice) {
+        if (voiceMedia?.useVoice === true) {
           return {
             label: "voice",
             sender: (effectiveParams: TelegramThreadScopedParams | undefined) =>

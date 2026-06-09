@@ -62,7 +62,7 @@ type AttachmentCacheEntry = {
 
 let defaultLocalPathRoots: readonly string[] | undefined;
 
-function concreteMime(mime: string | undefined): string | undefined {
+export function concreteMime(mime: string | undefined): string | undefined {
   const normalized = mime?.trim();
   if (!normalized || normalized.endsWith("/*")) {
     return undefined;
@@ -133,7 +133,12 @@ export class MediaAttachmentCache {
         : mergeInboundPathRoots(options?.localPathRoots, getDefaultLocalPathRoots());
     this.workspaceDir = options?.workspaceDir ? path.resolve(options.workspaceDir) : undefined;
     for (const attachment of attachments) {
-      this.entries.set(attachment.index, { attachment });
+      this.entries.set(attachment.index, {
+        attachment,
+        buffer: attachment.buffer,
+        bufferMime: attachment.mime,
+        bufferFileName: attachment.fileName,
+      });
     }
   }
 
@@ -319,7 +324,12 @@ export class MediaAttachmentCache {
       if (entry.tempCleanup) {
         cleanups.push(entry.tempCleanup());
         entry.tempCleanup = undefined;
+        entry.tempPath = undefined;
       }
+      // Allow large in-memory buffers to be GC'd immediately.
+      entry.buffer = undefined;
+      entry.bufferMime = undefined;
+      entry.bufferFileName = undefined;
     }
     await Promise.all(cleanups);
   }

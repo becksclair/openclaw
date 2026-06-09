@@ -8,6 +8,8 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
+import { internSessionEntryLargeStrings } from "../../config/sessions/store-cache.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
@@ -1408,7 +1410,7 @@ export function buildWorkspaceSkillSnapshot(
 ): SkillSnapshot {
   const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
   const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
-  return {
+  const snapshot: SkillSnapshot = {
     prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
@@ -1420,6 +1422,14 @@ export function buildWorkspaceSkillSnapshot(
     version: opts?.snapshotVersion,
     promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
   };
+  // Intern the prompt string so identical prompts across sessions share the same
+  // underlying string instance when many sessions are active.
+  const interningEntry = { skillsSnapshot: snapshot } satisfies Pick<
+    SessionEntry,
+    "skillsSnapshot"
+  >;
+  internSessionEntryLargeStrings(interningEntry as SessionEntry);
+  return snapshot;
 }
 
 export function buildWorkspaceSkillsPrompt(

@@ -5,6 +5,7 @@ import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-opti
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
 } from "../../../auto-reply/reply-payload.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 
@@ -32,6 +33,28 @@ export function mergeAttemptToolMediaPayloads(params: {
   }
 
   const payloads = params.payloads?.length ? [...params.payloads] : [];
+  const shouldDeliverTrustedVoiceMedia =
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    params.toolTrustedLocalMedia === true &&
+    params.toolAudioAsVoice === true &&
+    mediaUrls.length > 0;
+  if (shouldDeliverTrustedVoiceMedia) {
+    const existingMediaUrls = new Set(payloads.flatMap((payload) => payload.mediaUrls ?? []));
+    const deliverableMediaUrls = mediaUrls.filter((url) => !existingMediaUrls.has(url));
+    if (deliverableMediaUrls.length === 0) {
+      return payloads;
+    }
+    return [
+      ...payloads,
+      markReplyPayloadForSourceSuppressionDelivery({
+        mediaUrls: deliverableMediaUrls,
+        mediaUrl: deliverableMediaUrls[0],
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+      }),
+    ];
+  }
+
   const payloadIndex = payloads.findIndex((payload) => !payload.isReasoning);
   if (payloadIndex >= 0) {
     const payload = payloads[payloadIndex];

@@ -8,6 +8,9 @@ const { loadWebMedia } = vi.hoisted(() => ({
 const { probeVideoDimensions } = vi.hoisted(() => ({
   probeVideoDimensions: vi.fn(),
 }));
+const { transcodeAudioBufferToOpus } = vi.hoisted(() => ({
+  transcodeAudioBufferToOpus: vi.fn(async () => Buffer.from("opus")),
+}));
 const triggerInternalHook = vi.hoisted(() => vi.fn(async () => {}));
 const messageHookRunner = vi.hoisted(() => ({
   hasHooks: vi.fn<(name: string) => boolean>(() => false),
@@ -37,6 +40,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   return {
     ...actual,
     probeVideoDimensions,
+    transcodeAudioBufferToOpus,
   };
 });
 
@@ -252,6 +256,8 @@ function createVoiceFailureHarness(params: {
 describe("deliverReplies", () => {
   beforeEach(() => {
     loadWebMedia.mockClear();
+    transcodeAudioBufferToOpus.mockReset();
+    transcodeAudioBufferToOpus.mockResolvedValue(Buffer.from("opus"));
     probeVideoDimensions.mockReset();
     probeVideoDimensions.mockResolvedValue(undefined);
     triggerInternalHook.mockReset();
@@ -788,6 +794,34 @@ describe("deliverReplies", () => {
     expect(onVoiceRecording).toHaveBeenCalledTimes(1);
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["recordVoice", "sendVoice"]);
+  });
+
+  it("transcodes wav audioAsVoice payloads before sending voice notes", async () => {
+    const runtime = createRuntime(false);
+    const sendVoice = vi.fn(async () => ({ message_id: 1, chat: { id: "123" } }));
+    const sendAudio = vi.fn();
+    const bot = createBot({ sendVoice, sendAudio });
+
+    mockMediaLoad("note.wav", "audio/wav", "voice-wav");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/note.wav", audioAsVoice: true }],
+      runtime,
+      bot,
+    });
+
+    expect(transcodeAudioBufferToOpus).toHaveBeenCalledWith({
+      audioBuffer: Buffer.from("voice-wav"),
+      inputFileName: "note.wav",
+      outputFileName: "voice.ogg",
+      tempPrefix: "telegram-voice-",
+    });
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendAudio).not.toHaveBeenCalled();
+    expectRecordFields(firstMockCallArg(sendVoice, 1), {
+      buffer: Buffer.from("opus"),
+      fileName: "voice.ogg",
+    });
   });
 
   it("renders markdown in media captions", async () => {

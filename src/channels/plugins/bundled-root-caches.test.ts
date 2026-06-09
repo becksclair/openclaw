@@ -59,17 +59,18 @@ describe("bundled root-aware plugin lookups", () => {
     const rootA = makeBundledRoot("openclaw-bundled-ids-a-");
     const rootB = makeBundledRoot("openclaw-bundled-ids-b-");
 
+    const listChannelCatalogEntriesMock = vi.fn((params?: { env?: NodeJS.ProcessEnv }) => {
+      const activeRoot = params?.env?.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      if (activeRoot === rootA.pluginsDir) {
+        return [{ pluginId: "alpha", channel: { id: "alpha-chat" } }];
+      }
+      if (activeRoot === rootB.pluginsDir) {
+        return [{ pluginId: "beta", channel: { id: "beta-chat" } }];
+      }
+      return [];
+    });
     vi.doMock("../../plugins/channel-catalog-registry.js", () => ({
-      listChannelCatalogEntries: (params?: { env?: NodeJS.ProcessEnv }) => {
-        const activeRoot = params?.env?.OPENCLAW_BUNDLED_PLUGINS_DIR;
-        if (activeRoot === rootA.pluginsDir) {
-          return [{ pluginId: "alpha", channel: { id: "alpha-chat" } }];
-        }
-        if (activeRoot === rootB.pluginsDir) {
-          return [{ pluginId: "beta", channel: { id: "beta-chat" } }];
-        }
-        return [];
-      },
+      listChannelCatalogEntries: listChannelCatalogEntriesMock,
     }));
 
     const bundledIds = await importFreshModule<typeof import("./bundled-ids.js")>(
@@ -80,10 +81,37 @@ describe("bundled root-aware plugin lookups", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = rootA.pluginsDir;
     expect(bundledIds.listBundledChannelPluginIds()).toEqual(["alpha"]);
     expect(bundledIds.listBundledChannelIds()).toEqual(["alpha-chat"]);
+    expect(bundledIds.listBundledChannelPluginIds()).toEqual(["alpha"]);
+    expect(bundledIds.listBundledChannelIds()).toEqual(["alpha-chat"]);
 
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = rootB.pluginsDir;
     expect(bundledIds.listBundledChannelPluginIds()).toEqual(["beta"]);
     expect(bundledIds.listBundledChannelIds()).toEqual(["beta-chat"]);
+    expect(listChannelCatalogEntriesMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("clears bundled channel id caches at plugin metadata lifecycle boundaries", async () => {
+    const rootA = makeBundledRoot("openclaw-bundled-lifecycle-a-");
+    const listChannelCatalogEntriesMock = vi.fn(() => [
+      { pluginId: "alpha", channel: { id: "alpha-chat" } },
+    ]);
+    vi.doMock("../../plugins/channel-catalog-registry.js", () => ({
+      listChannelCatalogEntries: listChannelCatalogEntriesMock,
+    }));
+
+    const bundledIds = await importFreshModule<typeof import("./bundled-ids.js")>(
+      import.meta.url,
+      "./bundled-ids.js?scope=lifecycle-clear-cache",
+    );
+    const { clearPluginMetadataLifecycleCaches } =
+      await import("../../plugins/plugin-metadata-lifecycle.js");
+
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = rootA.pluginsDir;
+    expect(bundledIds.listBundledChannelPluginIds()).toEqual(["alpha"]);
+    expect(bundledIds.listBundledChannelPluginIds()).toEqual(["alpha"]);
+    clearPluginMetadataLifecycleCaches();
+    expect(bundledIds.listBundledChannelPluginIds()).toEqual(["alpha"]);
+    expect(listChannelCatalogEntriesMock).toHaveBeenCalledTimes(2);
   });
 
   it("reads bootstrap plugins from the active bundled root without re-importing", async () => {

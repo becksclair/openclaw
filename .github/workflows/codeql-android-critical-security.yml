@@ -43,7 +43,7 @@ jobs:
 
       - name: Build Android for CodeQL
         working-directory: apps/android
-        run: ./gradlew --no-daemon :app:assemblePlayDebug
+        run: ./gradlew --no-daemon :app:assemblePlayDebug :wear:assembleDebug
 
       - name: Analyze
         uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4

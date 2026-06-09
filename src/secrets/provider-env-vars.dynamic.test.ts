@@ -255,6 +255,43 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
+  it("reuses the active workspace current snapshot when workspaceDir is omitted", () => {
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({
+      index: {
+        plugins: [
+          {
+            pluginId: "workspace-provider",
+            origin: "workspace",
+            enabled: true,
+            enabledByDefault: true,
+          },
+        ],
+      },
+      plugins: [
+        {
+          id: "workspace-provider",
+          origin: "workspace",
+          providerAuthEnvVars: {
+            "workspace-provider": ["WORKSPACE_PROVIDER_API_KEY"],
+          },
+        },
+      ],
+    });
+
+    expect(
+      getProviderEnvVars("workspace-provider", {
+        config: {},
+        includeUntrustedWorkspacePlugins: true,
+      }),
+    ).toEqual(["WORKSPACE_PROVIDER_API_KEY"]);
+    expect(pluginRegistryMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
+      config: {},
+      env: process.env,
+      allowWorkspaceScopedSnapshot: true,
+    });
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
   it("does not reuse a load-path current snapshot for default provider env lookups", () => {
     const staleSnapshot = {
       index: {
@@ -289,7 +326,12 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(
       resolveProviderAuthEnvVarCandidates({ config: {} })["load-path-provider"],
     ).toBeUndefined();
-    expect(pluginRegistryMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
+    expect(pluginRegistryMocks.getCurrentPluginMetadataSnapshot).toHaveBeenNthCalledWith(1, {
+      config: {},
+      env: process.env,
+      allowWorkspaceScopedSnapshot: true,
+    });
+    expect(pluginRegistryMocks.getCurrentPluginMetadataSnapshot).toHaveBeenNthCalledWith(2, {
       env: process.env,
       allowWorkspaceScopedSnapshot: true,
       requireDefaultDiscoveryContext: true,

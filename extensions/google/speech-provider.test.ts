@@ -205,7 +205,7 @@ describe("Google speech provider", () => {
   });
 
   it("transcodes Gemini PCM to Opus for voice-note targets", async () => {
-    installGoogleTtsRequestMock(Buffer.from([5, 0, 6, 0]));
+    installGoogleTtsRequestMock(Buffer.from([10, 0, 20, 0]));
     transcodeAudioBufferToOpusMock.mockResolvedValueOnce(Buffer.from("google-opus"));
     const provider = buildGoogleSpeechProvider();
 
@@ -237,6 +237,31 @@ describe("Google speech provider", () => {
     const audioBuffer = transcodeArg.audioBuffer as Buffer;
     expect(audioBuffer.subarray(0, 4).toString("ascii")).toBe("RIFF");
     expect(audioBuffer.subarray(8, 12).toString("ascii")).toBe("WAVE");
+    expect(audioBuffer.subarray(44)).toEqual(Buffer.from([12, 0, 24, 0]));
+  });
+
+  it("applies configured volume gain to Gemini PCM before wrapping audio", async () => {
+    installGoogleTtsRequestMock(Buffer.from([10, 0, 20, 0, 0, 128]));
+    const provider = buildGoogleSpeechProvider();
+
+    const result = await provider.synthesize({
+      text: "Boost this reply.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "google-test-key",
+        volumeGain: 1.5,
+      },
+      target: "audio-file",
+      timeoutMs: 12_000,
+    });
+
+    expect(result.audioBuffer.subarray(44)).toEqual(Buffer.from([15, 0, 30, 0, 0, 128]));
+  });
+
+  it("rejects invalid Google TTS volume gain values", () => {
+    expect(() => testing.normalizeGoogleTtsVolumeGain("1.2x")).toThrow(
+      "Invalid Google TTS volumeGain: 1.2x",
+    );
   });
 
   it("advertises all documented Gemini TTS-capable models", () => {
@@ -365,7 +390,7 @@ describe("Google speech provider", () => {
     });
 
     expect(requestSequence).toHaveBeenCalledTimes(2);
-    expect(result.audioBuffer.subarray(44)).toEqual(pcm);
+    expect(result.audioBuffer.subarray(44)).toEqual(Buffer.from([6, 0, 7, 0]));
   });
 
   it("retries once when Gemini TTS fetch aborts", async () => {
@@ -393,7 +418,7 @@ describe("Google speech provider", () => {
     });
 
     expect(requestSequence).toHaveBeenCalledTimes(2);
-    expect(result.audioBuffer.subarray(44)).toEqual(pcm);
+    expect(result.audioBuffer.subarray(44)).toEqual(Buffer.from([8, 0, 10, 0]));
   });
 
   it("does not retry non-transient Gemini TTS request failures", async () => {
@@ -525,7 +550,7 @@ describe("Google speech provider", () => {
       },
     });
     expect(result).toEqual({
-      audioBuffer: pcm,
+      audioBuffer: Buffer.from([4, 0, 5, 0]),
       outputFormat: "pcm",
       sampleRate: 24_000,
     });
@@ -582,6 +607,7 @@ describe("Google speech provider", () => {
       baseUrl: undefined,
       model: "gemini-3.1-flash-tts-preview",
       speakerName: "Narrator",
+      volumeGain: testing.DEFAULT_GOOGLE_TTS_VOLUME_GAIN,
       voiceName: "Leda",
     });
 

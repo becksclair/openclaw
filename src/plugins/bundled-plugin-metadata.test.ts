@@ -372,6 +372,38 @@ describe("bundled plugin metadata", () => {
     },
   );
 
+  it("can exclude private untracked plugin dirs from the generated runtime sidecar baseline", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-sidecars-");
+
+    for (const dirName of ["tracked", "private-local"]) {
+      const pluginRoot = path.join(tempRoot, "extensions", dirName);
+      writeJson(path.join(pluginRoot, "package.json"), {
+        name: `@openclaw/${dirName}`,
+        version: "0.0.1",
+        openclaw: {
+          extensions: ["./index.ts"],
+        },
+      });
+      writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+        id: dirName,
+        configSchema: { type: "object" },
+      });
+      fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export {};\n", "utf8");
+      fs.writeFileSync(path.join(pluginRoot, "runtime-api.ts"), "export {};\n", "utf8");
+    }
+
+    expect(collectBundledRuntimeSidecarPaths({ rootDir: tempRoot })).toEqual([
+      "dist/extensions/private-local/runtime-api.js",
+      "dist/extensions/tracked/runtime-api.js",
+    ]);
+    expect(
+      collectBundledRuntimeSidecarPaths({
+        rootDir: tempRoot,
+        trackedDirNames: new Set(["tracked"]),
+      }),
+    ).toEqual(["dist/extensions/tracked/runtime-api.js"]);
+  });
+
   it("excludes non-packaged QA sidecars from the packaged runtime sidecar baseline", () => {
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
       "dist/extensions/qa-channel/runtime-api.js",
@@ -422,6 +454,15 @@ describe("bundled plugin metadata", () => {
     expectArtifactPresence(imessage?.publicSurfaceArtifacts, {
       contains: ["message-tool-api.js"],
     });
+  });
+
+  it("keeps channel TTS voice capabilities on narrow public surfaces", () => {
+    for (const dirName of ["discord", "feishu", "matrix", "telegram", "whatsapp"]) {
+      const plugin = listRepoBundledPluginMetadata().find((entry) => entry.dirName === dirName);
+      expectArtifactPresence(plugin?.publicSurfaceArtifacts, {
+        contains: ["tts-capabilities-api.js"],
+      });
+    }
   });
 
   it("keeps Slack's narrow runtime-setter sidecar on the bundled public surface", () => {

@@ -137,6 +137,7 @@ function buildEmptyToolTelemetry(): CodexAppServerToolTelemetry {
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
+    toolTrustedLocalMedia: false,
   };
 }
 
@@ -847,6 +848,21 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+  });
+
+  it("preserves trusted local tool media telemetry in the run result", async () => {
+    const projector = await createProjector();
+
+    const result = projector.buildResult({
+      ...buildEmptyToolTelemetry(),
+      toolMediaUrls: ["/tmp/reply.opus"],
+      toolAudioAsVoice: true,
+      toolTrustedLocalMedia: true,
+    });
+
+    expect(result.toolMediaUrls).toStrictEqual(["/tmp/reply.opus"]);
+    expect(result.toolAudioAsVoice).toBe(true);
+    expect(result.toolTrustedLocalMedia).toBe(true);
   });
 
   it("does not promote repeated tool progress text to the final assistant reply", async () => {

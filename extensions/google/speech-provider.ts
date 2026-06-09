@@ -21,6 +21,7 @@ import { resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
 
 const DEFAULT_GOOGLE_TTS_MODEL = "gemini-3.1-flash-tts-preview";
 const DEFAULT_GOOGLE_TTS_VOICE = "Kore";
+const DEFAULT_GOOGLE_TTS_VOLUME_GAIN = 1.2;
 const GOOGLE_TTS_SAMPLE_RATE = 24_000;
 const GOOGLE_TTS_CHANNELS = 1;
 const GOOGLE_TTS_BITS_PER_SAMPLE = 16;
@@ -72,6 +73,7 @@ type GoogleTtsProviderConfig = {
   voiceName: string;
   audioProfile?: string;
   speakerName?: string;
+  volumeGain: number;
   promptTemplate?: typeof GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE;
   personaPrompt?: string;
 };
@@ -140,6 +142,32 @@ function normalizeGoogleTtsModel(model: unknown): string {
 
 function normalizeGoogleTtsVoiceName(voiceName: unknown): string {
   return normalizeOptionalString(voiceName) ?? DEFAULT_GOOGLE_TTS_VOICE;
+}
+
+function formatGoogleTtsConfigValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return `${value}`;
+  }
+  try {
+    return JSON.stringify(value) ?? "undefined";
+  } catch {
+    return "[unserializable]";
+  }
+}
+
+function normalizeGoogleTtsVolumeGain(value: unknown): number {
+  if (value === undefined || value === null || value === "") {
+    return DEFAULT_GOOGLE_TTS_VOLUME_GAIN;
+  }
+  const rawValue = formatGoogleTtsConfigValue(value);
+  const parsed = typeof value === "number" ? value : Number(rawValue.trim());
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 4) {
+    throw new Error(`Invalid Google TTS volumeGain: ${rawValue}`);
+  }
+  return parsed;
 }
 
 function normalizeGooglePromptTemplate(
@@ -212,6 +240,7 @@ function normalizeGoogleTtsProviderConfig(
     voiceName: normalizeGoogleTtsVoiceName(raw?.voiceName ?? raw?.voice),
     audioProfile: trimToUndefined(raw?.audioProfile),
     speakerName: trimToUndefined(raw?.speakerName),
+    volumeGain: normalizeGoogleTtsVolumeGain(raw?.volumeGain),
     ...(promptTemplate ? { promptTemplate } : {}),
     ...(personaPrompt ? { personaPrompt } : {}),
   };
@@ -231,6 +260,7 @@ function readGoogleTtsProviderConfig(config: SpeechProviderConfig): GoogleTtsPro
     ),
     audioProfile: trimToUndefined(config.audioProfile) ?? normalized.audioProfile,
     speakerName: trimToUndefined(config.speakerName) ?? normalized.speakerName,
+    volumeGain: normalizeGoogleTtsVolumeGain(config.volumeGain ?? normalized.volumeGain),
     ...(promptTemplate ? { promptTemplate } : {}),
     ...(personaPrompt ? { personaPrompt } : {}),
   };
@@ -435,6 +465,20 @@ function wrapPcm16MonoToWav(pcm: Buffer, sampleRate = GOOGLE_TTS_SAMPLE_RATE): B
   return Buffer.concat([header, pcm]);
 }
 
+function applyPcm16VolumeGain(pcm: Buffer, gain: number): Buffer {
+  if (gain === 1 || pcm.length === 0) {
+    return pcm;
+  }
+  const boosted = Buffer.from(pcm);
+  const sampleBytes = boosted.length - (boosted.length % 2);
+  for (let offset = 0; offset < sampleBytes; offset += 2) {
+    const sample = boosted.readInt16LE(offset);
+    const scaled = Math.round(sample * gain);
+    boosted.writeInt16LE(Math.max(-32768, Math.min(32767, scaled)), offset);
+  }
+  return boosted;
+}
+
 async function synthesizeGoogleTtsPcmOnce(params: {
   text: string;
   apiKey: string;
@@ -632,11 +676,13 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
       };
     },
     synthesize: async (req) => {
+      const config = readGoogleTtsProviderConfig(req.providerConfig);
       const pcm = await synthesizeConfiguredGoogleTts(req);
+      const boostedPcm = applyPcm16VolumeGain(pcm, config.volumeGain);
       if (req.target === "voice-note") {
         return {
           audioBuffer: await transcodeAudioBufferToOpus({
-            audioBuffer: wrapPcm16MonoToWav(pcm),
+            audioBuffer: wrapPcm16MonoToWav(boostedPcm),
             inputExtension: "wav",
             tempPrefix: "tts-google-",
             timeoutMs: req.timeoutMs,
@@ -647,16 +693,17 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
         };
       }
       return {
-        audioBuffer: wrapPcm16MonoToWav(pcm),
+        audioBuffer: wrapPcm16MonoToWav(boostedPcm),
         outputFormat: "wav",
         fileExtension: ".wav",
         voiceCompatible: false,
       };
     },
     synthesizeTelephony: async (req) => {
+      const config = readGoogleTtsProviderConfig(req.providerConfig);
       const pcm = await synthesizeConfiguredGoogleTts(req);
       return {
-        audioBuffer: pcm,
+        audioBuffer: applyPcm16VolumeGain(pcm, config.volumeGain),
         outputFormat: "pcm",
         sampleRate: GOOGLE_TTS_SAMPLE_RATE,
       };
@@ -666,11 +713,14 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
 
 export const testing = {
   DEFAULT_GOOGLE_TTS_MODEL,
+  DEFAULT_GOOGLE_TTS_VOLUME_GAIN,
   DEFAULT_GOOGLE_TTS_VOICE,
   GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE,
   GOOGLE_TTS_MODELS,
   GOOGLE_TTS_SAMPLE_RATE,
+  applyPcm16VolumeGain,
   normalizeGoogleTtsModel,
+  normalizeGoogleTtsVolumeGain,
   renderGoogleAudioProfilePrompt,
   wrapPcm16MonoToWav,
 };

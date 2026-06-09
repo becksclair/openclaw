@@ -70,6 +70,7 @@ const AcpBindingSchema = z
         mode: z.enum(["persistent", "oneshot"]).optional(),
         label: z.string().optional(),
         cwd: z.string().optional(),
+        target: z.string().optional(),
         backend: z.string().optional(),
       })
       .strict()

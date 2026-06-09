@@ -422,7 +422,7 @@ export function readSessionStoreCache(params: {
   if (params.clone === false) {
     return cached.store;
   }
-  return cloneSessionStoreRecord(cached.store, cached.serialized);
+  return cloneSessionStoreRecord(cached.store);
 }
 
 export function takeMutableSessionStoreCache(params: {

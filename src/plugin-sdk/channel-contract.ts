@@ -8,6 +8,7 @@ export type {
   ChannelApprovalCapability,
   ChannelCommandConversationContext,
   ChannelCapabilities,
+  ChannelTtsVoiceDeliveryCapabilities,
   ChannelDirectoryEntry,
   ChannelResolveKind,
   ChannelResolveResult,

@@ -60,6 +60,7 @@ plugins {
 android {
   namespace = "ai.openclaw.app"
   compileSdk = 36
+  ndkVersion = "29.0.14206865"
 
   // Release signing is local-only; keep the keystore path and passwords out of the repo.
   signingConfigs {
@@ -190,6 +191,8 @@ ktlint {
 }
 
 dependencies {
+  implementation(project(":audio"))
+
   val composeBom = platform(libs.androidx.compose.bom)
   implementation(composeBom)
   androidTestImplementation(composeBom)
@@ -230,6 +233,8 @@ dependencies {
   implementation(libs.androidx.camera.lifecycle)
   implementation(libs.androidx.camera.video)
   implementation(libs.play.services.code.scanner)
+  implementation(libs.play.services.wearable)
+  implementation(libs.kotlinx.coroutines.play.services)
 
   // Unicast DNS-SD (Wide-Area Bonjour) for tailnet discovery domains.
   implementation(libs.dnsjava)
