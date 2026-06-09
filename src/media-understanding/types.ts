@@ -18,6 +18,8 @@ export type MediaUnderstandingCapabilityRegistry = Map<
 export type MediaAttachment = {
   path?: string;
   url?: string;
+  buffer?: Buffer;
+  fileName?: string;
   mime?: string;
   index: number;
   alreadyTranscribed?: boolean;

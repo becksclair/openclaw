@@ -28,9 +28,11 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 
 ```bash
 cd apps/android
-./gradlew :app:assemblePlayDebug
-./gradlew :app:installPlayDebug
-./gradlew :app:testPlayDebugUnitTest
+./gradlew :app:assembleThirdPartyDebug
+./gradlew :wear:assembleDebug
+./gradlew :app:installThirdPartyDebug
+./gradlew :app:testThirdPartyDebugUnitTest
+./gradlew :wear:testDebugUnitTest
 cd ../..
 pnpm android:release:archive
 ```
@@ -85,7 +87,7 @@ the screenshots, then shuts down the emulator it started.
 - Play build: `openclaw-<version>-play-release.aab`
 - Third-party build: `openclaw-<version>-third-party-release.apk`
 
-`pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
+`pnpm android:bundle:release` runs `apps/android/scripts/build-release-aab.ts`, which builds the signed release bundles including the Wear OS companion (`openclaw-<version>-wear-release.aab`). Use the Fastlane lanes above (`android:release:archive` and friends) for Play Store signing, metadata, and upload.
 
 See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 
@@ -95,6 +97,7 @@ Flavor-specific direct Gradle tasks:
 cd apps/android
 ./gradlew :app:bundlePlayRelease
 ./gradlew :app:bundleThirdPartyRelease
+./gradlew :wear:bundleRelease
 ```
 
 ## Kotlin Lint + Format
@@ -114,9 +117,9 @@ Direct Gradle tasks:
 
 ```bash
 cd apps/android
-./gradlew :app:ktlintCheck :benchmark:ktlintCheck
-./gradlew :app:ktlintFormat :benchmark:ktlintFormat
-./gradlew :app:lintDebug
+./gradlew :app:ktlintCheck :benchmark:ktlintCheck :wear:ktlintCheck
+./gradlew :app:ktlintFormat :benchmark:ktlintFormat :wear:ktlintFormat
+./gradlew :app:lintThirdPartyDebug :wear:lintDebug
 ```
 
 `gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.

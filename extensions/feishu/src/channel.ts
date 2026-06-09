@@ -80,6 +80,7 @@ import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupAdapter } from "./setup-core.js";
 import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
 import { looksLikeFeishuId, normalizeFeishuTarget } from "./targets.js";
+import { feishuTtsVoiceDelivery } from "./tts-capabilities.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
 function readFeishuMediaParam(params: Record<string, unknown>): string | undefined {
@@ -658,10 +659,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         threads: true,
         media: true,
         tts: {
-          voice: {
-            synthesisTarget: "voice-note",
-            transcodesAudio: true,
-          },
+          voice: feishuTtsVoiceDelivery,
         },
         reactions: true,
         edit: true,

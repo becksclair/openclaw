@@ -445,6 +445,14 @@ describe("validateTalkSession", () => {
       }),
     ).toBe(true);
     expect(
+      validateTalkSessionCreateParams({
+        mode: "transcription",
+        transport: "gateway-relay",
+        brain: "none",
+        transcriptionMode: "buffered",
+      }),
+    ).toBe(true);
+    expect(
       validateTalkSessionJoinResult({
         id: "session-1",
         roomId: "talk_room-1",

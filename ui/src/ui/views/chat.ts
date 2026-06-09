@@ -178,6 +178,7 @@ export type ChatProps = {
   onRealtimeTalkOptionsChange?: (
     next: Partial<NonNullable<ChatProps["realtimeTalkOptions"]>>,
   ) => void;
+  onReadAloud?: (text: string) => void;
   onDismissError?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
@@ -2293,6 +2294,7 @@ export function renderChat(props: ChatProps) {
                     embedSandboxMode: props.embedSandboxMode ?? "scripts",
                     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
                     contextWindow: threadContextWindow,
+                    onReadAloud: props.onReadAloud,
                     onDelete: () => {
                       deleted.delete(item.key);
                       requestUpdate();

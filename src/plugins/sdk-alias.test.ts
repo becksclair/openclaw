@@ -2758,6 +2758,20 @@ describe("buildPluginLoaderJitiOptions", () => {
     expect(alias.gamma.length).toBeLessThan(32);
   });
 
+  it("refreshes source-transform aliases when a reused alias map mutates", () => {
+    const aliasMap = {
+      alpha: "/repo/alpha",
+      beta: "alpha/sub",
+    };
+
+    const first = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+    aliasMap.alpha = "/repo/next-alpha";
+    const second = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+
+    expect(second).not.toBe(first);
+    expect(second.beta).toBe("/repo/next-alpha/sub");
+  });
+
   it("does not attach an empty alias map", () => {
     expect(buildPluginLoaderJitiOptions({})).not.toHaveProperty("alias");
   });

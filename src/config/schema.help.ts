@@ -302,6 +302,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional ACP session mode default for this agent (persistent or oneshot).",
   "agents.list[].runtime.acp.cwd":
     "Optional default working directory for this agent's ACP sessions.",
+  "agents.list[].runtime.acp.target":
+    "Optional backend target for this agent's ACP sessions, such as a remote host alias.",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
   "agents.defaults.heartbeat.suppressToolErrorWarnings":
@@ -654,6 +656,8 @@ export const FIELD_HELP: Record<string, string> = {
   "bindings[].acp.label":
     "Human-friendly label for ACP status/diagnostics in this bound conversation.",
   "bindings[].acp.cwd": "Working directory override for ACP sessions created from this binding.",
+  "bindings[].acp.target":
+    "Backend target override for ACP sessions created from this binding, such as a remote host alias.",
   "bindings[].acp.backend":
     "ACP backend override for this binding (falls back to agent runtime ACP backend, then global acp.backend).",
   broadcast:

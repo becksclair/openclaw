@@ -37,6 +37,7 @@ import {
   resolvePreferredSessionForAgent,
 } from "./chat/session-controls.ts";
 import { clearChatMessagesFromCache } from "./chat/session-message-cache.ts";
+import { isTtsSupported } from "./chat/talk-tts.ts";
 import {
   controlUiNowMs,
   recordControlUiRenderTiming,
@@ -3842,6 +3843,10 @@ export function renderApp(state: AppViewState) {
                     }
                   },
                   onRealtimeTalkOptionsChange: (next) => state.updateRealtimeTalkOptions(next),
+                  onReadAloud:
+                    state.connected && isTtsSupported()
+                      ? (text) => void state.handleReadAloud(text)
+                      : undefined,
                   canAbort: hasAbortableSessionRun(state),
                   onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
                   onQueueRemove: (id) => state.removeQueuedMessage(id),

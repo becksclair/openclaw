@@ -33,6 +33,7 @@ function resolveAgentRuntimeAcpDefaults(params: { cfg: OpenClawConfig; ownerAgen
   acpAgentId?: string;
   mode?: string;
   cwd?: string;
+  target?: string;
   backend?: string;
 } {
   // ACP bindings inherit runtime defaults from the owning agent when that agent already runs ACP.
@@ -47,6 +48,7 @@ function resolveAgentRuntimeAcpDefaults(params: { cfg: OpenClawConfig; ownerAgen
     acpAgentId: normalizeText(agent.runtime.acp?.agent),
     mode: normalizeText(agent.runtime.acp?.mode),
     cwd: normalizeText(agent.runtime.acp?.cwd),
+    target: normalizeText(agent.runtime.acp?.target),
     backend: normalizeText(agent.runtime.acp?.backend),
   };
 }
@@ -80,6 +82,7 @@ function buildConfiguredAcpSpec(params: {
   acpAgentId?: string;
   mode: "persistent" | "oneshot";
   cwd?: string;
+  target?: string;
   backend?: string;
   label?: string;
 }): ConfiguredAcpBindingSpec {
@@ -92,6 +95,7 @@ function buildConfiguredAcpSpec(params: {
     acpAgentId: params.acpAgentId,
     mode: params.mode,
     cwd: params.cwd,
+    target: params.target,
     backend: params.backend,
     label: params.label,
   };
@@ -122,6 +126,7 @@ function buildAcpTargetFactory(params: {
       agentId: params.agentId,
     });
   const backend = bindingOverrides.backend ?? runtimeDefaults.backend;
+  const target = bindingOverrides.target ?? runtimeDefaults.target;
   const label = bindingOverrides.label;
   const acpAgentId = normalizeText(runtimeDefaults.acpAgentId);
 
@@ -138,6 +143,7 @@ function buildAcpTargetFactory(params: {
         acpAgentId,
         mode,
         cwd,
+        target,
         backend,
         label,
       });

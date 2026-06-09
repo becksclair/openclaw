@@ -350,7 +350,10 @@ export function formatDiscordDeployErrorDetails(err: unknown): string {
       details.push(`body=${trimmed}`);
     }
   }
-  const rejectedEntries = formatDiscordRejectedDeployEntries({ rawBody, requestBody });
+  const rejectedEntries = formatDiscordRejectedDeployEntries({
+    rawBody,
+    requestBody,
+  });
   if (rejectedEntries.length > 0) {
     details.push(`rejected=${rejectedEntries.join("; ")}`);
   }
@@ -368,4 +371,14 @@ export function isDiscordDeployDailyCreateLimit(err: unknown): boolean {
     (discordCode === 30034 || rawCode === 30034) &&
     /daily application command creates/i.test(formatErrorMessage(err))
   );
+}
+
+export function isDiscordDeployCommandLimit(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const deployErr = err as DiscordDeployErrorLike;
+  const discordCode = readFiniteNumber(deployErr.discordCode);
+  const rawCode = readFiniteNumber(readDiscordDeployObjectField(deployErr.rawBody, "code"));
+  return discordCode === 30032 || rawCode === 30032;
 }

@@ -59,6 +59,7 @@ function createPersistentSpec(
 function mockReadySession(params: {
   spec: ConfiguredAcpBindingSpec;
   cwd: string;
+  target?: string;
   state?: "idle" | "running" | "error";
 }) {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
@@ -70,7 +71,10 @@ function mockReadySession(params: {
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       runtimeSessionName: "existing",
       mode: params.spec.mode,
-      runtimeOptions: { cwd: params.cwd },
+      runtimeOptions: {
+        cwd: params.cwd,
+        ...(params.target ? { target: params.target } : {}),
+      },
       state: params.state ?? "idle",
       lastActivityAt: Date.now(),
     },
@@ -135,6 +139,27 @@ describe("ensureConfiguredAcpBindingSession", () => {
     expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
   });
 
+  it("reinitializes a ready session when binding config explicitly sets mismatched target", async () => {
+    const spec = createPersistentSpec({
+      target: "devbox",
+      cwd: "C:/dev/work",
+    });
+    const sessionKey = mockReadySession({
+      spec,
+      target: "orion",
+      cwd: "C:/dev/work",
+    });
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: baseCfg,
+      spec,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
+    expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
+  });
+
   it("reinitializes a matching session when the stored ACP session is in error state", async () => {
     const spec = createPersistentSpec({
       cwd: "/home/bob/clawd",
@@ -159,6 +184,9 @@ describe("ensureConfiguredAcpBindingSession", () => {
     const spec = createPersistentSpec({
       agentId: "coding",
       acpAgentId: "codex",
+      backend: "acpx-remote",
+      target: "devbox",
+      cwd: "C:/dev/work",
     });
     managerMocks.resolveSession.mockReturnValue({ kind: "none" });
 
@@ -170,5 +198,8 @@ describe("ensureConfiguredAcpBindingSession", () => {
     expect(ensured.ok).toBe(true);
     const initializeArgs = expectInitializeArgs();
     expect(initializeArgs.agent).toBe("codex");
+    expect(initializeArgs.backendId).toBe("acpx-remote");
+    expect(initializeArgs.target).toBe("devbox");
+    expect(initializeArgs.cwd).toBe("C:/dev/work");
   });
 });

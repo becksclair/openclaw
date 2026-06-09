@@ -25,6 +25,7 @@ import {
   resolveReplyToMode,
 } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
+import { markGeneratedTtsLocalMediaTrusted } from "./tts-trusted-media.js";
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
 const dispatchAcpTtsRuntimeLoader = createLazyImportLoader(
@@ -137,7 +138,7 @@ async function maybeApplyAcpTts(params: {
     return params.payload;
   }
   const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
-  return await maybeApplyTtsToPayload({
+  const payload = await maybeApplyTtsToPayload({
     payload: params.payload,
     cfg: params.cfg,
     channel: params.channel,
@@ -147,6 +148,7 @@ async function maybeApplyAcpTts(params: {
     agentId: params.agentId,
     accountId: params.accountId,
   });
+  return markGeneratedTtsLocalMediaTrusted({ input: params.payload, output: payload });
 }
 
 type AcpDispatchDeliveryState = {

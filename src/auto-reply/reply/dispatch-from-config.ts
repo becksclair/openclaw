@@ -175,6 +175,7 @@ import {
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
+import { markGeneratedTtsLocalMediaTrusted } from "./tts-trusted-media.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 type SourceReplyTranscriptMirror = NonNullable<
@@ -358,9 +359,14 @@ async function maybeApplyTtsToReplyPayload(
   }
   const { maybeApplyTtsToPayload } = await loadTtsRuntime();
   const ttsPayload = await maybeApplyTtsToPayload(params);
-  return ttsPayload === params.payload
-    ? ttsPayload
-    : copyReplyPayloadMetadata(params.payload, ttsPayload);
+  const payloadWithMetadata =
+    ttsPayload === params.payload
+      ? ttsPayload
+      : copyReplyPayloadMetadata(params.payload, ttsPayload);
+  return markGeneratedTtsLocalMediaTrusted({
+    input: params.payload,
+    output: payloadWithMetadata,
+  });
 }
 
 const resolveRoutedPolicyConversationType = (
@@ -3421,12 +3427,14 @@ export async function dispatchReplyFromConfig(
             // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content.
             // Keep the spoken text only for hooks/archive consumers.
             const ttsOnlyPayload = markReplyPayloadAsTtsSupplement(
-              {
-                mediaUrl: ttsSyntheticReply.mediaUrl,
-                audioAsVoice: ttsSyntheticReply.audioAsVoice,
-                spokenText: accumulatedBlockTtsText,
-                trustedLocalMedia: true,
-              },
+              markGeneratedTtsLocalMediaTrusted({
+                input: { text: accumulatedBlockTtsText },
+                output: {
+                  mediaUrl: ttsSyntheticReply.mediaUrl,
+                  audioAsVoice: ttsSyntheticReply.audioAsVoice,
+                  spokenText: accumulatedBlockTtsText,
+                },
+              }),
               accumulatedBlockTtsText,
               { visibleTextAlreadyDelivered: true },
             );

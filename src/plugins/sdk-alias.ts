@@ -1709,7 +1709,10 @@ const aliasMapCache = new PluginLruCache<Record<string, string>>(
 const normalizedJitiAliasMapCache = new PluginLruCache<Record<string, string>>(
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
-const normalizedJitiAliasMapByInput = new WeakMap<Record<string, string>, Record<string, string>>();
+const normalizedJitiAliasMapByInput = new WeakMap<
+  Record<string, string>,
+  { cacheKey: string; aliasMap: Record<string, string> }
+>();
 const pluginLoaderModuleCacheKeyByAliasMap = new WeakMap<Record<string, string>, string>();
 const pluginLoaderModuleConfigCache = new PluginLruCache<{
   tryNative: boolean;
@@ -1722,10 +1725,9 @@ function hasJitiNormalizedAliasMarker(aliasMap: Record<string, string>) {
 }
 
 function createJitiAliasContentCacheKey(aliasMap: Record<string, string>) {
-  return Object.entries(aliasMap)
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}\0${value}`)
-    .join("\0");
+  return JSON.stringify(
+    Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+  );
 }
 
 function isConcreteJitiAliasTarget(target: string | undefined): boolean {
@@ -1773,29 +1775,19 @@ function normalizePluginLoaderAliasMapForJiti(
   if (hasJitiNormalizedAliasMarker(aliasMap)) {
     return aliasMap;
   }
-  const cachedByInput = normalizedJitiAliasMapByInput.get(aliasMap);
-  if (cachedByInput) {
-    return cachedByInput;
-  }
   const cacheKey = createJitiAliasContentCacheKey(aliasMap);
+  const cachedByInput = normalizedJitiAliasMapByInput.get(aliasMap);
+  if (cachedByInput?.cacheKey === cacheKey) {
+    return cachedByInput.aliasMap;
+  }
   const cached = normalizedJitiAliasMapCache.get(cacheKey);
   if (cached) {
-    normalizedJitiAliasMapByInput.set(aliasMap, cached);
+    normalizedJitiAliasMapByInput.set(aliasMap, { cacheKey, aliasMap: cached });
     return cached;
   }
-  const aliasDepth = new Map<string, number>();
-  const getAliasDepth = (key: string) => {
-    const cachedDepth = aliasDepth.get(key);
-    if (cachedDepth !== undefined) {
-      return cachedDepth;
-    }
-    const depth = key.split("/").length;
-    aliasDepth.set(key, depth);
-    return depth;
-  };
   const normalizedAliasMap = Object.fromEntries(
     Object.entries(aliasMap).toSorted(
-      ([left], [right]) => getAliasDepth(right) - getAliasDepth(left),
+      ([left], [right]) => right.split("/").length - left.split("/").length,
     ),
   );
   const aliasKeys = Object.keys(normalizedAliasMap);
@@ -1814,7 +1806,7 @@ function normalizePluginLoaderAliasMapForJiti(
     enumerable: false,
   });
   normalizedJitiAliasMapCache.set(cacheKey, normalizedAliasMap);
-  normalizedJitiAliasMapByInput.set(aliasMap, normalizedAliasMap);
+  normalizedJitiAliasMapByInput.set(aliasMap, { cacheKey, aliasMap: normalizedAliasMap });
   return normalizedAliasMap;
 }
 

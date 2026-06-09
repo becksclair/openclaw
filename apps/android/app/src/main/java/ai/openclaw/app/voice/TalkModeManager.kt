@@ -1698,6 +1698,48 @@ class TalkModeManager internal constructor(
     return lines.joinToString("\n")
   }
 
+  private suspend fun runRealtimeConsult(argsJson: String?): String {
+    val message = buildRealtimeConsultPrompt(argsJson)
+    val startedAt = System.currentTimeMillis().toDouble() / 1000.0
+    val runId = sendChat(message, session)
+    val ok = waitForChatFinal(runId)
+    return consumeRunText(runId)
+      ?: waitForAssistantText(session, startedAt, if (ok) 12_000 else 25_000)
+      ?: "OpenClaw finished with no text."
+  }
+
+  internal suspend fun runRealtimeConsultForWear(argsJson: String?): String = runRealtimeConsult(argsJson)
+
+  private fun buildRealtimeConsultPrompt(argsJson: String?): String {
+    val args =
+      runCatching { argsJson?.let { json.parseToJsonElement(it).asObjectOrNull() } }
+        .getOrNull()
+    val question =
+      args
+        ?.get("question")
+        .asStringOrNull()
+        ?.trim()
+        .orEmpty()
+    if (question.isEmpty()) throw IllegalArgumentException("openclaw_agent_consult requires a question")
+    val context =
+      args
+        ?.get("context")
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    val responseStyle =
+      args
+        ?.get("responseStyle")
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    return listOfNotNull(
+      question,
+      context?.let { "Context:\n$it" },
+      responseStyle?.let { "Spoken style:\n$it" },
+    ).joinToString("\n\n")
+  }
+
   private suspend fun sendChat(
     message: String,
     session: GatewaySession,

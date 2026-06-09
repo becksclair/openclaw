@@ -1,8 +1,3 @@
-/**
- * Provider auth alias resolution.
- * Maps deprecated and plugin-defined provider IDs to canonical credential
- * providers, with trusted workspace plugin handling and process-stable caching.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -13,17 +8,18 @@ import {
   normalizePluginConfigId,
 } from "../plugins/plugin-config-trust.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 
-/** Inputs that control plugin metadata and trust scope for auth alias lookup. */
 export type ProviderAuthAliasLookupParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins"> &
+    Partial<Pick<PluginMetadataSnapshot, "configFingerprint" | "policyHash" | "workspaceDir">>;
 };
 
 type ProviderAuthAliasCandidate = {
@@ -45,6 +41,7 @@ let providerAuthAliasMapCache = new WeakMap<
 function buildProviderAuthAliasMapCacheKey(
   params: ProviderAuthAliasLookupParams | undefined,
   env: NodeJS.ProcessEnv,
+  metadataSnapshot: ProviderAuthAliasLookupParams["metadataSnapshot"] | undefined,
 ): string {
   return JSON.stringify({
     pluginControlPlane: resolvePluginControlPlaneFingerprint({
@@ -52,15 +49,23 @@ function buildProviderAuthAliasMapCacheKey(
       env,
       workspaceDir: params?.workspaceDir,
     }),
+    metadataSnapshot: metadataSnapshot
+      ? {
+          configFingerprint: metadataSnapshot.configFingerprint,
+          policyHash: metadataSnapshot.policyHash,
+          workspaceDir: metadataSnapshot.workspaceDir ?? null,
+        }
+      : null,
     includeUntrustedWorkspacePlugins: params?.includeUntrustedWorkspacePlugins === true,
     plugins: params?.config?.plugins ?? null,
   });
 }
 
-/** Clear provider auth alias cache for tests that mutate plugin metadata. */
 export function resetProviderAuthAliasMapCacheForTest(): void {
   providerAuthAliasMapCache = new WeakMap<NodeJS.ProcessEnv, Map<string, Record<string, string>>>();
 }
+
+registerPluginMetadataProcessMemoLifecycleClear(resetProviderAuthAliasMapCacheForTest);
 
 function resolveProviderAuthAliasOriginPriority(origin: PluginOrigin | undefined): number {
   if (!origin) {
@@ -115,18 +120,36 @@ function setPreferredAlias(params: {
   }
 }
 
-/** Resolve canonical auth provider aliases from plugin metadata. */
 export function resolveProviderAuthAliasMap(
   params?: ProviderAuthAliasLookupParams,
 ): Record<string, string> {
   const env = params?.env ?? process.env;
-  const config = params?.config;
+  const config = params?.config ?? {};
+  const currentSnapshot =
+    params?.metadataSnapshot === undefined
+      ? getCurrentPluginMetadataSnapshot({
+          config,
+          ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+          env,
+          allowWorkspaceScopedSnapshot: true,
+        })
+      : undefined;
+  const defaultDiscoverySnapshot =
+    params?.metadataSnapshot === undefined &&
+    currentSnapshot === undefined &&
+    normalizePluginsConfig(config.plugins).loadPaths.length === 0
+      ? getCurrentPluginMetadataSnapshot({
+          ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+          env,
+          allowWorkspaceScopedSnapshot: true,
+          requireDefaultDiscoveryContext: true,
+        })
+      : undefined;
+  const resolvedCurrentSnapshot = currentSnapshot ?? defaultDiscoverySnapshot;
   let cacheKey: string | undefined;
   let envCache: Map<string, Record<string, string>> | undefined;
   if (!params?.metadataSnapshot) {
-    // Plugin metadata is process-stable for a control-plane fingerprint, so
-    // cache per env object without hiding explicit test snapshots.
-    cacheKey = buildProviderAuthAliasMapCacheKey(params, env);
+    cacheKey = buildProviderAuthAliasMapCacheKey(params, env, resolvedCurrentSnapshot);
     envCache = providerAuthAliasMapCache.get(env);
     if (!envCache) {
       envCache = new Map<string, Record<string, string>>();
@@ -139,31 +162,7 @@ export function resolveProviderAuthAliasMap(
   }
   const snapshot =
     params?.metadataSnapshot ??
-    (config
-      ? getCurrentPluginMetadataSnapshot({
-          config,
-          ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-          env,
-          allowWorkspaceScopedSnapshot: true,
-        })
-      : getCurrentPluginMetadataSnapshot({
-          ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-          env,
-          allowWorkspaceScopedSnapshot: true,
-          requireDefaultDiscoveryContext: true,
-        })) ??
-    (() => {
-      if (!config || normalizePluginsConfig(config.plugins).loadPaths.length !== 0) {
-        return undefined;
-      }
-      const currentSnapshot = getCurrentPluginMetadataSnapshot({
-        ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-        env,
-        allowWorkspaceScopedSnapshot: true,
-        requireDefaultDiscoveryContext: true,
-      });
-      return currentSnapshot;
-    })() ??
+    resolvedCurrentSnapshot ??
     loadPluginMetadataSnapshot({
       config: config ?? {},
       ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
@@ -205,7 +204,6 @@ export function resolveProviderAuthAliasMap(
   return aliases;
 }
 
-/** Resolve the provider ID that should be used for credential lookup. */
 export function resolveProviderIdForAuth(
   provider: string,
   params?: ProviderAuthAliasLookupParams,

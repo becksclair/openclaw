@@ -384,7 +384,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
       createDiscordBinding({
         agentId: "codex",
         conversationId: defaultDiscordConversationId,
-        acp: { cwd: "/repo/openclaw" },
+        acp: { backend: "acpx-remote", target: "devbox", cwd: "C:/dev/work" },
       }),
     ]);
     const resolved = resolveBindingRecord(cfg);
@@ -392,8 +392,14 @@ describe("resolveConfiguredAcpBindingRecord", () => {
     expect(resolved?.spec.channel).toBe("discord");
     expect(resolved?.spec.conversationId).toBe(defaultDiscordConversationId);
     expect(resolved?.spec.agentId).toBe("codex");
+    expect(resolved?.spec.backend).toBe("acpx-remote");
+    expect(resolved?.spec.target).toBe("devbox");
+    expect(resolved?.spec.cwd).toBe("C:/dev/work");
     expect(resolved?.record.targetSessionKey).toContain("agent:codex:acp:binding:discord:default:");
     expect(resolved?.record.metadata?.source).toBe("config");
+    expect(resolved?.record.metadata?.backend).toBe("acpx-remote");
+    expect(resolved?.record.metadata?.target).toBe("devbox");
+    expect(resolved?.record.metadata?.cwd).toBe("C:/dev/work");
   });
 
   it("falls back to parent discord channel when conversation is a thread id", () => {
@@ -681,6 +687,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
                   agent: "codex",
                   backend: "acpx",
                   mode: "oneshot",
+                  target: "devbox",
                   cwd: "/workspace/repo-a",
                 },
               },
@@ -694,6 +701,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
     expect(resolved?.spec.agentId).toBe("coding");
     expect(resolved?.spec.acpAgentId).toBe("codex");
     expect(resolved?.spec.mode).toBe("oneshot");
+    expect(resolved?.spec.target).toBe("devbox");
     expect(resolved?.spec.cwd).toBe("/workspace/repo-a");
     expect(resolved?.spec.backend).toBe("acpx");
   });

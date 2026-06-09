@@ -162,12 +162,15 @@ describe("runMessageAction", () => {
     });
   });
 
-  it("skips local plugin preload for any gateway-owned scoped channel action", async () => {
+  it("preloads scoped channel plugins for sends even when the send is gateway-owned", async () => {
     mockChannelExecutionModes({ discord: "gateway" });
 
     await runSendAction({ target: "channel:12345" });
 
-    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["discord"],
+    });
     expectMessageCommandOptions({
       action: "send",
       channel: "discord",
@@ -227,10 +230,13 @@ describe("runMessageAction", () => {
     });
   });
 
-  it("keeps target-prefixed Telegram sends from local plugin preload", async () => {
+  it("preloads target-prefixed Telegram sends so TTS can read channel capabilities", async () => {
     await runSendAction({ channel: undefined, target: "telegram:12345" });
 
-    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["telegram"],
+    });
     expectMessageCommandOptions({
       action: "send",
       target: "telegram:12345",
@@ -239,7 +245,7 @@ describe("runMessageAction", () => {
     expect(exitMock).toHaveBeenCalledWith(0);
   });
 
-  it("keeps explicit Telegram sends on the normal command path without local plugin preload", async () => {
+  it("preloads explicit Telegram sends while keeping the normal command path", async () => {
     await runSendAction({
       channel: "telegram",
       account: "default",
@@ -250,7 +256,10 @@ describe("runMessageAction", () => {
       forceDocument: true,
     });
 
-    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["telegram"],
+    });
     expectMessageCommandOptions({
       action: "send",
       channel: "telegram",

@@ -74,6 +74,7 @@ import {
 import { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./setup-core.js";
 import { runMatrixStartupMaintenance } from "./startup-maintenance.js";
 import { resolveMatrixInboundConversation } from "./thread-binding-api.js";
+import { matrixTtsVoiceDelivery } from "./tts-capabilities.js";
 import type { CoreConfig } from "./types.js";
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
@@ -425,9 +426,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         threads: true,
         media: true,
         tts: {
-          voice: {
-            synthesisTarget: "voice-note",
-          },
+          voice: matrixTtsVoiceDelivery,
         },
       },
       reload: { configPrefixes: ["channels.matrix"] },

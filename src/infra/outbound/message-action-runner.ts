@@ -782,6 +782,7 @@ async function handleInternalSourceReplySendAction(
       (input.sessionKey
         ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
         : undefined),
+    dryRun,
   });
   const payload = {
     status: "ok",
@@ -868,6 +869,7 @@ async function buildSendPayloadParts(params: {
   target?: string;
   accountId?: string | null;
   agentId?: string;
+  dryRun?: boolean;
 }): Promise<SendPayloadParts> {
   const { actionParams, input } = params;
   if (actionParams.pin === true && actionParams.delivery == null) {
@@ -1002,7 +1004,7 @@ async function buildSendPayloadParts(params: {
       : undefined;
   const presentation = normalizeMessagePresentation(actionParams.presentation);
   const interactive = normalizeInteractiveReply(actionParams.interactive);
-  return {
+  const parts: SendPayloadParts = {
     message,
     payload: {
       text: message,
@@ -1022,6 +1024,7 @@ async function buildSendPayloadParts(params: {
     ...(bestEffort !== undefined ? { bestEffort } : {}),
     ...(silent !== undefined ? { silent } : {}),
   };
+  return parts;
 }
 
 async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
@@ -1048,6 +1051,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     target: to,
     accountId,
     agentId,
+    dryRun,
   });
 
   const replyToIsExplicit = Boolean(readStringParam(params, "replyTo"));

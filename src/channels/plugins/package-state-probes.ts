@@ -1,8 +1,3 @@
-/**
- * Bundled channel package-state probes.
- *
- * Resolves lightweight configured/auth state checkers from package metadata and source overlays.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -16,10 +11,12 @@ import {
   type PluginChannelCatalogEntry,
 } from "../../plugins/channel-catalog-registry.js";
 import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
 import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
+import { resolveBundledChannelRootScope } from "./bundled-root.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
 type ChannelPackageStateChecker = (params: {
@@ -43,6 +40,8 @@ type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthState";
 
 const log = createSubsystemLogger("channels");
 const sourcePackageStateLoaderCache: PluginModuleLoaderCache = new Map();
+const packageStateCatalogCache = new Map<string, readonly PluginChannelCatalogEntry[]>();
+const packageStateCheckerCache = new Map<string, ChannelPackageStateChecker | null>();
 
 type ChannelPackageStateModuleLocation = {
   modulePath: string;
@@ -60,8 +59,6 @@ function loadChannelPackageStateModule(params: { modulePath: string; rootDir: st
     if (!isSourceModulePath(params.modulePath)) {
       throw error;
     }
-    // Local source checkers can run through the cached TS loader; built JS
-    // paths must still load through the boundary-safe module loader above.
     const loader = getCachedPluginModuleLoader({
       cache: sourcePackageStateLoaderCache,
       modulePath: params.modulePath,
@@ -110,8 +107,6 @@ function listBuiltBundledPackageStateModules(params: {
   specifier: string;
 }): ChannelPackageStateModuleLocation[] {
   if (isBundledSourceOverlayPluginRoot(params.rootDir)) {
-    // Source overlays intentionally shadow built artifacts; probing dist would
-    // mix old built code with the active source overlay.
     return [];
   }
   const sourceRoot = resolveSourceBundledPluginRoot(params.rootDir);
@@ -146,8 +141,6 @@ function listChannelPackageStateModuleLocations(params: {
   specifier: string;
 }): ChannelPackageStateModuleLocation[] {
   const source = resolveChannelPackageStateModuleLocation(params);
-  // Prefer built bundled artifacts when present so probes match shipped runtime
-  // behavior, then fall back to source for local development.
   const built = listBuiltBundledPackageStateModules({
     rootDir: params.entry.rootDir,
     specifier: params.specifier,
@@ -169,8 +162,6 @@ function resolveChannelPackageStateMetadata(
   const allOf = normalizeTrimmedStringList(envMetadata?.allOf);
   const anyOf = normalizeTrimmedStringList(envMetadata?.anyOf);
   const env = allOf.length > 0 || anyOf.length > 0 ? { allOf, anyOf } : undefined;
-  // A checker can be module-backed or env-backed. Ignore empty metadata so
-  // catalog entries without usable probes do not appear as state-capable.
   if ((!specifier || !exportName) && !env) {
     return null;
   }
@@ -184,33 +175,86 @@ function resolveChannelPackageStateMetadata(
 function listChannelPackageStateCatalog(
   metadataKey: ChannelPackageStateMetadataKey,
   discovery?: PluginDiscoveryResult,
+  env: NodeJS.ProcessEnv = process.env,
 ): PluginChannelCatalogEntry[] {
-  return listChannelCatalogEntries({
+  const cacheKey = JSON.stringify({
+    metadataKey,
+    sourceOverlaysDisabled: env.OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS ?? "",
+    root: resolveBundledChannelRootScope(env).cacheKey,
+  });
+  if (!discovery) {
+    const cached = packageStateCatalogCache.get(cacheKey);
+    if (cached) {
+      return [...cached];
+    }
+  }
+  const entries = listChannelCatalogEntries({
     origin: "bundled",
+    env,
     discovery,
   }).filter((entry) => Boolean(resolveChannelPackageStateMetadata(entry, metadataKey)));
+  if (!discovery) {
+    packageStateCatalogCache.set(cacheKey, entries);
+  }
+  return entries;
+}
+
+export function clearChannelPackageStateProbeCache(): void {
+  packageStateCatalogCache.clear();
+  packageStateCheckerCache.clear();
+  sourcePackageStateLoaderCache.clear();
+}
+
+registerPluginMetadataProcessMemoLifecycleClear(clearChannelPackageStateProbeCache);
+
+function resolvePackageStateCheckerCacheKey(params: {
+  entry: PluginChannelCatalogEntry;
+  env?: NodeJS.ProcessEnv;
+  metadataKey: ChannelPackageStateMetadataKey;
+  metadata: ChannelPackageStateMetadata;
+}): string {
+  return JSON.stringify({
+    metadataKey: params.metadataKey,
+    pluginId: params.entry.pluginId,
+    channelId: params.entry.channel.id,
+    rootDir: params.entry.rootDir,
+    specifier: params.metadata.specifier ?? "",
+    exportName: params.metadata.exportName ?? "",
+    env: params.metadata.env ?? null,
+    sourceOverlaysDisabled: params.env?.OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS ?? "",
+  });
 }
 
 function resolveChannelPackageStateChecker(params: {
   entry: PluginChannelCatalogEntry;
+  env?: NodeJS.ProcessEnv;
   metadataKey: ChannelPackageStateMetadataKey;
 }): ChannelPackageStateChecker | null {
   const metadata = resolveChannelPackageStateMetadata(params.entry, params.metadataKey);
   if (!metadata) {
     return null;
   }
+  const cacheKey = resolvePackageStateCheckerCacheKey({
+    entry: params.entry,
+    env: params.env,
+    metadataKey: params.metadataKey,
+    metadata,
+  });
+  if (packageStateCheckerCache.has(cacheKey)) {
+    return packageStateCheckerCache.get(cacheKey) ?? null;
+  }
 
   if (metadata.env) {
-    return ({ env }) => {
+    const checker: ChannelPackageStateChecker = ({ env }) => {
       const allOf = metadata.env?.allOf ?? [];
       const anyOf = metadata.env?.anyOf ?? [];
-      // `allOf` expresses required credentials; `anyOf` expresses alternatives
-      // where at least one non-empty value proves package state.
       return (
         allOf.every((key) => hasNonEmptyEnvValue(env, key)) &&
         (anyOf.length === 0 || anyOf.some((key) => hasNonEmptyEnvValue(env, key)))
       );
     };
+    packageStateCheckerCache.set(cacheKey, checker);
+    return checker;
   }
 
   let loadError: unknown;
@@ -227,6 +271,7 @@ function resolveChannelPackageStateChecker(params: {
       if (typeof checker !== "function") {
         throw new Error(`missing ${params.metadataKey} export ${metadata.exportName}`);
       }
+      packageStateCheckerCache.set(cacheKey, checker);
       return checker;
     } catch (error) {
       loadError = error;
@@ -246,22 +291,17 @@ function resolvePackageStateChannelId(entry: PluginChannelCatalogEntry): string 
   return normalizeOptionalString(entry.channel.id);
 }
 
-/**
- * Lists bundled channel ids that declare the requested package-state metadata.
- */
 export function listBundledChannelIdsForPackageState(
   metadataKey: ChannelPackageStateMetadataKey,
   discovery?: PluginDiscoveryResult,
+  env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  return listChannelPackageStateCatalog(metadataKey, discovery)
+  return listChannelPackageStateCatalog(metadataKey, discovery, env)
     .map((entry) => resolvePackageStateChannelId(entry))
     .filter((channelId): channelId is string => Boolean(channelId))
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-/**
- * Returns whether a bundled channel reports configured/auth package state.
- */
 export function hasBundledChannelPackageState(params: {
   metadataKey: ChannelPackageStateMetadataKey;
   channelId: string;
@@ -270,14 +310,17 @@ export function hasBundledChannelPackageState(params: {
   discovery?: PluginDiscoveryResult;
 }): boolean {
   const requestedChannelId = normalizeOptionalString(params.channelId);
-  const entry = listChannelPackageStateCatalog(params.metadataKey, params.discovery).find(
-    (candidate) => resolvePackageStateChannelId(candidate) === requestedChannelId,
-  );
+  const entry = listChannelPackageStateCatalog(
+    params.metadataKey,
+    params.discovery,
+    params.env,
+  ).find((candidate) => resolvePackageStateChannelId(candidate) === requestedChannelId);
   if (!entry) {
     return false;
   }
   const checker = resolveChannelPackageStateChecker({
     entry,
+    env: params.env,
     metadataKey: params.metadataKey,
   });
   return checker ? checker({ cfg: params.cfg, env: params.env }) : false;

@@ -56,6 +56,9 @@ import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.wearable.Wearable
+import com.google.android.gms.wearable.WearableStatusCodes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -67,6 +70,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.tasks.await
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -106,6 +110,10 @@ class NodeRuntime(
   val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
   private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult = ::probeGatewayTlsFingerprint,
 ) {
+  companion object {
+    private const val WEAR_RELAY_PHONE_CAPABILITY = "openclaw_relay_phone"
+  }
+
   /**
    * Authentication material supplied by setup/manual connect flows before gateway session routing.
    */
@@ -719,6 +727,18 @@ class NodeRuntime(
   val talkModeConversation: StateFlow<List<VoiceConversationEntry>>
     get() = talkMode.conversation
 
+  private val wearAudioRelayLazy =
+    lazy {
+      ai.openclaw.app.wear.WearAudioRelay(
+        context = appContext,
+        gatewaySession = operatorSession,
+        mainSessionKeyProvider = { resolveMainSessionKey() },
+      )
+    }
+
+  internal val wearAudioRelay: ai.openclaw.app.wear.WearAudioRelay
+    get() = wearAudioRelayLazy.value
+
   private fun syncMainSessionKey(agentId: String?) {
     val resolvedKey = resolveNodeMainSessionKey(agentId)
     // Always push the resolved session key into TalkMode, even when the
@@ -995,6 +1015,9 @@ class NodeRuntime(
     if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
       prefs.setVoiceWakeMode(VoiceWakeMode.Off)
     }
+
+    advertiseWearRelayCapability()
+    wearAudioRelay
 
     scope.launch {
       prefs.loadGatewayToken()
@@ -1701,6 +1724,20 @@ class NodeRuntime(
     return deviceAuthStore.loadToken(deviceId, role)
   }
 
+  private fun advertiseWearRelayCapability() {
+    scope.launch {
+      runCatching {
+        Wearable
+          .getCapabilityClient(appContext)
+          .addLocalCapability(WEAR_RELAY_PHONE_CAPABILITY)
+          .await()
+      }.onFailure { err ->
+        if (err is ApiException && err.statusCode == WearableStatusCodes.DUPLICATE_CAPABILITY) return@onFailure
+        Log.w("OpenClawNode", "Unable to advertise Wear relay capability: ${err.message}")
+      }
+    }
+  }
+
   private fun maybeStartOperatorSessionAfterNodeConnect(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
@@ -1728,6 +1765,9 @@ class NodeRuntime(
   fun disconnect() {
     connectAttemptSeq.incrementAndGet()
     stopActiveVoiceSession()
+    if (wearAudioRelayLazy.isInitialized()) {
+      wearAudioRelay.cancel()
+    }
     connectedEndpoint = null
     activeGatewayAuth = null
     _gatewayConnectionProblem.value = null
@@ -1871,6 +1911,9 @@ class NodeRuntime(
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
+    if (wearAudioRelayLazy.isInitialized()) {
+      wearAudioRelay.handleGatewayEvent(event, payloadJson)
+    }
   }
 
   private fun handleExecApprovalGatewayEvent(

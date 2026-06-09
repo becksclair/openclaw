@@ -175,13 +175,21 @@ describe("monitorDiscordProvider", () => {
   const getConstructedClientOptions = (): {
     clientId?: string;
     eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-    requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
+    requestOptions?: {
+      timeout?: number;
+      runtimeProfile?: string;
+      maxQueueSize?: number;
+    };
   } => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
     return firstMockArg(clientConstructorOptionsMock, "Discord client constructor") as {
       clientId?: string;
       eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-      requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
+      requestOptions?: {
+        timeout?: number;
+        runtimeProfile?: string;
+        maxQueueSize?: number;
+      };
     };
   };
 
@@ -203,7 +211,10 @@ describe("monitorDiscordProvider", () => {
   } => {
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
     const params = firstMockArg(monitorLifecycleMock, "Discord lifecycle monitor") as
-      | { gatewayReadyTimeoutMs?: number; gatewayRuntimeReadyTimeoutMs?: number }
+      | {
+          gatewayReadyTimeoutMs?: number;
+          gatewayRuntimeReadyTimeoutMs?: number;
+        }
       | undefined;
     if (!params) {
       throw new Error("expected lifecycle monitor params");
@@ -297,7 +308,10 @@ describe("monitorDiscordProvider", () => {
     );
     providerTesting.setCreateClient((options, handlers, plugins = []) => {
       clientConstructorOptionsMock(options);
-      const pluginRegistry = plugins.map((plugin) => ({ id: plugin.id, plugin }));
+      const pluginRegistry = plugins.map((plugin) => ({
+        id: plugin.id,
+        plugin,
+      }));
       return {
         options,
         listeners: handlers.listeners ?? [],
@@ -922,7 +936,44 @@ describe("monitorDiscordProvider", () => {
     });
 
     await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(1));
-    expect(clientDeployCommandsMock).toHaveBeenCalledWith({ mode: "reconcile" });
+    expect(clientDeployCommandsMock).toHaveBeenCalledWith({
+      mode: "reconcile",
+    });
+    expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
+    expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to overwrite mode when Discord application command limit is reached", async () => {
+    const runtime = baseRuntime();
+    const commandLimitError = Object.assign(
+      new Error("Maximum number of application commands reached (100)."),
+      {
+        status: 400,
+        discordCode: 30032,
+        rawBody: {
+          message: "Maximum number of application commands reached (100).",
+          code: 30032,
+        },
+      },
+    );
+    clientDeployCommandsMock
+      .mockRejectedValueOnce(commandLimitError)
+      .mockResolvedValueOnce(undefined);
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime,
+    });
+
+    await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(2));
+    expect(clientDeployCommandsMock).toHaveBeenNthCalledWith(1, {
+      mode: "reconcile",
+    });
+    expect(clientDeployCommandsMock).toHaveBeenNthCalledWith(2, {
+      mode: "overwrite",
+      force: true,
+    });
+    expectMockLogNotContains(runtime.error, "native-slash-command-deploy-rest");
     expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
   });
@@ -1044,22 +1095,42 @@ describe("monitorDiscordProvider", () => {
         errors: {
           63: {
             description: {
-              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
+              _errors: [
+                {
+                  code: "BASE_TYPE_MAX_LENGTH",
+                  message: "Must be 100 or fewer.",
+                },
+              ],
             },
           },
           65: {
             description: {
-              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
+              _errors: [
+                {
+                  code: "BASE_TYPE_MAX_LENGTH",
+                  message: "Must be 100 or fewer.",
+                },
+              ],
             },
           },
           66: {
             description: {
-              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
+              _errors: [
+                {
+                  code: "BASE_TYPE_MAX_LENGTH",
+                  message: "Must be 100 or fewer.",
+                },
+              ],
             },
           },
           67: {
             description: {
-              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
+              _errors: [
+                {
+                  code: "BASE_TYPE_MAX_LENGTH",
+                  message: "Must be 100 or fewer.",
+                },
+              ],
             },
           },
         },
@@ -1092,7 +1163,9 @@ describe("monitorDiscordProvider", () => {
     });
 
     await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(1));
-    expect(clientDeployCommandsMock).toHaveBeenCalledWith({ mode: "reconcile" });
+    expect(clientDeployCommandsMock).toHaveBeenCalledWith({
+      mode: "reconcile",
+    });
     const requestOptions = getConstructedClientOptions().requestOptions;
     expect(requestOptions?.timeout).toBe(15_000);
     expect(requestOptions?.runtimeProfile).toBe("persistent");

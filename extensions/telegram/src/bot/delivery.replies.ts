@@ -40,7 +40,7 @@ import {
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { splitTelegramRichMessageTextChunks, TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
 import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
-import { resolveTelegramVoiceSend } from "../voice.js";
+import { prepareTelegramVoiceMedia } from "../voice.js";
 import {
   buildTelegramSendParams,
   sendTelegramText,
@@ -402,8 +402,23 @@ async function deliverMediaReply(params: {
       contentType: media.contentType,
       fileName: media.fileName,
     });
-    const fileName = media.fileName ?? (isGif ? "animation.gif" : "file");
-    const file = new InputFile(media.buffer, fileName);
+    let fileName = media.fileName ?? (isGif ? "animation.gif" : "file");
+    let mediaBuffer = media.buffer;
+    const voiceMedia =
+      kind === "audio"
+        ? await prepareTelegramVoiceMedia({
+            wantsVoice: params.reply.audioAsVoice === true,
+            buffer: mediaBuffer,
+            contentType: media.contentType,
+            fileName,
+            logFallback: logVerbose,
+          })
+        : undefined;
+    if (voiceMedia) {
+      mediaBuffer = voiceMedia.buffer;
+      fileName = voiceMedia.fileName ?? fileName;
+    }
+    const file = new InputFile(mediaBuffer, fileName);
     const { caption, followUpText } = splitTelegramCaption(
       isFirstMedia ? (params.reply.text ?? undefined) : undefined,
     );
@@ -476,13 +491,7 @@ async function deliverMediaReply(params: {
       }
       markDelivered(params.progress);
     } else if (kind === "audio") {
-      const { useVoice } = resolveTelegramVoiceSend({
-        wantsVoice: params.reply.audioAsVoice === true,
-        contentType: media.contentType,
-        fileName,
-        logFallback: logVerbose,
-      });
-      if (useVoice) {
+      if (voiceMedia?.useVoice === true) {
         const sendVoiceMedia = async (
           requestParams: typeof mediaParams,
           shouldLog?: (err: unknown) => boolean,

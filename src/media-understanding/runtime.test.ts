@@ -11,6 +11,7 @@ import {
   describeImageFileWithModel,
   extractStructuredWithModel,
   runMediaUnderstandingFile,
+  transcribeAudioBuffer,
   transcribeAudioFile,
 } from "./runtime.js";
 
@@ -419,6 +420,57 @@ describe("media-understanding runtime", () => {
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
     });
+  });
+
+  it("transcribes audio buffers through the media attachment cache", async () => {
+    const buffer = Buffer.from("wav-audio");
+    const providerRegistry = new Map();
+    const cache = { cleanup: mocks.cleanup, getBuffer: mocks.getBuffer };
+    const output: MediaUnderstandingOutput = {
+      kind: "audio.transcription",
+      attachmentIndex: 0,
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      text: "hello from buffer",
+    };
+    mocks.buildProviderRegistry.mockReturnValue(providerRegistry);
+    mocks.createMediaAttachmentCache.mockReturnValue(cache);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [output],
+      decision: { capability: "audio", outcome: "completed", attachments: [] },
+    });
+
+    await expect(
+      transcribeAudioBuffer({
+        buffer,
+        fileName: "input.wav",
+        mime: "audio/wav",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).resolves.toEqual({
+      text: "hello from buffer",
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      output,
+      decision: { capability: "audio", outcome: "completed", attachments: [] },
+    });
+
+    expect(mocks.createMediaAttachmentCache).toHaveBeenCalledWith(
+      [{ buffer, fileName: "input.wav", mime: "audio/wav", index: 0 }],
+      { ssrfPolicy: undefined },
+    );
+    expect(requireRunCapabilityRequest()).toMatchObject({
+      capability: "audio",
+      ctx: { MediaType: "audio/wav" },
+      attachments: cache,
+      media: [{ buffer, fileName: "input.wav", mime: "audio/wav", index: 0 }],
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      providerRegistry,
+    });
+    expect(mocks.cleanup).toHaveBeenCalledOnce();
   });
 
   it("passes per-request image prompts into media understanding config", async () => {

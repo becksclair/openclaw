@@ -352,6 +352,10 @@ top-level `bindings[]` entries.
 <ParamField path="bindings[].acp.cwd" type="string">
   Optional runtime working directory.
 </ParamField>
+<ParamField path="bindings[].acp.target" type="string">
+  Optional backend target, such as a remote host alias for a backend that
+  can choose the execution target when the session starts.
+</ParamField>
 <ParamField path="bindings[].acp.backend" type="string">
   Optional backend override.
 </ParamField>
@@ -365,6 +369,7 @@ Use `agents.list[].runtime` to define ACP defaults once per agent:
 - `agents.list[].runtime.acp.backend`
 - `agents.list[].runtime.acp.mode`
 - `agents.list[].runtime.acp.cwd`
+- `agents.list[].runtime.acp.target`
 
 **Override precedence for ACP bound sessions:**
 
@@ -452,11 +457,47 @@ Use `agents.list[].runtime` to define ACP defaults once per agent:
 }
 ```
 
+Backends that support remote targets can keep the top-level OpenClaw
+agent generic and put the host/workspace on the binding:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "codex",
+        runtime: { type: "acp", acp: { agent: "codex" } },
+      },
+    ],
+  },
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "discord",
+        accountId: "default",
+        peer: { kind: "channel", id: "222222222222222222" },
+      },
+      acp: {
+        mode: "persistent",
+        backend: "acpx-remote",
+        target: "devbox",
+        cwd: "C:/dev/work",
+      },
+    },
+  ],
+}
+```
+
 ### Behavior
 
 - OpenClaw ensures the configured ACP session exists after channel-specific admission and before use.
 - Messages in that channel, topic, or chat route to the configured ACP session.
 - Configured ACP bindings own their session route. Channel broadcast fan-out does not replace the configured ACP session for a matched binding.
+- `bindings[].acp.target` and `bindings[].acp.cwd` are stored with the
+  ACP session metadata and passed to the backend when the runtime handle
+  is created.
 - In bound conversations, `/new` and `/reset` reset the same ACP session key in place.
 - Temporary runtime bindings (for example created by thread-focus flows) still apply where present.
 - For cross-agent ACP spawns without an explicit `cwd`, OpenClaw inherits the target agent workspace from agent config.

@@ -456,6 +456,44 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, expectedEvents);
   });
 
+  it("allows targeted talk realtime relay delivery to operator owners only", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients } =
+      makeScopedBroadcastClients();
+
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+
+    broadcast("talk.realtime.relay", { relaySessionId: "relay-1", type: "ready" });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expect(readSocket.send).not.toHaveBeenCalled();
+    expect(writeSocket.sent).toEqual([]);
+    expect(adminSocket.sent).toEqual([]);
+
+    broadcastToConnIds(
+      "talk.realtime.relay",
+      { relaySessionId: "relay-2", type: "ready" },
+      new Set(["c-write"]),
+    );
+
+    expect(writeSocket.sent.map((frame) => frame.payload)).toEqual([
+      { relaySessionId: "relay-2", type: "ready" },
+    ]);
+    expect(adminSocket.sent).toEqual([]);
+
+    broadcastToConnIds(
+      "talk.realtime.relay",
+      { relaySessionId: "relay-3", type: "ready" },
+      new Set(["c-node"]),
+    );
+
+    expect(nodeSocket.sent).toEqual([]);
+    expect(writeSocket.sent.map((frame) => frame.payload)).toEqual([
+      { relaySessionId: "relay-2", type: "ready" },
+    ]);
+    expect(adminSocket.sent).toEqual([]);
+  });
+
   it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {
     const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
       makeScopedBroadcastContext();

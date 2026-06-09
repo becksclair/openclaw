@@ -24,6 +24,7 @@ export type ConfiguredAcpBindingSpec = {
   acpAgentId?: string;
   mode: AcpRuntimeSessionMode;
   cwd?: string;
+  target?: string;
   backend?: string;
   label?: string;
 };
@@ -36,6 +37,7 @@ export type ResolvedConfiguredAcpBinding = {
 type AcpBindingConfigShape = {
   mode?: string;
   cwd?: string;
+  target?: string;
   backend?: string;
   label?: string;
 };
@@ -56,6 +58,7 @@ export function normalizeBindingConfig(raw: unknown): AcpBindingConfigShape {
   return {
     mode: mode ? normalizeMode(mode) : undefined,
     cwd: normalizeText(shape.cwd),
+    target: normalizeText(shape.target),
     backend: normalizeText(shape.backend),
     label: normalizeText(shape.label),
   };
@@ -104,6 +107,7 @@ export function toConfiguredAcpBindingRecord(spec: ConfiguredAcpBindingSpec): Se
       label: spec.label,
       ...(spec.backend ? { backend: spec.backend } : {}),
       ...(spec.cwd ? { cwd: spec.cwd } : {}),
+      ...(spec.target ? { target: spec.target } : {}),
     },
   };
 }
@@ -160,6 +164,7 @@ export function resolveConfiguredAcpBindingSpecFromRecord(
     acpAgentId: normalizeText(record.metadata?.acpAgentId),
     mode: normalizeMode(record.metadata?.mode),
     cwd: normalizeText(record.metadata?.cwd),
+    target: normalizeText(record.metadata?.target),
     backend: normalizeText(record.metadata?.backend),
     label: normalizeText(record.metadata?.label),
   };

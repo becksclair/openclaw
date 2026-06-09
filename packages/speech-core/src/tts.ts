@@ -1,6 +1,7 @@
 // Speech Core module implements tts behavior.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import type { ChannelTtsVoiceDeliveryCapabilities } from "openclaw/plugin-sdk/channel-contract";
 import { resolveChannelTtsVoiceDelivery } from "openclaw/plugin-sdk/channel-targets";
 import type {
   OpenClawConfig,
@@ -974,13 +975,13 @@ function supportsAudioFileVoiceMemoOutput(params: {
 }
 
 function shouldDeliverTtsAsVoice(params: {
-  channel: string | undefined;
+  delivery: ChannelTtsVoiceDeliveryCapabilities | undefined;
   target: "audio-file" | "voice-note" | undefined;
   voiceCompatible: boolean | undefined;
   fileExtension?: string;
   outputFormat?: string;
 }): boolean {
-  const delivery = resolveChannelTtsVoiceDelivery(params.channel);
+  const delivery = params.delivery;
   if (!delivery) {
     return false;
   }
@@ -1330,8 +1331,10 @@ export async function textToSpeech(params: {
   let audioBuffer = synthesis.audioBuffer;
   let fileExtension = synthesis.fileExtension;
   let outputFormat = synthesis.outputFormat;
+  const voiceDelivery = resolveChannelTtsVoiceDelivery(params.channel);
   const transcoded = await maybePreTranscodeForVoiceDelivery({
     channel: params.channel,
+    delivery: voiceDelivery,
     target: synthesis.target,
     audioBuffer,
     fileExtension,
@@ -1362,7 +1365,7 @@ export async function textToSpeech(params: {
     outputFormat,
     voiceCompatible: synthesis.voiceCompatible,
     audioAsVoice: shouldDeliverTtsAsVoice({
-      channel: params.channel,
+      delivery: voiceDelivery,
       target: synthesis.target,
       voiceCompatible: synthesis.voiceCompatible,
       fileExtension,
@@ -1374,6 +1377,7 @@ export async function textToSpeech(params: {
 
 async function maybePreTranscodeForVoiceDelivery(params: {
   channel: string | undefined;
+  delivery: ChannelTtsVoiceDeliveryCapabilities | undefined;
   target: "audio-file" | "voice-note" | undefined;
   audioBuffer: Buffer;
   fileExtension: string;
@@ -1382,7 +1386,7 @@ async function maybePreTranscodeForVoiceDelivery(params: {
   if (params.target !== "audio-file") {
     return undefined;
   }
-  const delivery = resolveChannelTtsVoiceDelivery(params.channel);
+  const delivery = params.delivery;
   const preferred = delivery?.preferAudioFileFormat?.trim().toLowerCase();
   if (!preferred) {
     return undefined;

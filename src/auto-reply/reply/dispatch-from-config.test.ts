@@ -186,7 +186,7 @@ const ttsMocks = vi.hoisted(() => {
       ) {
         return {
           ...params.payload,
-          mediaUrl: "https://example.com/tts-synth.opus",
+          mediaUrl: "/tmp/openclaw/tts-synth.opus",
           audioAsVoice: true,
           trustedLocalMedia: true,
         };
@@ -5176,8 +5176,9 @@ describe("dispatchReplyFromConfig", () => {
 
     const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as ReplyPayload | undefined;
-    expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+    expect(finalPayload?.mediaUrl).toBe("/tmp/openclaw/tts-synth.opus");
     expect(finalPayload?.text).toBeUndefined();
+    expect(finalPayload?.trustedLocalMedia).toBe(true);
   });
 
   it("normalizes accumulated block TTS-only media before final delivery", async () => {
@@ -5213,6 +5214,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalPayload?.mediaUrl).toBe("/tmp/openclaw-media/normalized-tts.ogg");
     expect(finalPayload?.mediaUrls).toStrictEqual(["/tmp/openclaw-media/normalized-tts.ogg"]);
     expect(finalPayload?.audioAsVoice).toBe(true);
+    expect(finalPayload?.trustedLocalMedia).toBe(true);
     expect(finalPayload?.spokenText).toBe("Hello from block streaming.");
     expect(finalPayload?.trustedLocalMedia).toBe(true);
   });
@@ -7374,7 +7376,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(ttsCall?.payload).toEqual({ text: "Intro [[tts:text]]hidden[[/tts:text]] visible" });
     const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as ReplyPayload | undefined;
-    expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+    expect(finalPayload?.mediaUrl).toBe("/tmp/openclaw/tts-synth.opus");
   });
 
   it("forwards generated-media block replies in WhatsApp group sessions", async () => {
@@ -7814,8 +7816,9 @@ describe("before_dispatch hook", () => {
     expect(routeCall?.channel).toBe("telegram");
     expect(routeCall?.to).toBe("telegram:999");
     expect(routeCall?.payload?.text).toBe("Blocked");
-    expect(routeCall?.payload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+    expect(routeCall?.payload?.mediaUrl).toBe("/tmp/openclaw/tts-synth.opus");
     expect(routeCall?.payload?.audioAsVoice).toBe(true);
+    expect(routeCall?.payload?.trustedLocalMedia).toBe(true);
     expect(result.queuedFinal).toBe(true);
   });
 
@@ -9346,6 +9349,43 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(commandReply);
   });
 
+  it("delivers marked media-only source replies in message-tool-only mode", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const voicePayload = setReplyPayloadMetadata(
+      {
+        mediaUrl: "/tmp/reply.opus",
+        mediaUrls: ["/tmp/reply.opus"],
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+      },
+      { deliverDespiteSourceReplySuppression: true },
+    );
+    const replyResolver = vi.fn(async () => voicePayload satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(voicePayload);
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
   it("mirrors internal source reply payloads into the active transcript", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
@@ -9541,8 +9581,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       .calls[0]?.[0];
     expect(queuedPayload).toMatchObject({
       text: "message tool reply",
-      mediaUrl: "https://example.com/tts-synth.opus",
+      mediaUrl: "/tmp/openclaw/tts-synth.opus",
       audioAsVoice: true,
+      trustedLocalMedia: true,
     });
     expect(getReplyPayloadMetadata(queuedPayload)?.sourceReplyTranscriptMirror).toMatchObject({
       sessionKey: "agent:main",
@@ -9605,6 +9646,43 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       },
       dispatcher,
       replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("does not deliver marked media-only source replies when sendPolicy denies delivery", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(
+      async () =>
+        setReplyPayloadMetadata(
+          {
+            mediaUrl: "/tmp/reply.opus",
+            mediaUrls: ["/tmp/reply.opus"],
+            audioAsVoice: true,
+            trustedLocalMedia: true,
+          },
+          { deliverDespiteSourceReplySuppression: true },
+        ) satisfies ReplyPayload,
+    );
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);

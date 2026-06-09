@@ -50,6 +50,13 @@ function sessionMatchesConfiguredBinding(params: {
       return false;
     }
   }
+  const desiredTarget = normalizeText(params.spec.target);
+  if (desiredTarget !== undefined) {
+    const currentTarget = (params.meta.runtimeOptions?.target ?? "").trim();
+    if (desiredTarget !== currentTarget) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -96,6 +103,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       mode: params.spec.mode,
       cwd: params.spec.cwd,
+      target: params.spec.target,
       backendId: params.spec.backend,
     });
 

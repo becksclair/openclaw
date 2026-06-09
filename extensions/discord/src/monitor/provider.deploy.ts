@@ -9,6 +9,7 @@ import {
   formatDiscordDeployErrorMessage,
   formatDiscordDeployRateLimitDetails,
   formatDiscordDeployRateLimitWarning,
+  isDiscordDeployCommandLimit,
   isDiscordDeployDailyCreateLimit,
 } from "./provider.deploy-errors.js";
 import { logDiscordStartupPhase } from "./provider.startup-log.js";
@@ -71,6 +72,12 @@ function wrapDeployRestMethod(params: {
             ),
           );
         }
+      } else if (isDiscordDeployCommandLimit(err)) {
+        params.runtime.log?.(
+          warn(
+            `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:recoverable ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${requestMs} error=${formatDiscordDeployErrorMessage(err)}${formatDiscordDeployErrorDetails(err)}`,
+          ),
+        );
       } else {
         const details = formatDiscordDeployErrorDetails(err);
         params.runtime.error?.(
@@ -147,6 +154,15 @@ async function deployDiscordCommands(params: {
             `discord: native slash command deploy skipped for ${accountId}; daily application command create limit reached. Existing slash commands stay active until Discord resets the quota. Message send/receive is unaffected.`,
           ),
         );
+        return;
+      }
+      if (isDiscordDeployCommandLimit(err)) {
+        params.runtime.log?.(
+          warn(
+            `discord: native slash command deploy hit application command limit for ${accountId}; falling back to overwrite mode.`,
+          ),
+        );
+        await params.client.deployCommands({ mode: "overwrite", force: true });
         return;
       }
       const rateLimitWarning = formatDiscordDeployRateLimitWarning(err, accountId);

@@ -16,6 +16,7 @@ query-filters:
 
 paths:
   - apps/android/app/src/main
+  - apps/android/wear/src/main
 
 paths-ignore:
   - "**/.gradle"
@@ -27,4 +28,5 @@ paths-ignore:
   - "**/*Test.java"
   - "**/*Benchmark.kt"
   - apps/android/app/src/test
+  - apps/android/wear/src/test
   - apps/android/benchmark

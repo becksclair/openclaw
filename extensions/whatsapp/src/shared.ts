@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import {
@@ -11,7 +10,8 @@ import {
   createAllowlistProviderGroupPolicyWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
+import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createDelegatedSetupWizardProxy,
   type ChannelSetupWizard,
@@ -38,15 +38,18 @@ import {
   deriveLegacySessionChatType,
   isLegacyGroupSessionKey,
 } from "./session-contract.js";
+import { whatsAppTtsVoiceDelivery } from "./tts-capabilities.js";
 
 const WHATSAPP_CHANNEL = "whatsapp" as const;
 
+const loadWhatsAppRuntimeModule = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+const loadWhatsAppSetupSurfaceModule = createLazyRuntimeModule(() => import("./setup-surface.js"));
 export async function loadWhatsAppChannelRuntime() {
-  return await import("./channel.runtime.js");
+  return await loadWhatsAppRuntimeModule();
 }
 
 async function loadWhatsAppSetupSurface() {
-  return await import("./setup-surface.js");
+  return await loadWhatsAppSetupSurfaceModule();
 }
 
 export const whatsappSetupWizardProxy = createWhatsAppSetupWizardProxy(
@@ -151,13 +154,7 @@ export function createWhatsAppPluginBase(params: {
   const base = createChannelPluginBase({
     id: WHATSAPP_CHANNEL,
     meta: {
-      label: "WhatsApp",
-      selectionLabel: "WhatsApp (QR link)",
-      detailLabel: "WhatsApp Web",
-      docsPath: "/channels/whatsapp",
-      docsLabel: "whatsapp",
-      blurb: "works with your own number; recommend a separate phone + eSIM.",
-      systemImage: "message",
+      ...getChatChannelMeta(WHATSAPP_CHANNEL),
       showConfigured: false,
       quickstartAllowFrom: true,
       forceAccountBinding: true,
@@ -170,10 +167,7 @@ export function createWhatsAppPluginBase(params: {
       reactions: true,
       media: true,
       tts: {
-        voice: {
-          synthesisTarget: "voice-note",
-          transcodesAudio: true,
-        },
+        voice: whatsAppTtsVoiceDelivery,
       },
     },
     // `channels.whatsapp.accounts.*` (account add/remove, and `enabled` flips)
@@ -226,8 +220,8 @@ export function createWhatsAppPluginBase(params: {
       deriveLegacySessionChatType,
       resolveLegacyGroupSessionKey,
       isLegacyGroupSessionKey,
-      canonicalizeLegacySessionKey: (paramsLocal) =>
-        canonicalizeLegacySessionKey({ key: paramsLocal.key, agentId: paramsLocal.agentId }),
+      canonicalizeLegacySessionKey: (candidate) =>
+        canonicalizeLegacySessionKey({ key: candidate.key, agentId: candidate.agentId }),
     },
     secrets: {
       unsupportedSecretRefSurfacePatterns,

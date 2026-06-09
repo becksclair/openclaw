@@ -31,6 +31,25 @@ describe("mergeAttemptToolMediaPayloads", () => {
     ]);
   });
 
+  it("preserves trusted local media metadata on normal visible reply merges", () => {
+    expect(
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "done" }],
+        toolMediaUrls: ["/tmp/reply.opus"],
+        toolAudioAsVoice: true,
+        toolTrustedLocalMedia: true,
+      }),
+    ).toEqual([
+      {
+        text: "done",
+        mediaUrls: ["/tmp/reply.opus"],
+        mediaUrl: "/tmp/reply.opus",
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+      },
+    ]);
+  });
+
   it("creates a media-only reply when no visible reply exists", () => {
     expect(
       mergeAttemptToolMediaPayloads({
@@ -123,5 +142,50 @@ describe("mergeAttemptToolMediaPayloads", () => {
         text: "sent through message tool",
       },
     });
+  });
+
+  it("delivers trusted local voice tool media separately in message-tool-only mode", () => {
+    const [privateFinal, mediaOnly] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "private final" }],
+        toolMediaUrls: ["/tmp/reply.opus"],
+        toolAudioAsVoice: true,
+        toolTrustedLocalMedia: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(privateFinal).toEqual({ text: "private final" });
+    expect(getReplyPayloadMetadata(privateFinal ?? {})).toBeUndefined();
+    expect(mediaOnly).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      mediaUrl: "/tmp/reply.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    expect(getReplyPayloadMetadata(mediaOnly ?? {})).toEqual({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("does not bypass source suppression for untrusted or non-voice tool media", () => {
+    const untrustedVoice =
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "private final" }],
+        toolMediaUrls: ["/tmp/reply.opus"],
+        toolAudioAsVoice: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+    const trustedImage =
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "private final" }],
+        toolMediaUrls: ["/tmp/reply.png"],
+        toolTrustedLocalMedia: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(untrustedVoice).toHaveLength(1);
+    expect(trustedImage).toHaveLength(1);
+    expect(getReplyPayloadMetadata(untrustedVoice[0] ?? {})).toBeUndefined();
+    expect(getReplyPayloadMetadata(trustedImage[0] ?? {})).toBeUndefined();
   });
 });

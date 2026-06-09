@@ -268,7 +268,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
   });
 
-  it("does not treat diagnostic current metadata as provided registry input", () => {
+  it("treats diagnostic current metadata as provided registry input", () => {
     const env = {
       ...createHermeticEnv(makeTempDir()),
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
@@ -329,7 +329,88 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
     const result = loadPluginRegistrySnapshotWithMetadata({ config, env, workspaceDir });
 
-    expect(result.source).not.toBe("provided");
+    expect(result).toEqual({
+      snapshot: index,
+      source: "provided",
+      diagnostics: [
+        {
+          level: "info",
+          code: "persisted-registry-missing",
+          message: "missing",
+        },
+      ],
+    });
+  });
+
+  it("does not reuse missing-persisted current metadata once a persisted registry appears", () => {
+    const tempRoot = makeTempDir();
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    };
+    const config = {};
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    const currentIndex: InstalledPluginIndex = {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    };
+    const persistedIndex: InstalledPluginIndex = {
+      ...currentIndex,
+      generatedAtMs: 1,
+    };
+    writePersistedInstalledPluginIndexSync(persistedIndex, { env });
+    setCurrentPluginMetadataSnapshot(
+      {
+        policyHash,
+        configFingerprint: "",
+        workspaceDir,
+        index: currentIndex,
+        registryDiagnostics: [
+          {
+            level: "info",
+            code: "persisted-registry-missing",
+            message: "missing",
+          },
+        ],
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        plugins: [],
+        diagnostics: [],
+        byPluginId: new Map(),
+        normalizePluginId: (pluginId: string) => pluginId,
+        owners: {
+          channels: new Map(),
+          channelConfigs: new Map(),
+          providers: new Map(),
+          modelCatalogProviders: new Map(),
+          cliBackends: new Map(),
+          setupProviders: new Map(),
+          commandAliases: new Map(),
+          contracts: new Map(),
+        },
+        metrics: {
+          registrySnapshotMs: 0,
+          manifestRegistryMs: 0,
+          ownerMapsMs: 0,
+          totalMs: 0,
+          indexPluginCount: 0,
+          manifestPluginCount: 0,
+        },
+      },
+      { config, env, workspaceDir },
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, workspaceDir });
+
+    expect(result.source).toBe("persisted");
+    expect(result.snapshot.generatedAtMs).toBe(1);
   });
 
   it("does not reuse current metadata when explicit derivation inputs are supplied", () => {
