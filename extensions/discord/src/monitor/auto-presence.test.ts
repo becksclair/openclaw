@@ -1,8 +1,26 @@
 // Discord tests cover auto presence plugin behavior.
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return { ...actual, getRuntimeConfig: vi.fn() };
+});
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return { ...actual, resolveAgentRoute: vi.fn() };
+});
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return { ...actual, ensureAuthProfileStore: vi.fn(), resolveAgentDir: vi.fn() };
+});
+
+import { ensureAuthProfileStore, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createDiscordAutoPresenceController,
+  loadDiscordAccountAuthProfileStore,
   resolveDiscordAutoPresenceDecision,
 } from "./auto-presence.js";
 
@@ -156,6 +174,47 @@ describe("discord auto presence", () => {
         },
       ],
     ]);
+  });
+
+  it("reports degraded when the auth store has no profiles", () => {
+    const now = Date.now();
+    const decision = resolveDiscordAutoPresenceDecision({
+      discordConfig: {
+        autoPresence: {
+          enabled: true,
+        },
+      },
+      authStore: { version: 1, profiles: {} },
+      gatewayConnected: true,
+      now,
+    });
+
+    if (!decision) {
+      throw new Error("expected a degraded auto-presence decision");
+    }
+    expect(decision.state).toBe("degraded");
+    expect(decision.presence.status).toBe("idle");
+    expect(decision.presence.activities[0]?.state).toBe("runtime degraded");
+  });
+
+  it("loads the auth store for the agent bound to the account", () => {
+    const cfg = { agents: { list: [{ id: "luke" }] } };
+    const store = createStore();
+    vi.mocked(getRuntimeConfig).mockReturnValue(cfg as never);
+    vi.mocked(resolveAgentRoute).mockReturnValue({ agentId: "luke" } as never);
+    vi.mocked(resolveAgentDir).mockReturnValue("/state/agents/luke/agent");
+    vi.mocked(ensureAuthProfileStore).mockReturnValue(store as never);
+
+    const result = loadDiscordAccountAuthProfileStore("luke");
+
+    expect(resolveAgentRoute).toHaveBeenCalledWith({
+      cfg,
+      channel: "discord",
+      accountId: "luke",
+    });
+    expect(resolveAgentDir).toHaveBeenCalledWith(cfg, "luke");
+    expect(ensureAuthProfileStore).toHaveBeenCalledWith("/state/agents/luke/agent");
+    expect(result).toBe(store);
   });
 
   it("does nothing when auto presence is disabled", () => {
