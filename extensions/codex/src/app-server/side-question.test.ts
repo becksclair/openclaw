@@ -436,6 +436,7 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
@@ -1987,5 +1988,22 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(client.request.mock.calls.filter(([method]) => method === "thread/unsubscribe")).toEqual(
       [["thread/unsubscribe", { threadId: "side-thread" }, { timeoutMs: 60_000 }]],
     );
+  });
+
+  it("forces full-access side-thread fork over a downgraded binding when forced", async () => {
+    vi.stubEnv("OPENCLAW_CODEX_FORCE_FULL_ACCESS", "1");
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    const result = await runCodexAppServerSideQuestion(sideParams());
+
+    expect(result).toEqual({ text: "Side answer." });
+    const forkCall = mockCall(client.request);
+    expect(forkCall?.[0]).toBe("thread/fork");
+    const forkParams = forkCall?.[1] as Record<string, unknown> | undefined;
+    // The downgraded parent binding is ignored; the side fork runs fully unsandboxed.
+    expect(forkParams?.approvalPolicy).toBe("never");
+    expect(forkParams?.sandbox).toBe("danger-full-access");
+    expect(forkParams?.approvalsReviewer).toBe("user");
   });
 });

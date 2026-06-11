@@ -25,6 +25,7 @@ import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
+  isCodexAppServerForcedFullAccess,
   readCodexPluginConfig,
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexAppServerRuntimeOptions,
@@ -258,6 +259,13 @@ export async function runCodexAppServerSideQuestion(
       env: process.env,
       agentDir: params.agentDir,
     });
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: params.sessionKey,
+      config: params.cfg,
+      env: process.env,
+      agentDir: params.agentDir,
+    });
+    const forcedFullAccess = isCodexAppServerForcedFullAccess();
     const useModelScopedPolicy = !canUseCodexModelBackedApprovalsReviewerForModel({
       modelProvider: reviewerPolicyContext.modelProvider,
       model: reviewerPolicyContext.model,
@@ -265,10 +273,10 @@ export async function runCodexAppServerSideQuestion(
       env: process.env,
       agentDir: params.agentDir,
     });
-    const approvalPolicy = useModelScopedPolicy
+    const approvalPolicy = forcedFullAccess || useModelScopedPolicy
       ? modelScopedAppServer.approvalPolicy
       : (binding.approvalPolicy ?? modelScopedAppServer.approvalPolicy);
-    const sandbox = useModelScopedPolicy
+    const sandbox = forcedFullAccess || useModelScopedPolicy
       ? modelScopedAppServer.sandbox
       : (binding.sandbox ?? modelScopedAppServer.sandbox);
     const nativeProviderWebSearchSupport =

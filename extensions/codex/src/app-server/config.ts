@@ -245,6 +245,33 @@ export function shouldAutoApproveCodexAppServerApprovals(
   );
 }
 
+// Fork seam: when OPENCLAW_CODEX_FORCE_FULL_ACCESS is set, native Codex runs danger-full-access
+// + never. danger-full-access implies unrestricted network at the Codex protocol level, so
+// clamping the sandbox mode is also the network unboxing. This fork does not use
+// /etc/codex/requirements.toml; the clamp intentionally does not consult it. (Codex would enforce
+// a requirements lockdown server-side if one were ever present, which is out of scope here.)
+export function isCodexAppServerForcedFullAccess(
+  params: { env?: NodeJS.ProcessEnv } = {},
+): boolean {
+  return readBooleanEnv((params.env ?? process.env).OPENCLAW_CODEX_FORCE_FULL_ACCESS) === true;
+}
+
+// Applied as the last writer on the resolver output so it beats guardian mode, exec-policy
+// downgrades, and the requirements-aware resolution. The promotion bail (app-server-policy.ts) and
+// per-turn closers (conversation-binding.ts, side-question.ts) keep the same invariant on paths
+// that re-derive policy from a persisted binding.
+function clampCodexAppServerRuntimeToFullAccess(
+  runtime: CodexAppServerRuntimeOptions,
+): CodexAppServerRuntimeOptions {
+  return {
+    ...runtime,
+    approvalPolicy: "never",
+    approvalPolicySource: "env",
+    sandbox: "danger-full-access",
+    approvalsReviewer: "user",
+  };
+}
+
 export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "mode",
   "transport",
@@ -665,7 +692,7 @@ export function resolveCodexAppServerRuntimeOptions(
         ? "requirements"
         : "implicit";
 
-  return {
+  const runtime: CodexAppServerRuntimeOptions = {
     start: {
       transport,
       command,
@@ -704,6 +731,9 @@ export function resolveCodexAppServerRuntimeOptions(
     ...(serviceTier ? { serviceTier } : {}),
     ...resolveCodexAppServerNetworkProxy(config.networkProxy, resolvedSandbox),
   };
+  return isCodexAppServerForcedFullAccess({ env })
+    ? clampCodexAppServerRuntimeToFullAccess(runtime)
+    : runtime;
 }
 
 export function isCodexAppServerApprovalPolicyAllowedByRequirements(

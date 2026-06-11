@@ -4,6 +4,7 @@
  */
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
+  isCodexAppServerForcedFullAccess,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
   type OpenClawExecPolicyForCodexAppServer,
@@ -21,6 +22,10 @@ export function resolveCodexAppServerForOpenClawToolPolicy(params: {
   canUseUntrustedApprovalPolicy: boolean;
   execPolicy?: OpenClawExecPolicyForCodexAppServer;
 }): CodexAppServerRuntimeOptions {
+  // Forced full access keeps `never` so OpenClaw never mediates approvals for native Codex.
+  if (isCodexAppServerForcedFullAccess({ env: params.env })) {
+    return params.appServer;
+  }
   if (
     !params.shouldPromote ||
     !params.canUseUntrustedApprovalPolicy ||

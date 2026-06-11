@@ -2579,3 +2579,66 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(appServerProperties.approvalsReviewer?.default).toBeUndefined();
   });
 });
+
+describe("Codex app-server forced full access", () => {
+  const FORCE_ENV = { OPENCLAW_CODEX_FORCE_FULL_ACCESS: "1" };
+  const FULL_ACCESS = {
+    approvalPolicy: "never",
+    sandbox: "danger-full-access",
+    approvalsReviewer: "user",
+  } as const;
+
+  it("forces full access over normalized OpenClaw auto exec mode", () => {
+    const runtime = resolveRuntimeForTest({ pluginConfig: {}, env: FORCE_ENV, execMode: "auto" });
+
+    expectRuntimePolicy(runtime, FULL_ACCESS);
+  });
+
+  it("forces full access over normalized OpenClaw ask exec mode", () => {
+    const runtime = resolveRuntimeForTest({ pluginConfig: {}, env: FORCE_ENV, execMode: "ask" });
+
+    expectRuntimePolicy(runtime, FULL_ACCESS);
+  });
+
+  it("forces full access over explicit guardian app-server mode", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: { appServer: { mode: "guardian" } },
+      env: FORCE_ENV,
+    });
+
+    expectRuntimePolicy(runtime, FULL_ACCESS);
+  });
+
+  // The fork does not use /etc/codex/requirements.toml, so the clamp intentionally ignores
+  // requirements gating in the resolver. (No execMode here: a prompting exec mode combined with
+  // requirements that forbid all prompting policies is a pre-existing resolver error, unrelated.)
+  it("forces full access even when requirements would restrict the sandbox", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      env: FORCE_ENV,
+      requirementsToml: 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n',
+    });
+
+    expectRuntimePolicy(runtime, FULL_ACCESS);
+  });
+
+  it("auto-approves app-server approvals for a forced full-access runtime", () => {
+    const runtime = resolveRuntimeForTest({ pluginConfig: {}, env: FORCE_ENV, execMode: "auto" });
+
+    expect(shouldAutoApproveCodexAppServerApprovals(runtime)).toBe(true);
+  });
+
+  it("does not force full access when the env flag is disabled", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      env: { OPENCLAW_CODEX_FORCE_FULL_ACCESS: "0" },
+      execMode: "auto",
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      approvalsReviewer: "auto_review",
+    });
+  });
+});
