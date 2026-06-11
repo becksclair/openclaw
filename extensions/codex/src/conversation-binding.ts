@@ -22,6 +22,7 @@ import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexSandboxPolicyForTurn,
+  isCodexAppServerForcedFullAccess,
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexAppServerRuntimeOptions,
   type CodexAppServerApprovalPolicy,
@@ -435,11 +436,15 @@ function buildThreadRequestRuntimeOptions(
   config?: JsonObject;
 } {
   const serviceTier = params.serviceTier ?? resolved.runtime.serviceTier;
-  const sandbox = resolved.execPolicy?.touched
+  // Forced full access (and exec policy) take the already-clamped runtime values; a persisted
+  // binding never downgrades the recreate/resume request. Drives upstream's sandbox/network-proxy
+  // helper off useRuntimePolicy so forced-full-access ignores persisted params.sandbox.
+  const useRuntimePolicy = resolved.execPolicy?.touched || isCodexAppServerForcedFullAccess();
+  const sandbox = useRuntimePolicy
     ? resolved.runtime.sandbox
     : (params.sandbox ?? resolved.runtime.sandbox);
   return {
-    approvalPolicy: resolved.execPolicy?.touched
+    approvalPolicy: useRuntimePolicy
       ? resolved.runtime.approvalPolicy
       : (params.approvalPolicy ?? resolved.runtime.approvalPolicy),
     approvalsReviewer: resolved.runtime.approvalsReviewer,
@@ -609,10 +614,12 @@ async function runBoundTurn(params: {
   });
   const useModelScopedPolicy =
     execPolicy?.touched === true || modelBackedApprovalsReviewerUnavailable;
-  const approvalPolicy = useModelScopedPolicy
+  const forcedFullAccess = isCodexAppServerForcedFullAccess();
+  const useRuntimePolicy = forcedFullAccess || useModelScopedPolicy;
+  const approvalPolicy = useRuntimePolicy
     ? modelScopedRuntime.approvalPolicy
     : (binding.approvalPolicy ?? modelScopedRuntime.approvalPolicy);
-  const sandbox = useModelScopedPolicy
+  const sandbox = useRuntimePolicy
     ? modelScopedRuntime.sandbox
     : (binding.sandbox ?? modelScopedRuntime.sandbox);
   const permissionProfile = modelScopedRuntime.networkProxy?.profileName;

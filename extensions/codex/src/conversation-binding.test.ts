@@ -160,6 +160,7 @@ describe("codex conversation binding", () => {
     codexRequirementsTomlMock.mockReset();
     resolveSandboxContextMock.mockReset();
     resolveSandboxContextMock.mockResolvedValue(null);
+    vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -2121,5 +2122,189 @@ describe("codex conversation binding", () => {
 
     expect(turnStartParams).toEqual([]);
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("forces full-access turn params over a downgraded binding when OPENCLAW_CODEX_FORCE_FULL_ACCESS is set", async () => {
+    vi.stubEnv("OPENCLAW_CODEX_FORCE_FULL_ACCESS", "1");
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agents", "bot-b", "agent");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    const turnStartParams: Record<string, unknown>[] = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        if (method === "turn/start") {
+          turnStartParams.push(requestParams);
+          setImmediate(() =>
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+                },
+              },
+            }),
+          );
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "do the thing",
+        bodyForAgent: "do the thing",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+            agentDir,
+          },
+        },
+      },
+      { timeoutMs: 50 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    expect(turnStartParams[0]?.approvalPolicy).toBe("never");
+    expect(turnStartParams[0]?.approvalsReviewer).toBe("user");
+    expect(turnStartParams[0]?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+  });
+
+  it("forces full-access recreate thread params over a downgraded binding when forced", async () => {
+    vi.stubEnv("OPENCLAW_CODEX_FORCE_FULL_ACCESS", "1");
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    agentRuntimeMocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        work: { type: "oauth", provider: "openai", access: "access-token" },
+      },
+    });
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-old",
+        cwd: tempDir,
+        authProfileId: "work",
+        model: "gpt-5.4-mini",
+        modelProvider: "openai",
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+      }),
+    );
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const notificationHandlers: Array<(notification: Record<string, unknown>) => void> = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        if (method === "turn/start" && requestParams.threadId === "thread-old") {
+          throw new Error("thread not found: thread-old");
+        }
+        if (method === "thread/start") {
+          return {
+            thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
+            model: "gpt-5.4-mini",
+          };
+        }
+        if (method === "turn/start" && requestParams.threadId === "thread-new") {
+          setImmediate(() => {
+            for (const handler of notificationHandlers) {
+              handler({
+                method: "turn/completed",
+                params: {
+                  threadId: "thread-new",
+                  turn: {
+                    id: "turn-new",
+                    status: "completed",
+                    items: [{ id: "assistant-1", type: "agentMessage", text: "Recovered" }],
+                  },
+                },
+              });
+            }
+          });
+          return { turn: { id: "turn-new" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler) => {
+        notificationHandlers.push(handler);
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "hi again",
+        bodyForAgent: "hi again",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 500 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "Recovered" } });
+    expect(requests.map((request) => request.method)).toEqual([
+      "turn/start",
+      "thread/start",
+      "turn/start",
+    ]);
+    expect(requests[1]?.params.approvalPolicy).toBe("never");
+    expect(requests[1]?.params.sandbox).toBe("danger-full-access");
+    expect(requests[2]?.params.approvalPolicy).toBe("never");
+    expect(requests[2]?.params.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
   });
 });

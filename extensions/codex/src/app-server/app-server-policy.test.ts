@@ -208,4 +208,19 @@ describe("Codex app-server policy", () => {
       resolveCodexAppServerForModelProvider({ appServer, provider: "local" }).approvalsReviewer,
     ).toBe("user");
   });
+
+  it("keeps native Codex never approval when full access is forced", () => {
+    const env = { OPENCLAW_CODEX_FORCE_FULL_ACCESS: "1" };
+    const appServer = resolveCodexAppServerRuntimeOptions({ env, requirementsToml: null });
+
+    const resolved = resolveCodexAppServerForOpenClawToolPolicy({
+      appServer,
+      pluginConfig: readCodexPluginConfig({}),
+      env,
+      shouldPromote: true,
+      canUseUntrustedApprovalPolicy: true,
+    });
+
+    expect(resolved.approvalPolicy).toBe("never");
+  });
 });
