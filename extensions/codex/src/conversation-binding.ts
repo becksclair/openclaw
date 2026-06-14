@@ -4,6 +4,7 @@ import {
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { readCodexAppServerAgentBasePrompt } from "openclaw/plugin-sdk/codex-app-server-base-prompt";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type {
   PluginConversationBindingResolvedEvent,
@@ -45,6 +46,7 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
   type CodexAppServerAuthProfileLookup,
+  type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
@@ -472,6 +474,7 @@ function codexConversationSandboxOrPermissions(
 async function requestNewConversationBindingThread(
   params: CodexThreadBindingParams,
   resolved: CodexThreadBindingRuntime,
+  baseInstructions?: string,
 ): Promise<CodexThreadStartResponse> {
   return await resolved.client.request(
     "thread/start",
@@ -481,6 +484,9 @@ async function requestNewConversationBindingThread(
       ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
       personality: CODEX_NATIVE_PERSONALITY_NONE,
       ...buildThreadRequestRuntimeOptions(params, resolved),
+      // Generic agent base prompt seam: inject the resolved agent-file base prompt as
+      // thread/start.baseInstructions so OpenClaw-managed Codex threads carry it.
+      ...(baseInstructions !== undefined ? { baseInstructions } : {}),
       developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
       experimentalRawEvents: true,
       persistExtendedHistory: true,
@@ -493,6 +499,11 @@ async function writeThreadBindingFromResponse(
   params: CodexThreadBindingParams,
   resolved: CodexThreadBindingRuntime,
   response: CodexThreadResumeResponse | CodexThreadStartResponse,
+  options: {
+    baseInstructionsFingerprint?: string;
+    externalThread?: boolean;
+    managedBaseInstructions?: boolean;
+  } = {},
 ): Promise<void> {
   const runtimeApprovalPolicy =
     typeof resolved.runtime.approvalPolicy === "string"
@@ -519,6 +530,12 @@ async function writeThreadBindingFromResponse(
       serviceTier: params.serviceTier ?? resolved.runtime.serviceTier ?? undefined,
       networkProxyProfileName: resolved.runtime.networkProxy?.profileName,
       networkProxyConfigFingerprint: resolved.runtime.networkProxy?.configFingerprint,
+      baseInstructionsSource: options.externalThread
+        ? "external-thread"
+        : options.managedBaseInstructions || options.baseInstructionsFingerprint !== undefined
+          ? "agent-file"
+          : undefined,
+      baseInstructionsFingerprint: options.baseInstructionsFingerprint,
     },
     {
       ...resolved.agentLookup,
@@ -550,17 +567,30 @@ async function attachExistingThread(
           },
           { timeoutMs: resolved.runtime.requestTimeoutMs },
         );
-    await writeThreadBindingFromResponse(params, resolved, response);
+    await writeThreadBindingFromResponse(params, resolved, response, {
+      externalThread: true,
+    });
   } finally {
     releaseLeasedSharedCodexAppServerClient(resolved.client);
   }
 }
 
 async function createThread(params: CodexThreadBindingParams): Promise<void> {
+  const basePrompt = params.agentDir
+    ? await readCodexAppServerAgentBasePrompt({ agentDir: params.agentDir })
+    : { source: "none" as const };
   const resolved = await resolveThreadBindingRuntime(params);
   try {
-    const response = await requestNewConversationBindingThread(params, resolved);
-    await writeThreadBindingFromResponse(params, resolved, response);
+    const response = await requestNewConversationBindingThread(
+      params,
+      resolved,
+      basePrompt.source === "agent-file" ? basePrompt.text : undefined,
+    );
+    await writeThreadBindingFromResponse(params, resolved, response, {
+      baseInstructionsFingerprint:
+        basePrompt.source === "agent-file" ? basePrompt.fingerprint : undefined,
+      managedBaseInstructions: true,
+    });
   } finally {
     releaseLeasedSharedCodexAppServerClient(resolved.client);
   }
@@ -574,10 +604,16 @@ async function runBoundTurn(params: {
   config?: CodexConversationConfig;
   sessionKey?: string;
   timeoutMs?: number;
+  agentLookup?: ReturnType<typeof buildAgentLookup>;
+  binding?: Awaited<ReturnType<typeof readCodexAppServerBinding>>;
 }): Promise<BoundTurnResult> {
-  const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir, config: params.config });
-  const binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
-  if (!binding?.threadId) {
+  const agentLookup =
+    params.agentLookup ??
+    buildAgentLookup({ agentDir: params.data.agentDir, config: params.config });
+  const binding =
+    params.binding ?? (await readCodexAppServerBinding(params.data.sessionFile, agentLookup));
+  const threadId = binding?.threadId;
+  if (!threadId) {
     throw new Error("bound Codex conversation has no thread binding");
   }
   let threadId = binding.threadId;
@@ -811,37 +847,94 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
   sessionKey?: string;
   timeoutMs?: number;
 }): Promise<BoundTurnResult> {
+  const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir, config: params.config });
+  let binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
+  const staleBinding = await clearStaleConversationBindingForBasePrompt({
+    sessionFile: params.data.sessionFile,
+    agentLookup,
+    binding,
+  });
+  if (staleBinding) {
+    await recreateBoundThreadForTurn(params, agentLookup, staleBinding);
+    binding = undefined;
+  }
   try {
-    return await runBoundTurn(params);
+    return await runBoundTurn({ ...params, agentLookup, binding });
   } catch (error) {
     if (!isCodexThreadNotFoundError(error)) {
       throw error;
     }
-    const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir, config: params.config });
     const binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
-    const execPolicy = resolveConversationExecPolicy({
-      config: params.config,
-      agentId: params.data.agentId,
-      sessionKey: params.sessionKey,
-    });
-    const useCurrentRuntimePolicy = execPolicy.touched;
-    await startCodexConversationThread({
-      pluginConfig: params.pluginConfig,
-      sessionFile: params.data.sessionFile,
-      workspaceDir: binding?.cwd || params.data.workspaceDir,
-      ...agentLookup,
-      model: binding?.model,
-      modelProvider: binding?.modelProvider,
-      authProfileId: binding?.authProfileId,
-      approvalPolicy: useCurrentRuntimePolicy ? undefined : binding?.approvalPolicy,
-      sandbox: useCurrentRuntimePolicy ? undefined : binding?.sandbox,
-      serviceTier: binding?.serviceTier,
-      config: params.config,
-      sessionKey: params.sessionKey,
-      agentId: params.data.agentId,
-    });
+    await recreateBoundThreadForTurn(params, agentLookup, binding);
     return await runBoundTurn(params);
   }
+}
+
+async function clearStaleConversationBindingForBasePrompt(params: {
+  sessionFile: string;
+  agentLookup: ReturnType<typeof buildAgentLookup>;
+  binding: Awaited<ReturnType<typeof readCodexAppServerBinding>>;
+}): Promise<Awaited<ReturnType<typeof readCodexAppServerBinding>>> {
+  if (!params.agentLookup.agentDir) {
+    return undefined;
+  }
+  const binding = params.binding;
+  if (!binding || binding.baseInstructionsSource === "external-thread") {
+    return undefined;
+  }
+  if (!isConversationBasePromptManagedBinding(binding)) {
+    return undefined;
+  }
+  const basePrompt = await readCodexAppServerAgentBasePrompt({
+    agentDir: params.agentLookup.agentDir,
+  });
+  const currentFingerprint =
+    basePrompt.source === "agent-file" ? basePrompt.fingerprint : undefined;
+  if (binding.baseInstructionsFingerprint === currentFingerprint) {
+    return undefined;
+  }
+  await clearCodexAppServerBinding(params.sessionFile);
+  return binding;
+}
+
+function isConversationBasePromptManagedBinding(binding: CodexAppServerThreadBinding): boolean {
+  if (binding.baseInstructionsSource === "agent-file") {
+    return true;
+  }
+  if (binding.baseInstructionsSource === "external-thread") {
+    return false;
+  }
+  // Legacy `/codex resume` sidecars had no source marker. Leave those attached
+  // unless a binding already carries OpenClaw-owned base prompt metadata.
+  return binding.baseInstructionsFingerprint !== undefined;
+}
+
+async function recreateBoundThreadForTurn(
+  params: Parameters<typeof runBoundTurnWithMissingThreadRecovery>[0],
+  agentLookup: ReturnType<typeof buildAgentLookup>,
+  binding: Awaited<ReturnType<typeof readCodexAppServerBinding>>,
+): Promise<void> {
+  const execPolicy = resolveConversationExecPolicy({
+    config: params.config,
+    agentId: params.data.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const useCurrentRuntimePolicy = execPolicy.touched;
+  await startCodexConversationThread({
+    pluginConfig: params.pluginConfig,
+    sessionFile: params.data.sessionFile,
+    workspaceDir: binding?.cwd || params.data.workspaceDir,
+    ...agentLookup,
+    model: binding?.model,
+    modelProvider: binding?.modelProvider,
+    authProfileId: binding?.authProfileId,
+    approvalPolicy: useCurrentRuntimePolicy ? undefined : binding?.approvalPolicy,
+    sandbox: useCurrentRuntimePolicy ? undefined : binding?.sandbox,
+    serviceTier: binding?.serviceTier,
+    config: params.config,
+    sessionKey: params.sessionKey,
+    agentId: params.data.agentId,
+  });
 }
 
 function resolveConversationExecPolicy(params: {

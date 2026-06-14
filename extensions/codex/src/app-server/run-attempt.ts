@@ -39,7 +39,8 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { readCodexAppServerAgentBasePrompt } from "openclaw/plugin-sdk/codex-app-server-base-prompt";
 import {
   createDiagnosticTraceContextFromActiveScope,
   emitTrustedDiagnosticEvent,
@@ -49,6 +50,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { buildTtsSystemPromptHint } from "openclaw/plugin-sdk/tts-runtime";
 import {
   resolveCodexAppServerForModelProvider,
   resolveCodexAppServerForOpenClawToolPolicy,
@@ -297,10 +299,67 @@ function withCodexAppServerFastModeServiceTier(
 
 function estimateCodexAppServerProjectedTurnTokens(params: {
   prompt: string;
+  baseInstructions?: string;
   developerInstructions?: string;
 }): number {
-  const inputChars = params.prompt.length + (params.developerInstructions?.length ?? 0);
+  const inputChars =
+    params.prompt.length +
+    (params.baseInstructions?.length ?? 0) +
+    (params.developerInstructions?.length ?? 0);
   return Math.max(1, Math.ceil(inputChars / CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN));
+}
+
+function buildCodexAppServerRuntimeLine(params: {
+  modelId: string;
+  defaultModel: string;
+  thinkLevel?: string;
+}): string {
+  return `Runtime: ${[
+    params.modelId ? `model=${params.modelId}` : "",
+    params.defaultModel ? `default_model=${params.defaultModel}` : "",
+    "channel=codex_app_server",
+    "capabilities=none",
+    `thinking=${params.thinkLevel ?? "off"}`,
+  ]
+    .filter(Boolean)
+    .join(" | ")}`;
+}
+
+function buildCodexAppServerModelIdentityLine(modelId: string): string | undefined {
+  const trimmed = modelId.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return `Current model identity: ${trimmed}. If asked what model you are, answer with this value for the current run.`;
+}
+
+function buildCodexAppServerRuntimeDeveloperInstructions(params: {
+  attempt: EmbeddedRunAttemptParams;
+  sessionAgentId: string;
+}): string {
+  const defaultModelRef = resolveDefaultModelForAgent({
+    cfg: params.attempt.config ?? {},
+    agentId: params.sessionAgentId,
+  });
+  const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
+  const ttsHint = params.attempt.config
+    ? buildTtsSystemPromptHint(params.attempt.config, params.sessionAgentId)?.trim()
+    : undefined;
+  const runtimeLines = [
+    "## Runtime",
+    buildCodexAppServerRuntimeLine({
+      modelId: params.attempt.modelId,
+      defaultModel: defaultModelLabel,
+      thinkLevel: params.attempt.thinkLevel,
+    }),
+    buildCodexAppServerModelIdentityLine(params.attempt.modelId),
+    `Reasoning: ${params.attempt.reasoningLevel ?? "off"} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
+  ].filter((line): line is string => typeof line === "string" && line.trim().length > 0);
+  const sections = [
+    ttsHint ? ["## Voice (TTS)", ttsHint].join("\n") : undefined,
+    runtimeLines.join("\n"),
+  ];
+  return sections.filter((section) => section?.trim()).join("\n\n");
 }
 
 async function ensureCodexWorkspaceDirOnce(workspaceDir: string): Promise<void> {
@@ -929,9 +988,25 @@ export async function runCodexAppServerAttempt(
     sessionAgentId,
     memoryToolNames,
   });
+  const appServerBasePrompt = await readCodexAppServerAgentBasePrompt({ agentDir });
+  const appServerBaseInstructions =
+    appServerBasePrompt.source === "agent-file" ? appServerBasePrompt.text : undefined;
+  const appServerBaseInstructionsFingerprint =
+    appServerBasePrompt.source === "agent-file" ? appServerBasePrompt.fingerprint : undefined;
+  const startupBindingWillRotateForBasePrompt =
+    nativeToolSurfaceEnabled &&
+    willBaseInstructionsFingerprintRotateBinding(
+      startupBinding,
+      appServerBaseInstructionsFingerprint,
+    );
+  const runtimeDeveloperInstructions = buildCodexAppServerRuntimeDeveloperInstructions({
+    attempt: params,
+    sessionAgentId,
+  });
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(params, {
       dynamicTools: toolBridge.availableSpecs,
+      runtimeDeveloperInstructions,
     }),
     workspaceBootstrapContext.developerInstructions,
   );
@@ -1048,7 +1123,9 @@ export async function runCodexAppServerAttempt(
   if (activeContextEngine) {
     try {
       await applyActiveContextEngineProjection(
-        !nativeToolSurfaceEnabled ? undefined : startupBinding,
+        !nativeToolSurfaceEnabled || startupBindingWillRotateForBasePrompt
+          ? undefined
+          : startupBinding,
       );
     } catch (assembleErr) {
       embeddedAgentLog.warn("context engine assemble failed; using Codex baseline prompt", {
@@ -1310,6 +1387,7 @@ export async function runCodexAppServerAttempt(
     const hadInactiveThreadBootstrapBinding = isInactiveThreadBootstrapBinding(startupBinding);
     const projectedTurnTokens = estimateCodexAppServerProjectedTurnTokens({
       prompt: codexTurnPromptText,
+      baseInstructions: appServerBaseInstructions,
       developerInstructions: buildRenderedCodexDeveloperInstructions(),
     });
     startupBinding = await rotateOversizedCodexAppServerStartupBinding({
@@ -1489,6 +1567,8 @@ export async function runCodexAppServerAttempt(
       dynamicTools: toolBridge.specs,
       persistentWebSearchAllowed,
       webSearchAllowed,
+      baseInstructions: appServerBaseInstructions,
+      baseInstructionsFingerprint: appServerBaseInstructionsFingerprint,
       developerInstructions: promptBuild.developerInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       bundleMcpThreadConfig,
@@ -3485,6 +3565,23 @@ function buildCodexAppServerTimeoutDiagnostics(params: {
   };
 }
 
+function willBaseInstructionsFingerprintRotateBinding(
+  binding: CodexAppServerThreadBinding | undefined,
+  nextFingerprint: string | undefined,
+): boolean {
+  if (!binding?.threadId) {
+    return false;
+  }
+  if (binding.baseInstructionsSource === "external-thread") {
+    return false;
+  }
+  const managedBinding =
+    binding.baseInstructionsSource === "agent-file" ||
+    binding.baseInstructionsFingerprint !== undefined ||
+    binding.dynamicToolsFingerprint !== undefined;
+  return managedBinding && binding.baseInstructionsFingerprint !== nextFingerprint;
+}
+
 function handleApprovalRequest(params: {
   method: string;
   params: JsonValue | undefined;
@@ -3529,6 +3626,7 @@ export const testing = {
   includeForcedCodexDynamicToolAllow,
   resolveCodexDynamicToolsLoadingForModel,
   resolveCodexAppServerHookChannelId,
+  estimateCodexAppServerProjectedTurnTokens,
   buildCodexAppServerPromptTimeoutOutcome,
   resolveOpenClawCodingToolsSessionKeys,
   shouldEnableCodexAppServerNativeToolSurface,

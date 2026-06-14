@@ -68,6 +68,8 @@ export type CodexAppServerThreadBinding = {
   serviceTier?: CodexServiceTier;
   networkProxyProfileName?: string;
   networkProxyConfigFingerprint?: string;
+  baseInstructionsSource?: "agent-file" | "external-thread";
+  baseInstructionsFingerprint?: string;
   dynamicToolsFingerprint?: string;
   dynamicToolsContainDeferred?: boolean;
   webSearchThreadConfigFingerprint?: string;
@@ -192,6 +194,11 @@ export async function readCodexAppServerBinding(
         typeof parsed.networkProxyConfigFingerprint === "string"
           ? parsed.networkProxyConfigFingerprint
           : undefined,
+      baseInstructionsSource: readBaseInstructionsSource(parsed.baseInstructionsSource),
+      baseInstructionsFingerprint:
+        typeof parsed.baseInstructionsFingerprint === "string"
+          ? parsed.baseInstructionsFingerprint
+          : undefined,
       dynamicToolsFingerprint:
         typeof parsed.dynamicToolsFingerprint === "string"
           ? parsed.dynamicToolsFingerprint
@@ -274,6 +281,8 @@ export async function writeCodexAppServerBinding(
       serviceTier: binding.serviceTier,
       networkProxyProfileName: binding.networkProxyProfileName,
       networkProxyConfigFingerprint: binding.networkProxyConfigFingerprint,
+      baseInstructionsSource: binding.baseInstructionsSource,
+      baseInstructionsFingerprint: binding.baseInstructionsFingerprint,
       dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
       dynamicToolsContainDeferred: binding.dynamicToolsContainDeferred,
       webSearchThreadConfigFingerprint: binding.webSearchThreadConfigFingerprint,
@@ -294,6 +303,12 @@ export async function writeCodexAppServerBinding(
       `${JSON.stringify(payload, null, 2)}\n`,
     );
   });
+}
+
+function readBaseInstructionsSource(
+  value: unknown,
+): CodexAppServerThreadBinding["baseInstructionsSource"] {
+  return value === "agent-file" || value === "external-thread" ? value : undefined;
 }
 
 function readContextEngineBinding(value: unknown): CodexAppServerContextEngineBinding | undefined {

@@ -635,6 +635,83 @@ function formatFullAccessBlockedReason(reason?: EmbeddedFullAccessBlockedReason)
   return "runtime constraints";
 }
 
+function buildSandboxSection(params: {
+  sandboxInfo?: EmbeddedSandboxInfo;
+  hasSessionsSpawn: boolean;
+  acpEnabled: boolean;
+  fullAccessBlockedReasonLabel?: string;
+}): string[] {
+  const { sandboxInfo, hasSessionsSpawn, acpEnabled, fullAccessBlockedReasonLabel } = params;
+  if (!sandboxInfo?.enabled) {
+    return [];
+  }
+
+  const elevated = sandboxInfo.elevated;
+  return [
+    "## Sandbox",
+    [
+      "You are running in a sandboxed runtime (tools execute in Docker).",
+      "Some tools may be unavailable due to sandbox policy.",
+      "Sub-agents stay sandboxed (no elevated/host access). Need outside-sandbox read/write? Don't spawn; ask first.",
+      hasSessionsSpawn && acpEnabled
+        ? 'ACP harness spawns are blocked from sandboxed sessions (`sessions_spawn` with `runtime: "acp"`). Use `runtime: "subagent"` instead.'
+        : "",
+      sandboxInfo.containerWorkspaceDir
+        ? `Sandbox container workdir: ${sanitizeForPromptLiteral(sandboxInfo.containerWorkspaceDir)}`
+        : "",
+      sandboxInfo.workspaceDir
+        ? `Sandbox host mount source (file tools bridge only; not valid inside sandbox exec): ${sanitizeForPromptLiteral(sandboxInfo.workspaceDir)}`
+        : "",
+      sandboxInfo.workspaceAccess
+        ? `Agent workspace access: ${sandboxInfo.workspaceAccess}${
+            sandboxInfo.agentWorkspaceMount
+              ? ` (mounted at ${sanitizeForPromptLiteral(sandboxInfo.agentWorkspaceMount)})`
+              : ""
+          }`
+        : "",
+      sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
+      sandboxInfo.hostBrowserAllowed === true
+        ? "Host browser control: allowed."
+        : sandboxInfo.hostBrowserAllowed === false
+          ? "Host browser control: blocked."
+          : "",
+      elevated?.allowed
+        ? "Elevated exec is available for this session."
+        : elevated
+          ? "Elevated exec is unavailable for this session."
+          : "",
+      elevated?.allowed && elevated.fullAccessAvailable
+        ? "User can toggle with /elevated on|off|ask|full."
+        : "",
+      elevated?.allowed && !elevated.fullAccessAvailable
+        ? "User can toggle with /elevated on|off|ask."
+        : "",
+      elevated?.allowed && elevated.fullAccessAvailable
+        ? "You may also send /elevated on|off|ask|full when needed."
+        : "",
+      elevated?.allowed && !elevated.fullAccessAvailable
+        ? "You may also send /elevated on|off|ask when needed."
+        : "",
+      elevated?.fullAccessAvailable === false && fullAccessBlockedReasonLabel
+        ? `Auto-approved /elevated full is unavailable here (${fullAccessBlockedReasonLabel}).`
+        : "",
+      elevated?.allowed && elevated.fullAccessAvailable
+        ? `Current elevated level: ${elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`
+        : elevated?.allowed
+          ? `Current elevated level: ${elevated.defaultLevel} (full auto-approval unavailable here; use ask/on instead).`
+          : elevated
+            ? "Current elevated level: off (elevated exec unavailable)."
+            : "",
+      elevated && !elevated.allowed
+        ? "Do not tell the user to switch to /elevated full in this session."
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    "",
+  ];
+}
+
 const MODEL_IDENTITY_PREFIX = "Current model identity:";
 
 export function buildModelIdentityPromptLine(model?: string): string | undefined {
@@ -750,7 +827,11 @@ export function buildAgentSystemPrompt(params: {
   };
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
+  /** User-owned complete stable prompt prefix from <agentDir>/agent-base.md. */
+  agentBasePrompt?: string;
   promptContribution?: ProviderSystemPromptContribution;
+  /** Internal static-template mode for generated prompt templates, not live turns. */
+  internalRenderMode?: "agent_base_static_template" | "codex_app_server_static_template";
 }) {
   const acpEnabled = params.acpEnabled === true;
   const promptSurface = params.promptSurface ?? "openclaw_main";
@@ -883,17 +964,6 @@ export function buildAgentSystemPrompt(params: {
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
-  const promptContribution = params.promptContribution;
-  const providerStablePrefix = normalizeProviderPromptBlock(promptContribution?.stablePrefix);
-  const providerDynamicSuffix = normalizeProviderPromptBlock(promptContribution?.dynamicSuffix);
-  const providerSectionOverrides = Object.fromEntries(
-    Object.entries(promptContribution?.sectionOverrides ?? {})
-      .map(([key, value]) => [
-        key,
-        normalizeProviderPromptBlock(typeof value === "string" ? value : undefined),
-      ])
-      .filter(([, value]) => Boolean(value)),
-  ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
   const ownerLine = buildOwnerIdentityLine(
     params.ownerNumbers ?? [],
@@ -926,6 +996,27 @@ export function buildAgentSystemPrompt(params: {
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
+  const agentBasePrompt = params.agentBasePrompt?.replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY, "\n");
+  const useAgentBasePrompt =
+    agentBasePrompt !== undefined && promptMode !== "minimal" && promptMode !== "none";
+  const promptContribution = useAgentBasePrompt ? undefined : params.promptContribution;
+  const providerStablePrefix = normalizeProviderPromptBlock(promptContribution?.stablePrefix);
+  const providerDynamicSuffix = normalizeProviderPromptBlock(promptContribution?.dynamicSuffix);
+  const providerSectionOverrides = Object.fromEntries(
+    Object.entries(promptContribution?.sectionOverrides ?? {})
+      .map(([key, value]) => [
+        key,
+        normalizeProviderPromptBlock(typeof value === "string" ? value : undefined),
+      ])
+      .filter(([, value]) => Boolean(value)),
+  ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
+  const isStaticTemplate =
+    params.internalRenderMode === "agent_base_static_template" ||
+    params.internalRenderMode === "codex_app_server_static_template";
+  const includeProjectContext = !isStaticTemplate;
+  const includeToolsFileGuidance = !isStaticTemplate;
+  const includeRuntimeSessionSections = !isStaticTemplate;
+  const includeAssistantOutputDirectivesInStablePrefix = !isStaticTemplate && !useAgentBasePrompt;
   const subagentDelegationMode = normalizeSubagentDelegationMode(params.subagentDelegationMode);
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const messageChannelOptions = availableTools.has("message")
@@ -992,7 +1083,16 @@ export function buildAgentSystemPrompt(params: {
       .join("\n");
   }
 
-  const contextFiles = prepareContextFilesForPrompt(params.contextFiles);
+  const preparedContextFiles = includeProjectContext
+    ? prepareContextFilesForPrompt(params.contextFiles)
+    : { ordered: [], stable: [], dynamic: [] };
+  const contextFiles = useAgentBasePrompt
+    ? {
+        ordered: preparedContextFiles.ordered,
+        stable: [],
+        dynamic: preparedContextFiles.ordered,
+      }
+    : preparedContextFiles;
   const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections({
     bootstrapMode: params.bootstrapMode,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
@@ -1021,6 +1121,7 @@ export function buildAgentSystemPrompt(params: {
     sourceMessageToolOnly,
     silentReplyPromptMode,
     subagentDelegationMode,
+    internalRenderMode: params.internalRenderMode,
     sandboxInfo: params.sandboxInfo,
     displayWorkspaceDir,
     workspaceGuidance,
@@ -1035,27 +1136,34 @@ export function buildAgentSystemPrompt(params: {
     includeMemorySection: params.includeMemorySection,
     memoryCitationsMode: params.memoryCitationsMode,
     memorySection,
+    agentBasePrompt,
     acpEnabled,
     stableContextFiles: contextFiles.stable,
   });
   const stablePrefix = cacheStablePromptPrefix(stablePrefixCacheKey, () => {
+    if (useAgentBasePrompt) {
+      return `${agentBasePrompt}${SYSTEM_PROMPT_CACHE_BOUNDARY}`;
+    }
+
     const lines = [
       "You are a personal assistant running inside OpenClaw.",
       "",
       "## Tooling",
       "Available tools are policy-filtered. Names are case-sensitive; call exactly as listed.",
-      toolLines.length > 0
-        ? toolLines.join("\n")
-        : buildOpenClawToolFallbackText({
-            surface: promptSurface,
-            execToolName,
-            processToolName,
-          }),
-      ...(toolSchemaDirectoryPrompt
+      isStaticTemplate
+        ? "Use only tools exposed directly by the active runtime."
+        : toolLines.length > 0
+          ? toolLines.join("\n")
+          : buildOpenClawToolFallbackText({
+              surface: promptSurface,
+              execToolName,
+              processToolName,
+            }),
+      ...(!isStaticTemplate && toolSchemaDirectoryPrompt
         ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
         : []),
-      "TOOLS.md is usage guidance, not availability.",
-      ...(renderOpenClawToolWorkflowHints
+      includeToolsFileGuidance ? "TOOLS.md is usage guidance, not availability." : "",
+      ...(!isStaticTemplate && renderOpenClawToolWorkflowHints
         ? [
             `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
             "Larger work: use `sessions_spawn`; completion is push-based.",
@@ -1156,99 +1264,59 @@ export function buildAgentSystemPrompt(params: {
       userTimezone
         ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
         : "",
-      "## Workspace",
-      `Your working directory is: ${displayWorkspaceDir}`,
-      workspaceGuidance,
-      workspaceOnlyGuidance,
-      ...workspaceNotes,
-      "",
-      ...docsSection,
-      params.sandboxInfo?.enabled ? "## Sandbox" : "",
-      params.sandboxInfo?.enabled
+      ...(includeProjectContext
         ? [
-            "You are running in a sandboxed runtime (tools execute in Docker).",
-            "Some tools may be unavailable due to sandbox policy.",
-            "Sub-agents stay sandboxed (no elevated/host access). Need outside-sandbox read/write? Don't spawn; ask first.",
-            hasSessionsSpawn && acpEnabled
-              ? 'ACP harness spawns are blocked from sandboxed sessions (`sessions_spawn` with `runtime: "acp"`). Use `runtime: "subagent"` instead.'
-              : "",
-            params.sandboxInfo.containerWorkspaceDir
-              ? `Sandbox container workdir: ${sanitizeForPromptLiteral(params.sandboxInfo.containerWorkspaceDir)}`
-              : "",
-            params.sandboxInfo.workspaceDir
-              ? `Sandbox host mount source (file tools bridge only; not valid inside sandbox exec): ${sanitizeForPromptLiteral(params.sandboxInfo.workspaceDir)}`
-              : "",
-            params.sandboxInfo.workspaceAccess
-              ? `Agent workspace access: ${params.sandboxInfo.workspaceAccess}${
-                  params.sandboxInfo.agentWorkspaceMount
-                    ? ` (mounted at ${sanitizeForPromptLiteral(params.sandboxInfo.agentWorkspaceMount)})`
-                    : ""
-                }`
-              : "",
-            params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
-            params.sandboxInfo.hostBrowserAllowed === true
-              ? "Host browser control: allowed."
-              : params.sandboxInfo.hostBrowserAllowed === false
-                ? "Host browser control: blocked."
-                : "",
-            elevated?.allowed
-              ? "Elevated exec is available for this session."
-              : elevated
-                ? "Elevated exec is unavailable for this session."
-                : "",
-            elevated?.allowed && elevated.fullAccessAvailable
-              ? "User can toggle with /elevated on|off|ask|full."
-              : "",
-            elevated?.allowed && !elevated.fullAccessAvailable
-              ? "User can toggle with /elevated on|off|ask."
-              : "",
-            elevated?.allowed && elevated.fullAccessAvailable
-              ? "You may also send /elevated on|off|ask|full when needed."
-              : "",
-            elevated?.allowed && !elevated.fullAccessAvailable
-              ? "You may also send /elevated on|off|ask when needed."
-              : "",
-            elevated?.fullAccessAvailable === false
-              ? `Auto-approved /elevated full is unavailable here (${fullAccessBlockedReasonLabel}).`
-              : "",
-            elevated?.allowed && elevated.fullAccessAvailable
-              ? `Current elevated level: ${elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`
-              : elevated?.allowed
-                ? `Current elevated level: ${elevated.defaultLevel} (full auto-approval unavailable here; use ask/on instead).`
-                : elevated
-                  ? "Current elevated level: off (elevated exec unavailable)."
-                  : "",
-            elevated && !elevated.allowed
-              ? "Do not tell the user to switch to /elevated full in this session."
-              : "",
+            "## Workspace",
+            `Your working directory is: ${displayWorkspaceDir}`,
+            workspaceGuidance,
+            workspaceOnlyGuidance,
+            ...workspaceNotes,
+            "",
           ]
-            .filter(Boolean)
-            .join("\n")
-        : "",
-      params.sandboxInfo?.enabled ? "" : "",
+        : []),
+      ...docsSection,
+      ...buildSandboxSection({
+        sandboxInfo: params.sandboxInfo,
+        hasSessionsSpawn,
+        acpEnabled,
+        fullAccessBlockedReasonLabel,
+      }),
+      ...buildUserIdentitySection(ownerLine, isMinimal),
       ...buildTimeSection({
         userTimezone,
       }),
       ...bootstrapSystemPromptSections,
-      "## Workspace Files (injected)",
-      "These user-editable files are loaded by OpenClaw and included below in Project Context.",
-      "",
-      ...buildAssistantOutputDirectivesSection({ isMinimal, sourceMessageToolOnly }),
+      ...(includeProjectContext
+        ? [
+            "## Workspace Files (injected)",
+            "These user-editable files are loaded by OpenClaw and included below in Project Context.",
+            "",
+          ]
+        : []),
+      ...(includeAssistantOutputDirectivesInStablePrefix
+        ? buildAssistantOutputDirectivesSection({ isMinimal, sourceMessageToolOnly })
+        : []),
     ];
 
     if (reasoningHint) {
       lines.push("## Reasoning Format", reasoningHint, "");
     }
 
-    lines.push(
-      ...buildProjectContextSection({
-        files: contextFiles.stable,
-        heading: "# Project Context",
-        dynamic: false,
-      }),
-    );
+    if (includeProjectContext) {
+      lines.push(
+        ...buildProjectContextSection({
+          files: contextFiles.stable,
+          heading: "# Project Context",
+          dynamic: false,
+        }),
+      );
+    }
 
-    if (!isMinimal && silentReplyPromptMode !== "none") {
+    if (
+      includeAssistantOutputDirectivesInStablePrefix &&
+      !isMinimal &&
+      silentReplyPromptMode !== "none"
+    ) {
       lines.push(
         "## Silent Replies",
         `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN}`,
@@ -1265,19 +1333,72 @@ export function buildAgentSystemPrompt(params: {
       );
     }
 
-    lines.push(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    if (!isStaticTemplate) {
+      lines.push(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    }
     return lines.filter(Boolean).join("\n");
   });
 
   const lines = [stablePrefix];
 
-  lines.push(
-    ...buildProjectContextSection({
-      files: contextFiles.dynamic,
-      heading: contextFiles.stable.length > 0 ? "# Dynamic Project Context" : "# Project Context",
-      dynamic: true,
-    }),
-  );
+  if (isStaticTemplate) {
+    return lines.filter(Boolean).join("\n");
+  }
+
+  if (useAgentBasePrompt) {
+    lines.push(
+      ...skillsSection,
+      ...skillWorkshopSection,
+      ...memorySection,
+      "## Workspace",
+      `Your working directory is: ${displayWorkspaceDir}`,
+      workspaceGuidance,
+      workspaceOnlyGuidance,
+      ...workspaceNotes,
+      "",
+      ...buildSandboxSection({
+        sandboxInfo: params.sandboxInfo,
+        hasSessionsSpawn,
+        acpEnabled,
+        fullAccessBlockedReasonLabel,
+      }),
+      ...buildUserIdentitySection(ownerLine, isMinimal),
+      ...buildTimeSection({ userTimezone }),
+      ...bootstrapSystemPromptSections,
+      ...buildAssistantOutputDirectivesSection({ isMinimal, sourceMessageToolOnly }),
+    );
+    if (!isMinimal && silentReplyPromptMode !== "none") {
+      lines.push(
+        "## Silent Replies",
+        `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN}`,
+        "⚠️ Rules:",
+        "- It must be your ENTIRE message — nothing else",
+        `- Never append it to an actual response (never include "${SILENT_REPLY_TOKEN}" in real replies)`,
+        "- Never wrap it in markdown or code blocks",
+        `❌ Wrong: "Here's help... ${SILENT_REPLY_TOKEN}"`,
+        `❌ Wrong: "${SILENT_REPLY_TOKEN}"`,
+        `✅ Right: ${SILENT_REPLY_TOKEN}`,
+        "",
+      );
+    }
+    if (includeProjectContext) {
+      lines.push(
+        "## Workspace Files (injected)",
+        "These user-editable files are loaded by OpenClaw and included below in Project Context.",
+        "",
+      );
+    }
+  }
+
+  if (includeProjectContext) {
+    lines.push(
+      ...buildProjectContextSection({
+        files: contextFiles.dynamic,
+        heading: contextFiles.stable.length > 0 ? "# Dynamic Project Context" : "# Project Context",
+        dynamic: true,
+      }),
+    );
+  }
 
   // Channel/session-specific guidance lives below the cache boundary so large
   // stable workspace context can remain a byte-identical prefix across turns.
@@ -1312,7 +1433,9 @@ export function buildAgentSystemPrompt(params: {
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
       silentReplyPromptMode,
     }),
-    ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
+    ...(includeRuntimeSessionSections
+      ? buildVoiceSection({ isMinimal, ttsHint: params.ttsHint })
+      : []),
   );
 
   if (extraSystemPrompt) {
@@ -1350,13 +1473,15 @@ export function buildAgentSystemPrompt(params: {
 
   lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
 
-  lines.push(
-    "## Runtime",
-    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
-    ...(modelIdentityLine ? [modelIdentityLine] : []),
-    ...buildActiveProcessSessionReferenceLines(runtimeInfo?.activeProcessSessions),
-    `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
-  );
+  if (includeRuntimeSessionSections) {
+    lines.push(
+      "## Runtime",
+      buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
+      ...(modelIdentityLine ? [modelIdentityLine] : []),
+      ...buildActiveProcessSessionReferenceLines(runtimeInfo?.activeProcessSessions),
+      `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
+    );
+  }
 
   return lines.filter(Boolean).join("\n");
 }

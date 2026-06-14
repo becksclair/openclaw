@@ -150,6 +150,9 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(llmInputPayload.imagesCount).toBe(0);
     expect(llmInputPayload.historyMessages).toEqual([]);
     expect(llmInputPayload.systemPrompt).toContain(
+      "OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
+    );
+    expect(llmInputPayload.systemPrompt).not.toContain(
       "You are a personal agent running inside OpenClaw.",
     );
     expect(llmInputPayload.systemPrompt).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
@@ -360,6 +363,9 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       expect(JSON.stringify(startedContent?.inputMessages)).toContain("hello");
       expect(JSON.stringify(startedContent?.inputMessages)).not.toContain("existing context");
       expect(startedContent?.systemPrompt).toContain(
+        "OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
+      );
+      expect(startedContent?.systemPrompt).not.toContain(
         "You are a personal agent running inside OpenClaw.",
       );
       expect(completedEvent?.callId).toBe("diagnostic-run-1:codex-model:1");

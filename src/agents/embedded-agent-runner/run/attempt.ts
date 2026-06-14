@@ -91,6 +91,7 @@ import {
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
+import { readAgentBasePrompt } from "../../agent-base-prompt.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import {
   getOrCreateSessionMcpRuntime,
@@ -1988,6 +1989,12 @@ export async function runEmbeddedAttempt(
     // When toolsAllow is set, use minimal prompt and strip skills catalog
     const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
     const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
+    const agentBasePrompt =
+      !isRawModelRun && effectivePromptMode === "full" && promptSurface === "openclaw_main"
+        ? await readAgentBasePrompt({ agentDir })
+        : { source: "none" as const };
+    const activeAgentBasePrompt =
+      agentBasePrompt.source === "agent-file" ? agentBasePrompt.text : undefined;
     const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
@@ -2012,7 +2019,7 @@ export async function runEmbeddedAttempt(
       params.bootstrapContextRunKind === "commitment-only" ? undefined : params.trigger;
     const promptContributionContext = {
       config: params.config,
-      agentDir: params.agentDir,
+      agentDir,
       workspaceDir: effectiveWorkspace,
       provider: params.provider,
       modelId: params.modelId,
@@ -2023,14 +2030,16 @@ export async function runEmbeddedAttempt(
       trigger: promptContributionTrigger,
     };
     const promptContribution =
-      params.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??
-      resolveProviderSystemPromptContribution({
-        provider: params.provider,
-        config: params.config,
-        workspaceDir: effectiveWorkspace,
-        runtimeHandle: getProviderRuntimeHandle(),
-        context: promptContributionContext,
-      });
+      activeAgentBasePrompt !== undefined
+        ? undefined
+        : (params.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??
+          resolveProviderSystemPromptContribution({
+            provider: params.provider,
+            config: params.config,
+            workspaceDir: effectiveWorkspace,
+            runtimeHandle: getProviderRuntimeHandle(),
+            context: promptContributionContext,
+          }));
 
     const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
       bootstrapPromptWarning.lines,
@@ -2082,6 +2091,7 @@ export async function runEmbeddedAttempt(
         bootstrapTruncationNotice,
         includeMemorySection: !activeContextEngine || activeContextEngine.info.id === "legacy",
         promptContribution,
+        agentBasePrompt: activeAgentBasePrompt,
       },
       providerTransform: {
         provider: params.provider,
