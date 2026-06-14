@@ -101,6 +101,8 @@ export async function startCodexAttemptThread(params: {
   dynamicTools: CodexDynamicToolSpec[];
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
+  baseInstructions?: string;
+  baseInstructionsFingerprint?: string;
   developerInstructions: string | undefined;
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
@@ -318,6 +320,8 @@ export async function startCodexAttemptThread(params: {
                 persistentWebSearchAllowed: params.persistentWebSearchAllowed,
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
+                baseInstructions: params.baseInstructions,
+                baseInstructionsFingerprint: params.baseInstructionsFingerprint,
                 developerInstructions: params.developerInstructions,
                 config: threadConfig,
                 finalConfigPatch: params.finalConfigPatch,

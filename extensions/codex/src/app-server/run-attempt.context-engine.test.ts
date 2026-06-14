@@ -745,6 +745,78 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await secondRun;
   });
 
+  it("reprojects thread-bootstrap context when base prompt rotation starts a fresh thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(agentDir, "agent-base.md"), "custom sky base\n", "utf8");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("bootstrap context after base rotation", Date.now()) as never,
+    );
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+      baseInstructionsSource: "agent-file",
+      baseInstructionsFingerprint: "sha256:old",
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint:
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+        },
+      },
+    });
+    const contextEngine = createContextEngine({
+      assemble: vi.fn(async ({ messages, prompt }) => ({
+        messages: [...messages, userMessage(prompt ?? "", 10)],
+        estimatedTokens: 42,
+        systemPromptAddition: "context-engine system",
+        contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
+      })),
+    });
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-new");
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+    params.contextEngine = contextEngine;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/start",
+      "turn/start",
+    ]);
+    expect(requireRequestParams(harness, "thread/start").baseInstructions).toBe(
+      "custom sky base\n",
+    );
+    expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
+    expectRequestInputTextContains(harness, "bootstrap context after base rotation");
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-new");
+    expect(savedBinding?.baseInstructionsSource).toBe("agent-file");
+    expect(savedBinding?.baseInstructionsFingerprint).not.toBe("sha256:old");
+    expect(savedBinding?.contextEngine?.projection).toEqual({
+      schemaVersion: 1,
+      mode: "thread_bootstrap",
+      epoch: "epoch-1",
+      fingerprint: undefined,
+    });
+
+    await harness.completeTurn("completed", "thread-new");
+    await run;
+  });
+
   it("resumes a matching thread-bootstrap binding even when the bootstrap turn exceeded the opt-in native byte guard", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

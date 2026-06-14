@@ -50,9 +50,12 @@ longer package exports: `agent-runtime-test-contracts`,
 ### Reserved bundled plugin helper subpaths
 
 These subpaths are plugin-owned compatibility surfaces for their owning bundled
-plugin, not general SDK APIs: `plugin-sdk/codex-mcp-projection` and
-`plugin-sdk/codex-native-task-runtime`. Cross-owner extension imports are blocked
-by package contract guardrails.
+plugin, not general SDK APIs: `plugin-sdk/codex-app-server-base-prompt`,
+`plugin-sdk/codex-mcp-projection`, and `plugin-sdk/codex-native-task-runtime`.
+Cross-owner extension imports are blocked by package contract guardrails.
+The Codex base-prompt helper name is kept for compatibility; it reads canonical
+`agent-base.md` overrides first and falls back to the Codex-only legacy
+`app-server-base.md` alias.
 
 <AccordionGroup>
   <Accordion title="Channel subpaths">
@@ -392,6 +395,7 @@ usage endpoint failed or returned no usable usage data.
 
     | Subpath | Owner and purpose |
     | --- | --- |
+    | `plugin-sdk/codex-app-server-base-prompt` | Bundled Codex plugin helper for reading the user-owned `agent-base.md` base prompt override, with Codex-only `app-server-base.md` fallback |
     | `plugin-sdk/codex-mcp-projection` | Bundled Codex plugin helper for projecting user MCP server config into Codex app-server thread config |
     | `plugin-sdk/codex-native-task-runtime` | Bundled Codex plugin helper for mirroring Codex app-server native subagents into OpenClaw task state |
 

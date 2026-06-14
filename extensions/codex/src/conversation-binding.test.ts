@@ -71,6 +71,7 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
 
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
+import { writeCodexAppServerBinding } from "./app-server/session-binding.js";
 import {
   handleCodexConversationBindingResolved,
   handleCodexConversationInboundClaim,
@@ -141,6 +142,7 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
 
 describe("codex conversation binding", () => {
   beforeEach(async () => {
+    vi.stubEnv("OPENCLAW_CODEX_FORCE_FULL_ACCESS", "");
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-"));
   });
 
@@ -379,6 +381,285 @@ describe("codex conversation binding", () => {
     };
     expect(sharedClientParams?.agentDir).toBe(agentDir);
     expect(data.agentDir).toBe(agentDir);
+  });
+
+  it("recreates managed conversation-bound threads when an agent base prompt appears", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const notificationHandlers: Array<(notification: Record<string, unknown>) => void> = [];
+    let startedThreads = 0;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        if (method === "thread/start") {
+          startedThreads += 1;
+          return {
+            thread: {
+              id: startedThreads === 1 ? "thread-old" : "thread-new",
+              sessionId: "session-1",
+              cwd: tempDir,
+            },
+            model: "gpt-5.4-mini",
+          };
+        }
+        if (method === "turn/start" && requestParams.threadId === "thread-new") {
+          setImmediate(() => {
+            for (const handler of notificationHandlers) {
+              handler({
+                method: "turn/completed",
+                params: {
+                  threadId: "thread-new",
+                  turn: {
+                    id: "turn-new",
+                    status: "completed",
+                    items: [{ id: "assistant-1", type: "agentMessage", text: "fresh" }],
+                  },
+                },
+              });
+            }
+          });
+          return { turn: { id: "turn-new" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler) => {
+        notificationHandlers.push(handler);
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const data = await startCodexConversationThread({
+      sessionFile,
+      workspaceDir: tempDir,
+      agentDir,
+      model: "gpt-5.4-mini",
+    });
+    expect(requests[0]?.params).not.toHaveProperty("baseInstructions");
+    await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
+      '"baseInstructionsSource": "agent-file"',
+    );
+
+    await fs.writeFile(path.join(agentDir, "agent-base.md"), "new base\n", "utf8");
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "hi",
+        bodyForAgent: "hi",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data,
+        },
+      },
+      { timeoutMs: 500 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "fresh" } });
+    expect(requests.map((request) => request.method)).toEqual([
+      "thread/start",
+      "thread/start",
+      "turn/start",
+    ]);
+    expect(requests[1]?.params.baseInstructions).toBe("new base\n");
+    const savedBinding = JSON.parse(
+      await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
+    );
+    expect(savedBinding.threadId).toBe("thread-new");
+    expect(savedBinding.baseInstructionsSource).toBe("agent-file");
+    expect(savedBinding.baseInstructionsFingerprint).toMatch(/^sha256:/);
+  });
+
+  it("recreates conversation-bound threads when the agent base prompt changes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(agentDir, "agent-base.md"), "new base\n", "utf8");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: tempDir,
+      model: "gpt-5.4-mini",
+      baseInstructionsSource: "agent-file",
+      baseInstructionsFingerprint: "sha256:old",
+    });
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const notificationHandlers: Array<(notification: Record<string, unknown>) => void> = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        if (method === "thread/start") {
+          return {
+            thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
+            model: "gpt-5.4-mini",
+          };
+        }
+        if (method === "turn/start" && requestParams.threadId === "thread-new") {
+          setImmediate(() => {
+            for (const handler of notificationHandlers) {
+              handler({
+                method: "turn/completed",
+                params: {
+                  threadId: "thread-new",
+                  turn: {
+                    id: "turn-new",
+                    status: "completed",
+                    items: [{ id: "assistant-1", type: "agentMessage", text: "fresh" }],
+                  },
+                },
+              });
+            }
+          });
+          return { turn: { id: "turn-new" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler) => {
+        notificationHandlers.push(handler);
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "hi",
+        bodyForAgent: "hi",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+            agentDir,
+          },
+        },
+      },
+      { timeoutMs: 500 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "fresh" } });
+    expect(requests.map((request) => request.method)).toEqual(["thread/start", "turn/start"]);
+    expect(requests[0]?.params.baseInstructions).toBe("new base\n");
+    const savedBinding = JSON.parse(
+      await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
+    );
+    expect(savedBinding.threadId).toBe("thread-new");
+    expect(savedBinding.baseInstructionsSource).toBe("agent-file");
+    expect(savedBinding.baseInstructionsFingerprint).not.toBe("sha256:old");
+  });
+
+  it("preserves legacy unmarked attached conversation threads when an agent base prompt exists", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(agentDir, "agent-base.md"), "new base\n", "utf8");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-legacy-attached",
+      cwd: tempDir,
+      model: "gpt-5.4-mini",
+    });
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const notificationHandlers: Array<(notification: Record<string, unknown>) => void> = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        if (method === "thread/resume") {
+          return {
+            thread: { id: "thread-legacy-attached", sessionId: "session-1", cwd: tempDir },
+            model: "gpt-5.4-mini",
+          };
+        }
+        if (method === "turn/start" && requestParams.threadId === "thread-legacy-attached") {
+          setImmediate(() => {
+            for (const handler of notificationHandlers) {
+              handler({
+                method: "turn/completed",
+                params: {
+                  threadId: "thread-legacy-attached",
+                  turn: {
+                    id: "turn-legacy",
+                    status: "completed",
+                    items: [{ id: "assistant-1", type: "agentMessage", text: "legacy" }],
+                  },
+                },
+              });
+            }
+          });
+          return { turn: { id: "turn-legacy" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler) => {
+        notificationHandlers.push(handler);
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "hi",
+        bodyForAgent: "hi",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+            agentDir,
+          },
+        },
+      },
+      { timeoutMs: 500 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "legacy" } });
+    expect(requests.map((request) => request.method)).toEqual(["turn/start"]);
+    expect(requests[0]?.params).not.toHaveProperty("baseInstructions");
+    const savedBinding = JSON.parse(
+      await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
+    );
+    expect(savedBinding.threadId).toBe("thread-legacy-attached");
+    expect(savedBinding.baseInstructionsSource).toBeUndefined();
+    expect(savedBinding.baseInstructionsFingerprint).toBeUndefined();
   });
 
   it("rejects binding when configured exec auto mode may need unrouted human approvals", async () => {

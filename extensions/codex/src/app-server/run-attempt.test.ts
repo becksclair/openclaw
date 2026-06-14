@@ -1231,6 +1231,96 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("passes agent-scoped agent base prompt only on thread/start", async () => {
+    const sessionFile = path.join(tempDir, "session-agent-base.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-agent-base");
+    const agentDir = path.join(tempDir, "agents", "sky", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(agentDir, "agent-base.md"), "custom sky base\n", "utf8");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const threadStartParams = threadStart?.params as {
+      baseInstructions?: string;
+      developerInstructions?: string;
+    };
+    expect(threadStartParams.baseInstructions).toBe("custom sky base\n");
+    expect(threadStartParams.developerInstructions).toContain("OpenClaw has dynamic tools");
+    expect(threadStartParams.developerInstructions).toContain("## Runtime");
+    expect(threadStartParams.developerInstructions).toContain("Runtime: model=gpt-5.4-codex");
+    expect(threadStartParams.developerInstructions).toContain("channel=codex_app_server");
+    expect(threadStartParams.developerInstructions).toContain(
+      "Current model identity: gpt-5.4-codex.",
+    );
+    expect(threadStartParams.baseInstructions).not.toContain("## Runtime");
+    expect(threadStartParams.baseInstructions).not.toContain("## Voice (TTS)");
+    expect(threadStartParams.baseInstructions).not.toContain("Current model identity:");
+    expect(threadStartParams.developerInstructions).not.toContain("custom sky base");
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    expect(turnStart?.params).not.toHaveProperty("baseInstructions");
+  });
+
+  it("uses app-server-base.md as a Codex-only compatibility fallback", async () => {
+    const sessionFile = path.join(tempDir, "session-agent-base-fallback.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-agent-base-fallback");
+    const agentDir = path.join(tempDir, "agents", "sky", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(agentDir, "app-server-base.md"), "legacy sky base\n", "utf8");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    expect(threadStart?.params).toMatchObject({ baseInstructions: "legacy sky base\n" });
+  });
+
+  it("counts app-server base instructions in projected turn tokens", () => {
+    const projectedWithoutBase = testing.estimateCodexAppServerProjectedTurnTokens({
+      prompt: "p".repeat(4),
+      developerInstructions: "d".repeat(4),
+    });
+    const projectedWithBase = testing.estimateCodexAppServerProjectedTurnTokens({
+      prompt: "p".repeat(4),
+      baseInstructions: "b".repeat(8),
+      developerInstructions: "d".repeat(4),
+    });
+
+    expect(projectedWithoutBase).toBe(2);
+    expect(projectedWithBase).toBe(4);
+  });
+
+  it("omits baseInstructions when only global base prompt templates exist", async () => {
+    const sessionFile = path.join(tempDir, "session-global-template.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-global-template");
+    const agentDir = path.join(tempDir, "agents", "sky", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(tempDir, "agent-base.md"), "global agent template\n", "utf8");
+    await fs.writeFile(path.join(tempDir, "app-server-base.md"), "global template\n", "utf8");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    expect(threadStart?.params).not.toHaveProperty("baseInstructions");
+  });
+
   it("emits TUI-compatible tool events for Codex dynamic tool calls", async () => {
     const sessionFile = path.join(tempDir, "session-tool-events.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-tool-events");

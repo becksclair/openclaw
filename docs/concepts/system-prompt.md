@@ -6,7 +6,8 @@ read_when:
 title: "System prompt"
 ---
 
-OpenClaw builds a custom system prompt for every agent run. The prompt is **OpenClaw-owned** and does not use a runtime default prompt.
+OpenClaw builds a custom system prompt for every agent run. The prompt is
+**OpenClaw-owned** by default and does not use a runtime default prompt.
 
 The prompt is assembled by OpenClaw and injected into each agent run.
 
@@ -40,6 +41,33 @@ The OpenAI GPT-5 family overlay keeps the core execution rule small and adds
 model-specific guidance for persona latching, concise output, tool discipline,
 parallel lookup, deliverable coverage, verification, missing context, and
 terminal-tool hygiene.
+
+## Agent base prompt overrides
+
+Agents can opt into a user-owned stable base prefix by copying the generated
+template from `<stateDir>/agent-base.md` (normally `~/.openclaw/agent-base.md`)
+to `<agentDir>/agent-base.md` (normally
+`~/.openclaw/agents/<agentId>/agent/agent-base.md`). Gateway startup
+regenerates the global template, but never creates or overwrites agent-owned
+base files.
+
+When an agent-owned `agent-base.md` exists, embedded OpenClaw full/main runs use
+that exact text as the stable prefix before the internal prompt cache boundary.
+OpenClaw then appends live runtime sections below the boundary: Workspace,
+Messaging, Assistant Output Directives, Silent Replies, Voice/TTS, Runtime,
+heartbeat, memory, skills, group/subagent context, and workspace context files.
+
+The generated template includes the default OpenClaw base behavior plus the
+static GPT-5/OpenAI/Codex behavior overlay. It intentionally omits
+`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `MEMORY.md`,
+skills, heartbeat, Messaging, Workspace, Runtime, Voice/TTS, Assistant Output
+Directives, Silent Replies, current time, and workspace context contents.
+
+Native Codex app-server runs also use `<agentDir>/agent-base.md` as
+`thread/start.baseInstructions`. For compatibility, Codex app-server still
+accepts `<agentDir>/app-server-base.md` when `agent-base.md` is absent; the
+canonical file takes precedence. Global templates are inert until copied into
+an agent directory.
 
 ## Structure
 
@@ -202,6 +230,12 @@ a curated long-term summary; detailed daily notes belong in `memory/*.md` where
 `memory_search` and `memory_get` can retrieve them on demand. Oversized
 non-Codex `MEMORY.md` files increase prompt usage and can be partially injected
 because of the bootstrap file limits below.
+
+When an embedded OpenClaw full/main run has an agent-owned `agent-base.md`,
+bootstrap files are no longer part of the stable base prefix. They are appended
+below the cache boundary with the rest of the live runtime/context tail, so the
+editable base file can stay focused on identity, personality, and stable
+operating policy.
 
 <Note>
 `memory/*.md` daily files are **not** part of the normal bootstrap Project Context. On ordinary turns they are accessed on demand via the `memory_search` and `memory_get` tools, so they do not count against the context window unless the model explicitly reads them. Bare `/new` and `/reset` turns are the exception: the runtime can prepend recent daily memory as a one-shot startup-context block for that first turn.

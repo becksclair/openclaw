@@ -1,5 +1,6 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { ensureAgentAndCodexAppServerBasePromptTemplates } from "../agents/codex-app-server-base-prompt.js";
 import {
   getActiveEmbeddedRunCount,
   resolveActiveEmbeddedRunSessionId,
@@ -687,6 +688,18 @@ export async function startGatewayServer(
     startupLastGoodSnapshot = startupSnapshot;
   }
   setRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
+  if (!isVitestRuntimeEnv() || process.env.OPENCLAW_STATE_DIR) {
+    await startupTrace.measure("agent.base-template", async () => {
+      try {
+        await ensureAgentAndCodexAppServerBasePromptTemplates({
+          config: cfgAtStart,
+          env: process.env,
+        });
+      } catch (error) {
+        log.warn(`gateway: failed to write agent base prompt templates: ${String(error)}`);
+      }
+    });
+  }
   const { prepareGatewayPluginBootstrap } = await loadStartupPluginsModule();
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
     prepareGatewayPluginBootstrap({

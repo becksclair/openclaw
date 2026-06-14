@@ -30,6 +30,7 @@ Replay classification:
 | Exec safe-bin realpath trust              | Partial-overlap carry | Medium     | Target has adjacent exec trust hardening, but not the invariant that both the invoked symlink path and real target directory must be trusted.                                                                                                                                                                                                           |
 | Docker replay validation directives       | Support/proof carry   | Medium     | Target root instructions still lack Bex's fork-replay Docker-clean broad-proof exception and private-state isolation warnings.                                                                                                                                                                                                                          |
 | Codex app-server force full access        | Runtime carry         | Medium     | Target has no `OPENCLAW_CODEX_FORCE_FULL_ACCESS` toggle; native Codex app-server policy is subject to OpenClaw guardian/exec-mode/promotion/binding downgrades. Replay carries the clamp to `danger-full-access` + `never` + `user` at the resolver output, the tool-policy promotion bail, the bound thread/turn builders, and the side-question fork. |
+| Generic agent base prompt                 | Runtime carry         | Medium     | Target still has no harness-neutral `agent-base.md` convention for embedded OpenClaw/full prompts or native Codex `baseInstructions`, no generated global template at startup, and no base prompt fingerprint in native Codex thread bindings.                                                                                                          |
 | Android and Discord realtime audio        | Absorbed upstream     | High       | Target already carries Android Gateway Talk relay and Discord realtime voice. Replay keeps dependent Wear code and focused relay fixes only.                                                                                                                                                                                                            |
 | Telegram transcribed-audio TTS intent     | Absorbed upstream     | Medium     | Target shared reply dispatch still preserves TTS intent for transcribed inbound audio. No source carry unless focused proof regresses.                                                                                                                                                                                                                  |
 | Agent-scoped TTS conversion config        | Dropped               | Low        | No missing implementation was proved on v2026.6.5; no source carry.                                                                                                                                                                                                                                                                                     |
@@ -84,6 +85,8 @@ Replay classification:
 - `ci-replay-repair-2026-05-20` - pending/drop candidate: v2026.5.22 has moved past the v2026.5.18 CI repair context; do not replay stale CI repairs unless broad proof fails for the same dependency-contract class.
 - `docker-replay-validation` - support/proof carry: keep the root `AGENTS.md` Docker-first Bex fork replay directives and run fork replay, build proof, and broad tests in a clean Docker validation container before deploying to Bex's live Gateway; use host-local tests only for targeted checks that intentionally depend on Bex's local environment.
 - `codex-app-server-force-full-access` - active seam: when `OPENCLAW_CODEX_FORCE_FULL_ACCESS` is set, the native Codex app-server runtime clamps to `sandbox: danger-full-access` + `approvalPolicy: never` + `approvalsReviewer: user` (unrestricted network is implied by danger-full-access at the Codex protocol level) at the resolver output, the OpenClaw tool-policy promotion bail, the bound thread/turn request builders, and the side-question fork. This defeats OpenClaw-side exec-mode/guardian/promotion/binding downgrades. Opt-in, default off; `/etc/codex/requirements.toml` is intentionally not consulted (this fork does not use it).
+
+- `generic-agent-base-prompt` - active seam: keep the generated global `agent-base.md` template and the agent-scoped runtime override convention for embedded OpenClaw/full prompts and native Codex app-server `baseInstructions`. Gateway startup regenerates `<stateDir>/agent-base.md`; only `<agentDir>/agent-base.md` affects runtime. Codex app-server also accepts `<agentDir>/app-server-base.md` as a legacy alias when the canonical file is absent.
 
 ## Seam inventory
 
@@ -718,3 +721,60 @@ Rebase notes:
 - Reuse the existing `readBooleanEnv` truthiness contract; do not add a second env parser.
 - Codex hard-gate: re-verify the wire values against sibling `../codex` on each upstream bump — `sandbox: "danger-full-access"` (SandboxMode), `sandboxPolicy: { type: "dangerFullAccess" }` (v2 SandboxPolicy), `approvalPolicy: "never"` (AskForApproval); danger-full-access implies full network with no separate flag.
 - Do not add `requirements.toml` handling unless the fork starts using it.
+
+### Generic agent base prompt
+
+Carry behavior: Gateway startup regenerates the latest-code generic base prompt template at `<stateDir>/agent-base.md`, normally `~/.openclaw/agent-base.md`. That file is documentation/template only. Runtime activates the custom base prompt only when the resolved agent directory contains `agent-base.md`, normally `<stateDir>/agents/<agentId>/agent/agent-base.md`. Agent files are user-owned and must never be created or overwritten by startup. Embedded OpenClaw full/main runs use the exact file text as the cache-stable prefix and append live Workspace, Messaging, Assistant Output Directives, Silent Replies, Voice/TTS, Runtime, heartbeat, memory, skills, and workspace context below the cache boundary. Native Codex app-server sends the exact file text as `thread/start.baseInstructions`, keeps `developerInstructions` limited to operational app-server mechanics, fingerprints the file contents in the binding sidecar, and starts a new Codex thread when the fingerprint changes. Resume must preserve the stored fingerprint and must not patch base instructions onto an existing thread.
+
+Codex compatibility: `<agentDir>/app-server-base.md` remains a Codex-only legacy alias when `<agentDir>/agent-base.md` is absent. Gateway may keep regenerating `<stateDir>/app-server-base.md` as a legacy template alias pointing users to `agent-base.md`, but global templates remain inert until copied into an agent directory.
+
+Agent-owned prompt hygiene: Bex's live Sky override at `~/.openclaw/agents/sky/agent/agent-base.md` is intentionally user-owned and not committed in this repo. Keep it aligned with the generated template's stable sections only. Do not keep generated/runtime sections such as Model Aliases, Current Date & Time, Assistant Output Directives, Silent Replies, Messaging, Workspace, Runtime, Voice/TTS, memory, skills, heartbeat, or workspace context in that file. Those are injected by the harness below the cache boundary. Sky's local file was updated after this seam landed to remove stale model aliases (`gpt-5.4`, `gpt-5.4-mini`, `gemini-3.1-pro-preview`), remove current-time/output/silent-reply sections, and use the runtime-neutral Tooling wording plus anti-polling guidance.
+
+Primary seam files:
+
+- `src/agents/agent-base-prompt.ts`
+- `src/agents/agent-base-prompt-file.ts`
+- `src/agents/codex-app-server-base-prompt.ts`
+- `src/agents/system-prompt.ts`
+- `src/agents/embedded-agent-runner/run/attempt.ts`
+- `src/agents/embedded-agent-runner/system-prompt.ts`
+- `src/gateway/server.impl.ts`
+- `extensions/codex/src/app-server/protocol.ts`
+- `extensions/codex/src/app-server/session-binding.ts`
+- `extensions/codex/src/app-server/thread-lifecycle.ts`
+- `extensions/codex/src/app-server/attempt-startup.ts`
+- `extensions/codex/src/app-server/run-attempt.ts`
+- `extensions/codex/src/conversation-binding.ts`
+
+Primary seam tests:
+
+- `src/agents/codex-app-server-base-prompt.test.ts`
+- `src/agents/system-prompt.test.ts`
+- `src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts`
+- `src/gateway/gateway.test.ts`
+- `extensions/codex/src/app-server/thread-lifecycle.test.ts`
+- `extensions/codex/src/app-server/run-attempt.test.ts`
+- `extensions/codex/src/app-server/run-attempt.context-engine.test.ts`
+- `extensions/codex/src/conversation-binding.test.ts`
+- `node scripts/run-vitest.mjs src/agents/codex-app-server-base-prompt.test.ts src/agents/system-prompt.test.ts src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts`
+- `node scripts/run-vitest.mjs extensions/codex/src/app-server/thread-lifecycle.test.ts extensions/codex/src/app-server/run-attempt.test.ts extensions/codex/src/app-server/run-attempt.context-engine.test.ts extensions/codex/src/conversation-binding.test.ts`
+- `node scripts/run-vitest.mjs src/gateway/gateway.test.ts`
+
+Rebase notes:
+
+- The generated template should use the canonical OpenClaw prompt renderer plus the GPT-5/OpenAI/Codex overlay, but suppress workspace/project context files, `TOOLS.md` guidance, memory contents, skills, heartbeat, Messaging, Workspace, Runtime, Voice/TTS, Assistant Output Directives, Silent Replies, current time, and user-owned context file contents.
+- Do not dynamically append overlay text to an agent-scoped `agent-base.md`; the file is the complete stable base prefix. Runtime/context mechanics stay outside the file and are appended by the harness.
+- Keep global templates inert. They only become runtime behavior after a user copies one into an agent directory.
+- `pi` is only a legacy alias normalized to `openclaw`; do not add a separate Pi runtime path for this seam.
+- Conversation-bound Codex threads created before an agent base file exists are still OpenClaw-managed. Persist a managed no-base marker so adding `agent-base.md` later clears the old binding and starts a fresh thread with `baseInstructions`. Preserve explicit external `/codex resume` bindings by marking them `baseInstructionsSource: "external-thread"` and never rotating them for agent base changes.
+- Context-engine thread-bootstrap projection must be decided against the effective native thread state. If a base prompt fingerprint change will rotate the native Codex thread, project bootstrap context as if there is no existing thread; otherwise a fresh thread can be persisted with bootstrap metadata while missing the actual bootstrap prompt.
+- Cache-hygiene smoke: render `~/.openclaw/agent-base.md` and `~/.openclaw/app-server-base.md` after startup and assert no hits for `OPENCLAW_CACHE_BOUNDARY`, Messaging, Workspace, Runtime, Voice/TTS, Assistant Output Directives, Silent Replies, Current Date & Time, skills, memory, heartbeat, `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, or `MEMORY.md`.
+- Codex hard-gate: re-verify `thread/start.baseInstructions` and resume override behavior against sibling `../codex` on each upstream bump.
+
+Closeout proof from the implementation pass:
+
+- Focused validation: `node scripts/run-vitest.mjs src/agents/codex-app-server-base-prompt.test.ts src/agents/system-prompt.test.ts src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts extensions/codex/src/app-server/thread-lifecycle.test.ts extensions/codex/src/app-server/run-attempt.test.ts extensions/codex/src/app-server/run-attempt.context-engine.test.ts extensions/codex/src/conversation-binding.test.ts src/gateway/gateway.test.ts`
+- Docs/format/build: `pnpm docs:check-mdx`, `git diff --check`, `pnpm build`.
+- Review loop: `.agents/skills/autoreview/scripts/autoreview --mode local --engine codex` clean after fixing two accepted findings; `$ultra-review` found no additional blocking/actionable issues.
+- Deployment: `openclaw-gateway.service` stopped, `pnpm build` passed, requested `pnpm ui:rebuild` was unavailable in this checkout, supported `pnpm ui:build` passed, gateway restarted.
+- Runtime proof: `/healthz` returned `200 OK`; `/readyz` remained `503` only because configured dependency `whatsapp` was failing, unrelated to this seam.

@@ -565,7 +565,7 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
 
 ### `agents.defaults.promptOverlays`
 
-Provider-independent prompt overlays applied by model family on OpenClaw-assembled prompt surfaces. GPT-5-family model ids receive the shared behavior contract across OpenClaw/provider routes; `personality` controls only the friendly interaction-style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 overlay, and OpenClaw disables Codex's built-in personality for native threads.
+Provider-independent prompt overlays applied by model family on OpenClaw-assembled prompt surfaces. GPT-5-family model ids receive the shared behavior contract across OpenClaw/provider routes; `personality` controls only the friendly interaction-style layer. Native Codex app-server routes keep Codex-owned base/model instructions by default, and OpenClaw disables Codex's built-in personality for native threads. If an agent-owned `agent-base.md` exists, OpenClaw sends that file as Codex `thread/start.baseInstructions` instead; the file is treated as a complete stable base prefix and provider overlays are not appended again at runtime.
 
 ```json5
 {

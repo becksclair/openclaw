@@ -121,6 +121,7 @@ export type CodexThreadStartParams = JsonObject & {
   sandbox?: string;
   serviceTier?: CodexServiceTier | null;
   dynamicTools?: CodexThreadStartDynamicToolSpec[] | null;
+  baseInstructions?: string;
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
   environments?: CodexTurnEnvironmentParams[] | null;

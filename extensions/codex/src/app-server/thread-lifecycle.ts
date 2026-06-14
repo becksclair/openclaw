@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
+import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
 import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
 import {
@@ -293,6 +294,8 @@ export async function startOrResumeThread(params: {
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed?: boolean;
   appServer: CodexAppServerRuntimeOptions;
+  baseInstructions?: string;
+  baseInstructionsFingerprint?: string;
   developerInstructions?: string;
   config?: JsonObject;
   finalConfigPatch?: JsonObject;
@@ -481,6 +484,19 @@ export async function startOrResumeThread(params: {
     preserveExistingBinding = true;
     binding = undefined;
   }
+  if (
+    binding?.threadId &&
+    isBaseInstructionsFingerprintManagedBinding(binding) &&
+    binding.baseInstructionsFingerprint !== params.baseInstructionsFingerprint
+  ) {
+    embeddedAgentLog.debug("codex app-server base instructions changed; starting a new thread", {
+      threadId: binding.threadId,
+      previous: binding.baseInstructionsFingerprint,
+      next: params.baseInstructionsFingerprint,
+    });
+    await clearCodexAppServerBinding(params.params.sessionFile);
+    binding = undefined;
+  }
   if (binding?.threadId && (binding.contextEngine || contextEngineBinding)) {
     if (
       !contextEngineBinding ||
@@ -666,6 +682,14 @@ export async function startOrResumeThread(params: {
           params.mcpServersFingerprintEvaluated === true
             ? params.mcpServersFingerprint
             : resumeBinding.mcpServersFingerprint;
+        const baseInstructionsManagedBinding =
+          isBaseInstructionsFingerprintManagedBinding(resumeBinding);
+        const nextBaseInstructionsSource = baseInstructionsManagedBinding
+          ? "agent-file"
+          : resumeBinding.baseInstructionsSource;
+        const nextBaseInstructionsFingerprint = baseInstructionsManagedBinding
+          ? params.baseInstructionsFingerprint
+          : resumeBinding.baseInstructionsFingerprint;
         await lifecycleTiming.measure("thread-resume-write-binding", () =>
           writeCodexAppServerBinding(
             params.params.sessionFile,
@@ -678,6 +702,8 @@ export async function startOrResumeThread(params: {
               dynamicToolsFingerprint,
               dynamicToolsContainDeferred,
               webSearchThreadConfigFingerprint,
+              baseInstructionsSource: nextBaseInstructionsSource,
+              baseInstructionsFingerprint: nextBaseInstructionsFingerprint,
               userMcpServersFingerprint,
               mcpServersFingerprint: nextMcpServersFingerprint,
               networkProxyProfileName: params.appServer.networkProxy?.profileName,
@@ -730,6 +756,8 @@ export async function startOrResumeThread(params: {
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
           webSearchThreadConfigFingerprint,
+          baseInstructionsSource: nextBaseInstructionsSource,
+          baseInstructionsFingerprint: nextBaseInstructionsFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
           networkProxyProfileName: params.appServer.networkProxy?.profileName,
@@ -782,6 +810,7 @@ export async function startOrResumeThread(params: {
       cwd: params.cwd,
       dynamicTools: params.dynamicTools,
       appServer: params.appServer,
+      baseInstructions: params.baseInstructions,
       developerInstructions: params.developerInstructions,
       config,
       nativeCodeModeEnabled: params.nativeCodeModeEnabled,
@@ -833,6 +862,8 @@ export async function startOrResumeThread(params: {
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
           webSearchThreadConfigFingerprint,
+          baseInstructionsSource: "agent-file",
+          baseInstructionsFingerprint: params.baseInstructionsFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
           networkProxyProfileName: params.appServer.networkProxy?.profileName,
@@ -884,6 +915,8 @@ export async function startOrResumeThread(params: {
       response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
     dynamicToolsFingerprint,
     dynamicToolsContainDeferred,
+    baseInstructionsSource: "agent-file",
+    baseInstructionsFingerprint: params.baseInstructionsFingerprint,
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
     networkProxyProfileName: params.appServer.networkProxy?.profileName,
@@ -1080,6 +1113,7 @@ export function buildThreadStartParams(
     cwd: string;
     dynamicTools: CodexDynamicToolSpec[];
     appServer: CodexAppServerRuntimeOptions;
+    baseInstructions?: string;
     developerInstructions?: string;
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
@@ -1126,6 +1160,9 @@ export function buildThreadStartParams(
       appServer: options.appServer,
     }),
     ...resolveCodexThreadEnvironmentSelection(options),
+    ...(options.baseInstructions !== undefined
+      ? { baseInstructions: options.baseInstructions }
+      : {}),
     developerInstructions:
       options.developerInstructions ??
       buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
@@ -1660,28 +1697,71 @@ function shouldStartTransientNoToolThread(params: {
   );
 }
 
+function isBaseInstructionsFingerprintManagedBinding(
+  binding: CodexAppServerThreadBinding,
+): boolean {
+  if (binding.baseInstructionsSource === "agent-file") {
+    return true;
+  }
+  if (binding.baseInstructionsSource === "external-thread") {
+    return false;
+  }
+  // Legacy external `/codex resume` bindings predate baseInstructionsSource.
+  // Normal app-server lifecycle bindings carried dynamic-tool metadata, so only
+  // those unmarked bindings participate in first-time base prompt rotation.
+  return (
+    binding.baseInstructionsFingerprint !== undefined ||
+    binding.dynamicToolsFingerprint !== undefined
+  );
+}
+
 function compareJsonFingerprint(left: JsonValue, right: JsonValue): number {
   return JSON.stringify(left).localeCompare(JSON.stringify(right));
 }
 
 export function buildDeveloperInstructions(
   params: EmbeddedRunAttemptParams,
-  options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
+  options: {
+    dynamicTools?: readonly CodexDynamicToolSpec[];
+    runtimeDeveloperInstructions?: string;
+  } = {},
 ): string {
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
     surface: "codex_app_server",
     includeLegacyGlobalGuidance: false,
   }).join("\n");
   const sections = [
-    "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
+    "OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
     buildDeferredDynamicToolManifest(options.dynamicTools),
     buildSkillWorkshopInstruction(options.dynamicTools),
+    buildMessagingDeveloperInstruction(params, options.dynamicTools),
     "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
     buildVisibleReplyInstruction(params, options.dynamicTools),
     nativeCommandGuidance,
+    options.runtimeDeveloperInstructions,
     params.extraSystemPrompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
+}
+
+function buildMessagingDeveloperInstruction(
+  params: EmbeddedRunAttemptParams,
+  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
+): string {
+  const messageToolAvailable = dynamicTools
+    ? dynamicTools.some((tool) => tool.name.trim() === "message")
+    : params.disableMessageTool !== true;
+  const replyGuidance =
+    params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable
+      ? "- Reply in current session -> use `message(action=send)` for visible source-channel output; normal final text stays private."
+      : "- Reply in current session -> automatically routes to the source channel (Signal, Telegram, etc.)";
+  return [
+    "## Messaging",
+    replyGuidance,
+    "- Cross-session messaging -> use `sessions_send(sessionKey, message)`",
+    `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
+    "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
+  ].join("\n");
 }
 
 function buildDeferredDynamicToolManifest(

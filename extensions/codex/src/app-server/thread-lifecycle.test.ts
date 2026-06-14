@@ -6,6 +6,7 @@ import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
+import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildDeveloperInstructions,
@@ -268,6 +269,42 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).not.toContain("message,");
   });
 
+  it("keeps developer instructions limited to operational app-server guidance", () => {
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }));
+
+    expect(instructions).toContain("OpenClaw has dynamic tools");
+    expect(instructions).toContain("## Messaging");
+    expect(instructions).toContain(
+      "Reply in current session -> automatically routes to the source channel",
+    );
+    expect(instructions).toContain("Cross-session messaging -> use `sessions_send");
+    expect(instructions).toContain("Runtime-generated completion events may ask for a user update");
+    expect(instructions).toContain("Never use exec/curl for provider messaging");
+    expect(instructions).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+    expect(instructions).toContain("Use Codex native `spawn_agent` for Codex subagents");
+    expect(instructions).not.toContain("You are a personal agent");
+    expect(instructions).not.toContain("You are a personal assistant running inside OpenClaw");
+    expect(instructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+  });
+
+  it("keeps dynamic runtime context in developer instructions when provided", () => {
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
+      runtimeDeveloperInstructions: [
+        "## Voice (TTS)",
+        "Voice (TTS) is enabled.",
+        "",
+        "## Runtime",
+        "Runtime: model=gpt-5.4 | channel=codex_app_server",
+        "Current model identity: gpt-5.4. If asked what model you are, answer with this value for the current run.",
+      ].join("\n"),
+    });
+
+    expect(instructions).toContain("## Voice (TTS)");
+    expect(instructions).toContain("## Runtime");
+    expect(instructions).toContain("Current model identity: gpt-5.4.");
+    expect(instructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+  });
+
   it("uses the shared Skill Workshop guidance when skill_workshop is available", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [
@@ -518,6 +555,29 @@ describe("Codex app-server native code mode config", () => {
         },
       },
     });
+  it("passes base instructions on thread/start when an agent override exists", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      baseInstructions: "custom agent base",
+      developerInstructions: "operational instructions",
+    });
+
+    expect(request.baseInstructions).toBe("custom agent base");
+    expect(request.developerInstructions).toBe("operational instructions");
+  });
+
+  it("passes an empty base instructions override on thread/start", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      baseInstructions: "",
+      developerInstructions: "operational instructions",
+    });
+
+    expect(request).toHaveProperty("baseInstructions", "");
   });
 
   it("disables Codex tool-search features for nano models", () => {
@@ -549,6 +609,7 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.personality).toBe("none");
+    expect(request).not.toHaveProperty("baseInstructions");
   });
 
   it("keeps Codex model personality disabled on turn/start", () => {
@@ -1257,6 +1318,137 @@ describe("Codex app-server thread lifecycle timing", () => {
     const message = expectSingleLogMessage(log, "trace");
     expect(message).toContain("action=resumed");
     expect(message).toContain("thread-resume-request:9ms@9ms");
+  });
+
+  it("preserves the base instructions fingerprint on resume without patching base instructions", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params: unknown) => {
+      requests.push({ method, params });
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-existing");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const commonParams = {
+      client: { request } as never,
+      params: createThreadLifecycleParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      baseInstructions: "custom base v1",
+      baseInstructionsFingerprint: "sha256:v1",
+    };
+
+    await startOrResumeThread(commonParams);
+    await startOrResumeThread(commonParams);
+
+    expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "thread/resume"]);
+    expect(requests[0]?.params).toMatchObject({ baseInstructions: "custom base v1" });
+    expect(requests[1]?.params).not.toHaveProperty("baseInstructions");
+  });
+
+  it("starts a fresh thread when the agent base instructions fingerprint changes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params: unknown) => {
+      requests.push({ method, params });
+      if (method === "thread/start") {
+        return threadStartResult(`thread-start-${requests.length}`);
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const commonParams = {
+      client: { request } as never,
+      params: createThreadLifecycleParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    };
+
+    await startOrResumeThread({
+      ...commonParams,
+      baseInstructions: "custom base v1",
+      baseInstructionsFingerprint: "sha256:v1",
+    });
+    await startOrResumeThread({
+      ...commonParams,
+      baseInstructions: "custom base v2",
+      baseInstructionsFingerprint: "sha256:v2",
+    });
+
+    expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "thread/start"]);
+    expect(requests[1]?.params).toMatchObject({ baseInstructions: "custom base v2" });
+  });
+
+  it("resumes explicitly attached external threads even when an agent base prompt exists", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-attached",
+      cwd: workspaceDir,
+      baseInstructionsSource: "external-thread",
+    });
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params: unknown) => {
+      requests.push({ method, params });
+      if (method === "thread/resume") {
+        return threadStartResult("thread-attached");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createThreadLifecycleParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      baseInstructions: "custom base",
+      baseInstructionsFingerprint: "sha256:agent-base",
+    });
+
+    expect(requests.map((entry) => entry.method)).toEqual(["thread/resume"]);
+    expect(requests[0]?.params).not.toHaveProperty("baseInstructions");
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      baseInstructionsSource: "external-thread",
+    });
+  });
+
+  it("preserves legacy unmarked external thread bindings when an agent base prompt exists", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-legacy-attached",
+      cwd: workspaceDir,
+    });
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params: unknown) => {
+      requests.push({ method, params });
+      if (method === "thread/resume") {
+        return threadStartResult("thread-legacy-attached");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createThreadLifecycleParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      baseInstructions: "custom base",
+      baseInstructionsFingerprint: "sha256:agent-base",
+    });
+
+    expect(requests.map((entry) => entry.method)).toEqual(["thread/resume"]);
+    expect(requests[0]?.params).not.toHaveProperty("baseInstructions");
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-legacy-attached",
+      baseInstructionsFingerprint: undefined,
+    });
   });
 
   it("warns on slow start even when trace logging is disabled", async () => {
