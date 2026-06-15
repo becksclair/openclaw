@@ -22,6 +22,7 @@ Replay classification:
 | ACP backend alias routing                 | Runtime carry         | High       | Target resolves selected ACP agents but still does not pass the selected config agent's `runtime.acp.backend` into ACP session creation.                                                                                                                                                                                                                |
 | ACP backend-managed runtime options       | Runtime carry         | High       | Target runtime capabilities expose config option keys, but not backend-managed keys. Replay keeps `managedRuntimeOptionKeys` so backend-owned controls are not redundantly written by core.                                                                                                                                                             |
 | Native Codex message-tool TTS delivery    | Partial-overlap carry | High       | Target has adjacent media delivery support, but not generated TTS local-media trust or lightweight bundled channel TTS capability artifacts for transcode-aware voice-note delivery.                                                                                                                                                                    |
+| Gateway message-tool history projection   | Runtime carry         | High       | Target still drops current-session `message` tool sends from client-visible history unless a silent completion or delivery mirror later flushes them. Replay carries successful-send mirroring at next user turn, normal assistant reply, and history tail while preserving raw `toolResult` rows for debug/projection callers.                         |
 | Control UI read aloud through Talk        | Partial-overlap carry | Medium     | Target has Gateway Talk/TTS, but not the browser read-aloud control path, Markdown stripping, or `talk.speak` client integration.                                                                                                                                                                                                                       |
 | Discord 30032 command deploy recovery     | Runtime carry         | Medium     | Target still lacks the Discord application-command-limit recovery predicate and force-overwrite redeploy path.                                                                                                                                                                                                                                          |
 | Discord auto-presence account auth store  | Runtime carry         | Medium     | Target auto-presence loads its auth store via bare `ensureAuthProfileStore()`, which resolves `resolveDefaultAgentDir({})` to the built-in `main` agent dir; with a non-`main` configured default agent the store is empty and bots pin an idle "runtime degraded" presence. Replay carries account-bound store resolution.                             |
@@ -70,6 +71,7 @@ Replay classification:
 - `e000c3410d` - active seam: keep ACP backend alias routing so `sessions_spawn({ runtime: "acp", agentId })` resolves the selected config agent's `runtime.acp.backend` instead of falling through to global `acp.backend`.
 - `9349edd41c` - active seam: keep ACP backend-managed runtime options hidden from core runtime control writes.
 - `gateway-runtime-metadata-hotpath` - active seam: keep Gateway request/status hot paths on prepared plugin metadata snapshots, lifecycle-cleared runtime config caches, cached bundled channel/package-state facts, and model-cost indexes scoped to the active manifest snapshot.
+- `gateway-message-tool-history-projection` - active seam: keep successful current-session `message` tool sends visible in `chat.history` and recent-history projections even when there is no later `NO_REPLY` row or delivery mirror. Flush successful pending message-tool mirrors before the next user turn, before the next normal assistant reply, and at the history tail; preserve the successful `toolResult` rows so debug/projection clients do not lose execution evidence.
 - `5d62565271` - support/proof carry: keep the operator verifier for target-backed remote ACP bindings, with machine/channel ids supplied by flags or environment only.
 - `extensions/acpx-remote` - active seam: keep the local target-backed remote ACP bridge as a separate nested/excluded plugin lifecycle; do not fold it into the outer repo replay.
 - `c5991de10f` - active seam: keep Control UI read-aloud routed through the Gateway Talk/TTS surface, with Markdown/noisy markup stripped before speech.
@@ -197,6 +199,28 @@ Rebase notes:
 - Do not cache failed package-state checker resolution as a permanent absence. Missing or broken checker modules can appear after install/update and must be retried after lifecycle clear.
 - Preserve deterministic prompt-cache ordering while adding indexes. Maps, plugin ids, model ids, channel ids, and cost aliases should sort before they feed model or tool payloads.
 - Live proof for this seam is host-local by design because it targets Bex's managed Gateway install and host CPU profile. Build first, restart the managed Gateway, then sample CPU and file-system probes from the actual Gateway PID.
+
+### Gateway message-tool history projection
+
+Carry behavior: when an agent sends a current-session reply through the `message` tool, Gateway chat projections must expose a synthetic assistant text row to clients that render `chat.history`, even if the transcript ends after the successful `toolResult`, the next row is another user turn, or the next row is a normal assistant reply instead of `NO_REPLY`. The projection must still preserve successful `toolResult` rows because debug clients and direct projection callers rely on the execution record.
+
+Primary seam files:
+
+- `src/gateway/chat-display-projection.ts`
+- `src/gateway/server.chat.gateway-server-chat.test.ts`
+- `src/gateway/server-methods/server-methods.test.ts`
+
+Primary seam tests:
+
+- `src/gateway/server.chat.gateway-server-chat.test.ts`
+- `src/gateway/server-methods/server-methods.test.ts`
+
+Rebase notes:
+
+- Do not rely on Telegram delivery mirrors or silent `NO_REPLY` completions as the only mirror-flush triggers. Android and other Gateway clients can ask for the current session directly, and the transcript may contain only `assistant toolCall -> toolResult` before the history window ends.
+- Keep the projection transport-neutral: the behavior is keyed to successful current-session `message` tool sends, not Telegram-specific session keys, phone names, or device ids.
+- Preserve `toolResult` rows when adding synthetic visible assistant mirrors. The mirror makes the agent reply readable to clients; the raw result keeps execution/debug evidence available to projection callers.
+- Live proof for this seam is host-local: build, restart `openclaw-gateway.service`, then call `chat.history` for the affected session and confirm mirrored assistant text rows appear alongside the successful `toolResult` rows.
 
 ### ACP remote target-backed bridge
 
