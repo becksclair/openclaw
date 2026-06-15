@@ -40,6 +40,7 @@ class SecurePrefs(
     private const val notificationsForwardingMaxEventsPerMinuteKey =
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
+    private const val wearTargetSessionKeyKey = "wear.targetSessionKey"
     private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
     private const val voiceMicEnabledKey = "voice.micEnabled"
     private const val appearanceThemeModeKey = "appearance.themeMode"
@@ -169,6 +170,9 @@ class SecurePrefs(
         ?.takeIf { it.isNotEmpty() },
     )
   val notificationForwardingSessionKey: StateFlow<String?> = _notificationForwardingSessionKey
+
+  private val _wearTargetSessionKey = MutableStateFlow(loadWearTargetSessionKey())
+  val wearTargetSessionKey: StateFlow<String?> = _wearTargetSessionKey
 
   private val _wakeWords = MutableStateFlow(loadWakeWords())
   val wakeWords: StateFlow<List<String>> = _wakeWords
@@ -376,6 +380,18 @@ class SecurePrefs(
       putString(notificationsForwardingSessionKeyKey, normalized.orEmpty())
     }
     _notificationForwardingSessionKey.value = normalized
+  }
+
+  internal fun setWearTargetSessionKey(value: String?) {
+    val normalized = value?.trim()?.takeIf { it.isNotEmpty() }
+    plainPrefs.edit {
+      if (normalized == null) {
+        remove(wearTargetSessionKeyKey)
+      } else {
+        putString(wearTargetSessionKeyKey, normalized)
+      }
+    }
+    _wearTargetSessionKey.value = normalized
   }
 
   /** Loads manual or instance-scoped gateway token material from encrypted preferences. */
@@ -591,4 +607,6 @@ class SecurePrefs(
       defaultWakeWords
     }
   }
+
+  private fun loadWearTargetSessionKey(): String? = plainPrefs.getString(wearTargetSessionKeyKey, null)?.trim()?.takeIf { it.isNotEmpty() }
 }

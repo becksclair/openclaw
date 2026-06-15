@@ -917,6 +917,7 @@ export async function startGatewayServer(
     chatRunBuffers,
     chatDeltaSentAt,
     chatDeltaLastBroadcastLen,
+    chatFinalAudio,
     addChatRun,
     removeChatRun,
     chatAbortControllers,
@@ -952,6 +953,13 @@ export async function startGatewayServer(
     }),
   );
   const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
+  const clearChatRunState = (runId: string) => {
+    chatRunState.clearRun(runId);
+  };
+  const clearExpiredChatRunState = (runId: string) => {
+    clearChatRunState(runId);
+    chatFinalAudio.deleteRun(runId);
+  };
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
     nodeRegistry,
@@ -1148,6 +1156,7 @@ export async function startGatewayServer(
           chatAbortControllers,
           restartRecoveryCandidates,
           chatRunState,
+          clearChatRunState: clearExpiredChatRunState,
           chatRunBuffers,
           chatDeltaSentAt,
           chatDeltaLastBroadcastLen,
@@ -1185,6 +1194,7 @@ export async function startGatewayServer(
         nodeSendToSession,
         agentRunSeq,
         chatRunState,
+        clearChatRunState,
         toolEventRecipients,
         sessionEventSubscribers,
         sessionMessageSubscribers,
@@ -1490,7 +1500,8 @@ export async function startGatewayServer(
           chatDeltaLastBroadcastText: chatRunState.deltaLastBroadcastText,
           agentDeltaSentAt: chatRunState.agentDeltaSentAt,
           bufferedAgentEvents: chatRunState.bufferedAgentEvents,
-          clearChatRunState: chatRunState.clearRun,
+          chatFinalAudio,
+          clearChatRunState,
           addChatRun,
           removeChatRun,
           subscribeSessionEvents: sessionEventSubscribers.subscribe,

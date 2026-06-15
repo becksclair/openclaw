@@ -97,6 +97,7 @@ export async function startGatewayEarlyRuntime(params: {
   chatAbortControllers: GatewayMaintenanceParams["chatAbortControllers"];
   restartRecoveryCandidates: GatewayMaintenanceParams["restartRecoveryCandidates"];
   chatRunState: GatewayMaintenanceParams["chatRunState"];
+  clearChatRunState?: GatewayMaintenanceParams["clearChatRunState"];
   chatRunBuffers: GatewayMaintenanceParams["chatRunBuffers"];
   chatDeltaSentAt: GatewayMaintenanceParams["chatDeltaSentAt"];
   chatDeltaLastBroadcastLen: GatewayMaintenanceParams["chatDeltaLastBroadcastLen"];
@@ -181,6 +182,7 @@ export async function startGatewayEarlyRuntime(params: {
         chatAbortControllers: params.chatAbortControllers,
         restartRecoveryCandidates: params.restartRecoveryCandidates,
         chatRunState: params.chatRunState,
+        clearChatRunState: params.clearChatRunState,
         chatRunBuffers: params.chatRunBuffers,
         chatDeltaSentAt: params.chatDeltaSentAt,
         chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,

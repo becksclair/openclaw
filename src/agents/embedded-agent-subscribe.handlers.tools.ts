@@ -1296,7 +1296,10 @@ export async function handleToolExecutionEnd(
     ) {
       ctx.state.messageToolOnlySourceReplyDelivered = true;
     }
-    const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
+    const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result, {
+      toolName: rawToolName,
+      trustedLocalMediaToolNames: ctx.trustedLocalMediaToolNames,
+    });
     if (sourceReplyPayload) {
       ctx.state.messagingToolSourceReplyPayloads.push(sourceReplyPayload);
       ctx.trimMessagingToolSent();

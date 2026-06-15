@@ -3563,6 +3563,7 @@ async function runEmbeddedAgentInternal(
             toolMediaUrls: attempt.toolMediaUrls,
             toolAudioAsVoice: attempt.toolAudioAsVoice,
             toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
+            toolSpokenText: attempt.toolSpokenText,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           });
           const timedOutDuringPrompt =

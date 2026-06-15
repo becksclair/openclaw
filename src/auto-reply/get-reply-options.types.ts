@@ -126,6 +126,8 @@ export type GetReplyOptions = {
    * block boundaries without waiting for transport acks. */
   onBlockReplyQueued?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  /** Called after final-reply TTS/media normalization, before routed or dispatcher delivery. */
+  onFinalReplyPayload?: (payload: ReplyPayload) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: {

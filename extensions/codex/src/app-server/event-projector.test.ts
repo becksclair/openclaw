@@ -845,11 +845,13 @@ describe("CodexAppServerEventProjector", () => {
       toolMediaUrls: ["/tmp/reply.opus"],
       toolAudioAsVoice: true,
       toolTrustedLocalMedia: true,
+      toolSpokenText: "spoken reply",
     });
 
     expect(result.toolMediaUrls).toStrictEqual(["/tmp/reply.opus"]);
     expect(result.toolAudioAsVoice).toBe(true);
     expect(result.toolTrustedLocalMedia).toBe(true);
+    expect(result.toolSpokenText).toBe("spoken reply");
   });
 
   it("does not promote repeated tool progress text to the final assistant reply", async () => {

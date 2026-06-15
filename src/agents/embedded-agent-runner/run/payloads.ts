@@ -270,6 +270,9 @@ export function buildEmbeddedRunPayloads(params: {
     presentation?: ReplyPayload["presentation"];
     interactive?: ReplyPayload["interactive"];
     channelData?: Record<string, unknown>;
+    trustedLocalMedia?: boolean;
+    spokenText?: string;
+    ttsSupplement?: ReplyPayload["ttsSupplement"];
     nonTerminalToolErrorWarning?: boolean;
     sourceReplyMirror?: {
       idempotencyKey?: string;
@@ -302,6 +305,9 @@ export function buildEmbeddedRunPayloads(params: {
       ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
       ...(media.length ? { media } : {}),
       ...(payload.audioAsVoice ? { audioAsVoice: true } : {}),
+      ...(payload.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
+      ...(payload.spokenText ? { spokenText: payload.spokenText } : {}),
+      ...(payload.ttsSupplement ? { ttsSupplement: payload.ttsSupplement } : {}),
       ...(payload.presentation ? { presentation: payload.presentation } : {}),
       ...(payload.interactive ? { interactive: payload.interactive } : {}),
       ...(payload.channelData ? { channelData: payload.channelData } : {}),
@@ -619,6 +625,15 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length)) {
         payload.audioAsVoice = true;
+      }
+      if (item.trustedLocalMedia) {
+        payload.trustedLocalMedia = true;
+      }
+      if (item.spokenText) {
+        payload.spokenText = item.spokenText;
+      }
+      if (item.ttsSupplement) {
+        payload.ttsSupplement = item.ttsSupplement;
       }
       if (item.presentation) {
         payload.presentation = item.presentation;

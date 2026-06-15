@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicLong
 class WearAudioRelay(
   private val context: Context,
   private val gatewaySession: GatewaySession,
-  private val mainSessionKeyProvider: () -> String,
+  private val wearTargetSessionKeyProvider: () -> String,
 ) {
   companion object {
     private const val TAG = "WearAudioRelay"
@@ -172,7 +172,7 @@ class WearAudioRelay(
     scope.launch {
       if (!isCurrentTurn(counterTurnId)) return@launch
       Log.d(TAG, "watch turn captured ${capturedFrames.size} audio frames (${summarizePcm16Audio(capturedFrames)})")
-      Log.d(TAG, "watch turn using transcription, chat, and talk.speak")
+      Log.d(TAG, "watch turn using transcription, chat, autoTTS reuse, and talk.speak fallback")
 
       lateinit var session: WearSttTtsSession
 
@@ -181,7 +181,7 @@ class WearAudioRelay(
         WearSttTtsSession(
           scope = scope,
           session = gatewaySession,
-          sessionKey = mainSessionKeyProvider(),
+          sessionKey = wearTargetSessionKeyProvider(),
           responseFormat = responseFormat,
           onAudioResponse = { audioResponse ->
             if (isActiveSession()) {

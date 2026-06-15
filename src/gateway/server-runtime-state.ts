@@ -17,6 +17,7 @@ import {
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { createChatFinalAudioRegistry } from "./chat-final-audio.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
@@ -117,6 +118,7 @@ export async function createGatewayRuntimeState(params: {
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
+  chatFinalAudio: ReturnType<typeof createChatFinalAudioRegistry>;
   addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
   removeChatRun: (
     sessionId: string,
@@ -337,6 +339,7 @@ export async function createGatewayRuntimeState(params: {
     const chatRunBuffers = chatRunState.buffers;
     const chatDeltaSentAt = chatRunState.deltaSentAt;
     const chatDeltaLastBroadcastLen = chatRunState.deltaLastBroadcastLen;
+    const chatFinalAudio = createChatFinalAudioRegistry();
     const addChatRun = chatRunRegistry.add;
     const removeChatRun = chatRunRegistry.remove;
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
@@ -369,6 +372,7 @@ export async function createGatewayRuntimeState(params: {
       chatRunBuffers,
       chatDeltaSentAt,
       chatDeltaLastBroadcastLen,
+      chatFinalAudio,
       addChatRun,
       removeChatRun,
       chatAbortControllers,

@@ -8,7 +8,7 @@ import com.google.android.gms.wearable.WearableListenerService
 /**
  * Receives messages from the Wear OS watch via the Wearable Data Layer and
  * forwards them to the single [WearAudioRelay] owned by [ai.openclaw.app.NodeRuntime],
- * which also receives the gateway-side realtime events for the active turn.
+ * which also receives gateway transcription/chat events for the active turn.
  *
  * Runs as a service so it can handle watch requests even when the app is
  * not in the foreground.

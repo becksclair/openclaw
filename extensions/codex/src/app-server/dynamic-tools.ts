@@ -122,6 +122,7 @@ export type CodexDynamicToolBridge = {
     toolMediaUrls: string[];
     toolAudioAsVoice: boolean;
     toolTrustedLocalMedia: boolean;
+    toolSpokenText?: string;
     successfulCronAdds?: number;
     quarantinedTools: CodexDynamicToolSchemaQuarantine[];
   };
@@ -804,6 +805,9 @@ function collectToolTelemetry(params: {
       if (media.trustedLocalMedia && mediaUrls.length > 0) {
         params.telemetry.toolTrustedLocalMedia = true;
       }
+      if (media.spokenText && mediaUrls.length > 0) {
+        params.telemetry.toolSpokenText ??= media.spokenText;
+      }
     }
   }
   if (
@@ -813,7 +817,11 @@ function collectToolTelemetry(params: {
     return;
   }
   params.telemetry.didSendViaMessagingTool = true;
-  const sourceReplyPayload = extractInternalSourceReplyPayload(params.result?.details);
+  const sourceReplyPayload = extractInternalSourceReplyPayload({
+    details: params.result?.details,
+    result: params.mediaTrustResult ?? params.result,
+    toolName: params.toolName,
+  });
   if (sourceReplyPayload) {
     params.telemetry.messagingToolSourceReplyPayloads.push(sourceReplyPayload);
     return;
@@ -837,9 +845,12 @@ function collectToolTelemetry(params: {
   });
 }
 
-function extractInternalSourceReplyPayload(
-  details: unknown,
-): MessagingToolSourceReplyPayload | undefined {
+function extractInternalSourceReplyPayload(params: {
+  details: unknown;
+  result: AgentToolResult<unknown> | undefined;
+  toolName: string;
+}): MessagingToolSourceReplyPayload | undefined {
+  const { details } = params;
   if (!isRecord(details) || details.sourceReplySink !== "internal-ui") {
     return undefined;
   }
@@ -848,16 +859,25 @@ function extractInternalSourceReplyPayload(
     return undefined;
   }
   const text = readFirstString(rawPayload, ["text", "message"]);
-  const mediaUrls = collectMediaUrls(rawPayload);
+  const mediaUrls = filterToolResultMediaUrls(
+    params.toolName,
+    collectMediaUrls(rawPayload),
+    params.result,
+  );
+  const preferredMediaUrl =
+    typeof rawPayload.mediaUrl === "string" ? rawPayload.mediaUrl.trim() : undefined;
   const mediaUrl =
-    typeof rawPayload.mediaUrl === "string" && rawPayload.mediaUrl.trim()
-      ? rawPayload.mediaUrl.trim()
-      : mediaUrls[0];
+    preferredMediaUrl && mediaUrls.includes(preferredMediaUrl) ? preferredMediaUrl : mediaUrls[0];
+  const hasLocalMediaUrl = mediaUrls.some((url) => !isHttpMediaUrl(url));
   const payload: MessagingToolSourceReplyPayload = {
     ...(text ? { text } : {}),
     ...(mediaUrl ? { mediaUrl } : {}),
     ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
     ...(rawPayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
+    ...(rawPayload.trustedLocalMedia === true && hasLocalMediaUrl
+      ? { trustedLocalMedia: true }
+      : {}),
+    ...extractInternalSourceReplyTtsMetadata(rawPayload),
     ...(isRecord(rawPayload.presentation)
       ? { presentation: rawPayload.presentation as never }
       : {}),
@@ -870,6 +890,31 @@ function extractInternalSourceReplyPayload(
   return text || mediaUrls.length > 0 || payload.presentation || payload.interactive
     ? payload
     : undefined;
+}
+
+function isHttpMediaUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url.trim());
+}
+
+function extractInternalSourceReplyTtsMetadata(
+  rawPayload: Record<string, unknown>,
+): Pick<MessagingToolSourceReplyPayload, "spokenText" | "ttsSupplement"> {
+  const spokenText = readFirstString(rawPayload, ["spokenText"]);
+  const supplement = isRecord(rawPayload.ttsSupplement) ? rawPayload.ttsSupplement : undefined;
+  const supplementSpokenText = supplement ? readFirstString(supplement, ["spokenText"]) : undefined;
+  return {
+    ...(spokenText ? { spokenText } : {}),
+    ...(supplementSpokenText
+      ? {
+          ttsSupplement: {
+            spokenText: supplementSpokenText,
+            ...(supplement?.visibleTextAlreadyDelivered === true
+              ? { visibleTextAlreadyDelivered: true }
+              : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 function readPositiveInteger(value: unknown): number | undefined {

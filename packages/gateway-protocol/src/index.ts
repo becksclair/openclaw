@@ -127,6 +127,11 @@ import {
   ChatAbortParamsSchema,
   type ChatEvent,
   ChatEventSchema,
+  CHAT_FINAL_AUDIO_BASE64_MAX_LENGTH,
+  type ChatFinalAudioGetParams,
+  ChatFinalAudioGetParamsSchema,
+  type ChatFinalAudioGetResult,
+  ChatFinalAudioGetResultSchema,
   ChatHistoryParamsSchema,
   type ChatMetadataParams,
   ChatMetadataParamsSchema,
@@ -901,6 +906,12 @@ export const validateLogsTailParams = lazyCompile<LogsTailParams>(LogsTailParams
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
 export const validateChatMetadataParams = lazyCompile<ChatMetadataParams>(ChatMetadataParamsSchema);
 export const validateChatMessageGetParams = lazyCompile(ChatMessageGetParamsSchema);
+export const validateChatFinalAudioGetParams = lazyCompile<ChatFinalAudioGetParams>(
+  ChatFinalAudioGetParamsSchema,
+);
+export const validateChatFinalAudioGetResult = lazyCompile<ChatFinalAudioGetResult>(
+  ChatFinalAudioGetResultSchema,
+);
 export const validateChatSendParams = lazyCompile(ChatSendParamsSchema);
 export const validateChatAbortParams = lazyCompile<ChatAbortParams>(ChatAbortParamsSchema);
 export const validateChatInjectParams = lazyCompile<ChatInjectParams>(ChatInjectParamsSchema);
@@ -1001,6 +1012,7 @@ export {
   AgentEventSchema,
   MessageActionParamsSchema,
   ChatEventSchema,
+  CHAT_FINAL_AUDIO_BASE64_MAX_LENGTH,
   SendParamsSchema,
   PollParamsSchema,
   AgentParamsSchema,
@@ -1185,6 +1197,8 @@ export {
   ExecApprovalGetParamsSchema,
   ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParamsSchema,
+  ChatFinalAudioGetParamsSchema,
+  ChatFinalAudioGetResultSchema,
   ChatHistoryParamsSchema,
   ChatMetadataParamsSchema,
   ChatSendParamsSchema,

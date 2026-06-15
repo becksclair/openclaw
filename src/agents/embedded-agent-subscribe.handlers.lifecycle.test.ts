@@ -46,6 +46,7 @@ function createContext(
       pendingToolAudioAsVoice: false,
       pendingToolTrustedLocalMedia: false,
       deferredBlockReplies: [],
+      pendingToolSpokenText: undefined,
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       blockState: {
         thinking: true,

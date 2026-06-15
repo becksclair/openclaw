@@ -388,6 +388,13 @@ private fun VoiceSettingsScreen(
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
   val micEnabled by viewModel.micEnabled.collectAsState()
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
+  val wearTargetSessionKey by viewModel.wearTargetSessionKey.collectAsState()
+  val mainSessionKey by viewModel.mainSessionKey.collectAsState()
+  var wearTargetSessionKeyDraft by remember(wearTargetSessionKey) {
+    mutableStateOf(wearTargetSessionKey.orEmpty())
+  }
+  val normalizedWearTargetSessionKeyDraft = wearTargetSessionKeyDraft.trim().takeIf { it.isNotEmpty() }
+  val effectiveWearTargetSessionKey = normalizedWearTargetSessionKeyDraft ?: mainSessionKey
 
   SettingsDetailFrame(title = "Talk Provider Setup", subtitle = "Configure voice, transport, and playback.", icon = Icons.Default.Mic, onBack = onBack) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -405,6 +412,18 @@ private fun VoiceSettingsScreen(
         ready = speakerEnabled,
         onClick = { viewModel.setSpeakerEnabled(!speakerEnabled) },
       )
+      ClawPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+          Text(text = "Wear OS Session", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Text(text = "Current: $effectiveWearTargetSessionKey", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          ClawTextField(value = wearTargetSessionKeyDraft, onValueChange = { wearTargetSessionKeyDraft = it }, placeholder = "Follow current phone session")
+          ClawPrimaryButton(
+            text = "Save Session",
+            onClick = { viewModel.setWearTargetSessionKey(wearTargetSessionKeyDraft) },
+            enabled = normalizedWearTargetSessionKeyDraft != wearTargetSessionKey,
+          )
+        }
+      }
       ClawPrimaryButton(text = "Done", onClick = onBack, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.GraphicEq)
     }
   }

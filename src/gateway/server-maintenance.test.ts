@@ -3,10 +3,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { createChatFinalAudioRegistry } from "./chat-final-audio.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
-const cleanOldMediaMock = vi.fn(async () => {});
+const cleanOldMediaMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../media/store.js", async () => {
   const actual = await vi.importActual<typeof import("../media/store.js")>("../media/store.js");
@@ -279,6 +280,35 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(deps.chatRunState.agentDeltaSentAt.has(throttleKey)).toBe(false);
     expect(deps.chatRunState.bufferedAgentEvents.has(runId)).toBe(false);
     expect(deps.chatRunState.bufferedAgentEvents.has(throttleKey)).toBe(false);
+
+    stopMaintenanceTimers(timers);
+  });
+
+  it("uses injected run cleanup when sweeping orphaned stale run state", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const finalAudio = createChatFinalAudioRegistry();
+    const runId = "run-orphaned-final-audio";
+    seedStaleRunBuffers(deps, runId);
+    finalAudio.set({
+      runId,
+      sessionKey: "session-a",
+      mediaPath: "/tmp/reply.ogg",
+    });
+    const clearChatRunState = vi.fn((clearedRunId: string) => {
+      deps.chatRunState.clearRun(clearedRunId);
+      finalAudio.deleteRun(clearedRunId);
+    });
+
+    const timers = startGatewayMaintenanceTimers({ ...deps, clearChatRunState });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(clearChatRunState).toHaveBeenCalledWith(runId);
+    expectStaleRunBuffersSwept(deps, runId);
+    expect(finalAudio.get({ runId, sessionKey: "session-a" })).toBeUndefined();
 
     stopMaintenanceTimers(timers);
   });

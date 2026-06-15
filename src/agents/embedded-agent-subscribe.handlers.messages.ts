@@ -290,12 +290,16 @@ function resolveSilentReplyFallbackText(params: {
 function clearPendingToolMedia(
   state: Pick<
     EmbeddedAgentSubscribeState,
-    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+    | "pendingToolMediaUrls"
+    | "pendingToolAudioAsVoice"
+    | "pendingToolTrustedLocalMedia"
+    | "pendingToolSpokenText"
   >,
 ) {
   state.pendingToolMediaUrls = [];
   state.pendingToolAudioAsVoice = false;
   state.pendingToolTrustedLocalMedia = false;
+  state.pendingToolSpokenText = undefined;
 }
 
 function hasReplyMedia(payload: BlockReplyPayload): boolean {
@@ -306,7 +310,10 @@ function hasReplyMedia(payload: BlockReplyPayload): boolean {
 export function consumePendingToolMediaIntoReply(
   state: Pick<
     EmbeddedAgentSubscribeState,
-    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+    | "pendingToolMediaUrls"
+    | "pendingToolAudioAsVoice"
+    | "pendingToolTrustedLocalMedia"
+    | "pendingToolSpokenText"
   >,
   payload: BlockReplyPayload,
 ): BlockReplyPayload {
@@ -334,6 +341,9 @@ export function consumePendingToolMediaIntoReply(
     mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
     audioAsVoice: payload.audioAsVoice || state.pendingToolAudioAsVoice || undefined,
     trustedLocalMedia: payload.trustedLocalMedia || state.pendingToolTrustedLocalMedia || undefined,
+    ...((payload.spokenText ?? state.pendingToolSpokenText)
+      ? { spokenText: payload.spokenText ?? state.pendingToolSpokenText }
+      : {}),
   };
   clearPendingToolMedia(state);
   return mergedPayload;
@@ -343,7 +353,10 @@ export function consumePendingToolMediaIntoReply(
 export function consumePendingToolMediaReply(
   state: Pick<
     EmbeddedAgentSubscribeState,
-    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+    | "pendingToolMediaUrls"
+    | "pendingToolAudioAsVoice"
+    | "pendingToolTrustedLocalMedia"
+    | "pendingToolSpokenText"
   >,
 ): BlockReplyPayload | null {
   const payload = readPendingToolMediaReply(state);
@@ -358,7 +371,10 @@ export function consumePendingToolMediaReply(
 export function readPendingToolMediaReply(
   state: Pick<
     EmbeddedAgentSubscribeState,
-    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+    | "pendingToolMediaUrls"
+    | "pendingToolAudioAsVoice"
+    | "pendingToolTrustedLocalMedia"
+    | "pendingToolSpokenText"
   >,
 ): BlockReplyPayload | null {
   if (
@@ -374,6 +390,7 @@ export function readPendingToolMediaReply(
       : undefined,
     audioAsVoice: state.pendingToolAudioAsVoice || undefined,
     trustedLocalMedia: state.pendingToolTrustedLocalMedia || undefined,
+    ...(state.pendingToolSpokenText ? { spokenText: state.pendingToolSpokenText } : {}),
   };
 }
 

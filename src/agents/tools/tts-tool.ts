@@ -86,6 +86,7 @@ export function createTtsTool(opts?: {
             media: {
               mediaUrl: result.audioPath,
               trustedLocalMedia: true,
+              spokenText: sanitizeTranscriptForToolContent(text),
               ...(result.audioAsVoice || result.voiceCompatible ? { audioAsVoice: true } : {}),
             },
           },

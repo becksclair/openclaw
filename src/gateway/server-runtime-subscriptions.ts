@@ -28,6 +28,7 @@ export function startGatewayEventSubscriptions(params: {
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
+  clearChatRunState?: (runId: string) => void;
 }) {
   let agentEventHandlerPromise: Promise<
     ReturnType<typeof import("./server-chat.js").createAgentEventHandler>
@@ -49,6 +50,7 @@ export function startGatewayEventSubscriptions(params: {
         toolEventRecipients: params.toolEventRecipients,
         sessionEventSubscribers: params.sessionEventSubscribers,
         sessionMessageSubscribers: params.sessionMessageSubscribers,
+        clearChatRunState: params.clearChatRunState,
         clearTrackedActiveRun: ({ runId, clientRunId }) => {
           const candidateRunIds = runId === clientRunId ? [runId] : [runId, clientRunId];
           for (const candidateRunId of candidateRunIds) {

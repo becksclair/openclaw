@@ -648,6 +648,7 @@ describe("consumePendingToolMediaIntoReply", () => {
       pendingToolMediaUrls: ["/tmp/a.png", "/tmp/b.png"],
       pendingToolAudioAsVoice: false,
       pendingToolTrustedLocalMedia: false,
+      pendingToolSpokenText: undefined,
     };
 
     expect(
@@ -667,6 +668,7 @@ describe("consumePendingToolMediaIntoReply", () => {
       pendingToolMediaUrls: ["/tmp/generated.png"],
       pendingToolAudioAsVoice: false,
       pendingToolTrustedLocalMedia: true,
+      pendingToolSpokenText: undefined,
     };
 
     expect(
@@ -681,6 +683,7 @@ describe("consumePendingToolMediaIntoReply", () => {
     expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
     expect(state.pendingToolTrustedLocalMedia).toBe(false);
+    expect(state.pendingToolSpokenText).toBeUndefined();
   });
 
   it("does not append queued voice media when the reply already names media", () => {
@@ -688,6 +691,7 @@ describe("consumePendingToolMediaIntoReply", () => {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
       pendingToolAudioAsVoice: true,
       pendingToolTrustedLocalMedia: true,
+      pendingToolSpokenText: "spoken reply",
     };
 
     expect(
@@ -702,6 +706,32 @@ describe("consumePendingToolMediaIntoReply", () => {
     expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
     expect(state.pendingToolTrustedLocalMedia).toBe(false);
+    expect(state.pendingToolSpokenText).toBeUndefined();
+  });
+
+  it("preserves queued tool spoken text on trusted final media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/reply.wav"],
+      pendingToolAudioAsVoice: false,
+      pendingToolTrustedLocalMedia: true,
+      pendingToolSpokenText: "spoken reply",
+    };
+
+    expect(
+      consumePendingToolMediaIntoReply(state, {
+        text: "done",
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: ["/tmp/reply.wav"],
+      audioAsVoice: undefined,
+      trustedLocalMedia: true,
+      spokenText: "spoken reply",
+    });
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
+    expect(state.pendingToolAudioAsVoice).toBe(false);
+    expect(state.pendingToolTrustedLocalMedia).toBe(false);
+    expect(state.pendingToolSpokenText).toBeUndefined();
   });
 
   it("preserves reasoning replies without consuming queued media", () => {
@@ -709,6 +739,7 @@ describe("consumePendingToolMediaIntoReply", () => {
       pendingToolMediaUrls: ["/tmp/a.png"],
       pendingToolAudioAsVoice: true,
       pendingToolTrustedLocalMedia: false,
+      pendingToolSpokenText: undefined,
     };
 
     expect(
@@ -731,6 +762,7 @@ describe("consumePendingToolMediaReply", () => {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
       pendingToolAudioAsVoice: true,
       pendingToolTrustedLocalMedia: false,
+      pendingToolSpokenText: undefined,
     };
 
     expect(readPendingToolMediaReply(state)).toEqual({
@@ -746,6 +778,7 @@ describe("consumePendingToolMediaReply", () => {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
       pendingToolAudioAsVoice: true,
       pendingToolTrustedLocalMedia: false,
+      pendingToolSpokenText: undefined,
     };
 
     expect(consumePendingToolMediaReply(state)).toEqual({

@@ -194,6 +194,7 @@ export type EmbeddedAgentRunResult = {
     isError?: boolean;
     isReasoning?: boolean;
     audioAsVoice?: boolean;
+    spokenText?: string;
     trustedLocalMedia?: boolean;
     channelData?: Record<string, unknown>;
   }>;

@@ -23,7 +23,10 @@ export type MessagingToolSourceReplyPayload = Pick<
   | "mediaUrl"
   | "mediaUrls"
   | "presentation"
+  | "spokenText"
   | "text"
+  | "trustedLocalMedia"
+  | "ttsSupplement"
 > & {
   idempotencyKey?: string;
 };

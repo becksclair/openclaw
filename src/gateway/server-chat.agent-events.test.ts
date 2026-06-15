@@ -41,6 +41,7 @@ vi.mock("./session-utils.js", () => ({
 
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { createChatFinalAudioRegistry } from "./chat-final-audio.js";
 import {
   createAgentEventHandler,
   createChatRunState,
@@ -87,6 +88,7 @@ describe("agent event handler", () => {
     resolveSessionKeyForRun?: (runId: string) => string | undefined;
     lifecycleErrorRetryGraceMs?: number;
     isChatSendRunActive?: (runId: string) => boolean;
+    clearChatRunState?: AgentEventHandlerOptions["clearChatRunState"];
     clearTrackedActiveRun?: AgentEventHandlerOptions["clearTrackedActiveRun"];
     markTrackedRunTerminalPersisted?: AgentEventHandlerOptions["markTrackedRunTerminalPersisted"];
     trackTrackedRunTerminalPersistence?: AgentEventHandlerOptions["trackTrackedRunTerminalPersistence"];
@@ -120,6 +122,7 @@ describe("agent event handler", () => {
       loadGatewaySessionRowForSnapshot: loadGatewaySessionRow,
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
+      clearChatRunState: params?.clearChatRunState,
       clearTrackedActiveRun: params?.clearTrackedActiveRun ?? clearTrackedActiveRun,
       markTrackedRunTerminalPersisted: params?.markTrackedRunTerminalPersisted,
       trackTrackedRunTerminalPersistence: params?.trackTrackedRunTerminalPersistence,
@@ -1329,6 +1332,52 @@ describe("agent event handler", () => {
     expect(agentRunSeq.has("run-cleanup")).toBe(false);
     expect(agentRunSeq.has("client-cleanup")).toBe(false);
     nowSpy?.mockRestore();
+  });
+
+  it("keeps final audio available after lifecycle completion", () => {
+    const finalAudio = createChatFinalAudioRegistry();
+    const cleanupCalls: string[] = [];
+    let harness: ReturnType<typeof createHarness>;
+    harness = createHarness({
+      now: 2_500,
+      clearChatRunState: (runId) => {
+        cleanupCalls.push(runId);
+        harness.chatRunState.clearRun(runId);
+      },
+    });
+    harness.chatRunState.registry.add("run-cleanup-audio", {
+      sessionKey: "session-cleanup",
+      clientRunId: "client-cleanup-audio",
+    });
+    finalAudio.set({
+      runId: "client-cleanup-audio",
+      sessionKey: "session-cleanup",
+      mediaPath: "/tmp/reply.ogg",
+    });
+
+    harness.handler({
+      runId: "run-cleanup-audio",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "done" },
+    });
+    harness.handler({
+      runId: "run-cleanup-audio",
+      seq: 2,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    expect(cleanupCalls).toContain("client-cleanup-audio");
+    expect(
+      finalAudio.get({
+        runId: "client-cleanup-audio",
+        sessionKey: "session-cleanup",
+      }),
+    ).toBeDefined();
+    harness.nowSpy?.mockRestore();
   });
 
   it("drops stale events that arrive after lifecycle completion", () => {
