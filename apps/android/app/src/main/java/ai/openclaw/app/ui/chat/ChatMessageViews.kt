@@ -45,6 +45,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
 
+private const val CHAT_BUBBLE_WIDTH_FRACTION = 0.94f
+
 private data class ChatBubbleStyle(
   val alignEnd: Boolean,
   val containerColor: Color,
@@ -92,7 +94,7 @@ private fun ChatBubbleContainer(
       color = style.containerColor,
       tonalElevation = 0.dp,
       shadowElevation = 0.dp,
-      modifier = Modifier.fillMaxWidth(0.90f),
+      modifier = Modifier.fillMaxWidth(CHAT_BUBBLE_WIDTH_FRACTION),
     ) {
       Column(
         modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
