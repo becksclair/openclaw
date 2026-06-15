@@ -128,8 +128,14 @@ class SecurePrefsTest {
 
     prefs.setWearTargetSessionKey("main")
 
-    assertEquals("main", prefs.wearTargetSessionKey.value)
-    assertEquals("main", plainPrefs.getString("wear.targetSessionKey", null))
+    assertNull(prefs.wearTargetSessionKey.value)
+    assertFalse(plainPrefs.contains("wear.targetSessionKey"))
+
+    plainPrefs.edit().putString("wear.targetSessionKey", " main ").commit()
+    val migratedPrefs = SecurePrefs(context)
+
+    assertNull(migratedPrefs.wearTargetSessionKey.value)
+    assertFalse(plainPrefs.contains("wear.targetSessionKey"))
   }
 
   @Test
