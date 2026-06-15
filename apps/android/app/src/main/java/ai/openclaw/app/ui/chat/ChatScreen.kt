@@ -79,6 +79,8 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
+private const val CHAT_BUBBLE_WIDTH_FRACTION = 0.94f
+
 /** Full chat surface that wires MainViewModel state to messages, attachments, voice, and composer actions. */
 @Composable
 fun ChatScreen(
@@ -156,8 +158,8 @@ fun ChatScreen(
     modifier =
       Modifier
         .fillMaxSize()
-        .padding(horizontal = 16.dp, vertical = 10.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
+        .padding(horizontal = 10.dp, vertical = 6.dp),
+    verticalArrangement = Arrangement.spacedBy(5.dp),
   ) {
     ChatHeader(
       sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
@@ -593,7 +595,7 @@ private fun ChatBubble(
     horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
   ) {
     Surface(
-      modifier = Modifier.fillMaxWidth(if (isUser) 0.84f else 0.94f),
+      modifier = Modifier.fillMaxWidth(CHAT_BUBBLE_WIDTH_FRACTION),
       shape = RoundedCornerShape(7.dp),
       color = if (isUser) ClawTheme.colors.surfacePressed.copy(alpha = 0.86f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
       contentColor = ClawTheme.colors.text,
