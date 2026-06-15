@@ -849,6 +849,174 @@ describe("gateway server chat", () => {
     ).toBe(true);
   });
 
+  test("chat.history mirrors successful message tool sends at the history tail", async () => {
+    const replyText = "Tail-delivered Telegram reply.";
+    const resultText = '{\n  "ok": true,\n  "messageId": "24270"\n}';
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "reply here too" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-tail",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-tail",
+        content: [
+          {
+            type: "toolResult",
+            id: "call-message-tail",
+            name: "message",
+            toolName: "message",
+            toolCallId: "call-message-tail",
+            text: resultText,
+          },
+        ],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual([
+      "reply here too",
+      resultText,
+      replyText,
+    ]);
+    expect(historyMessages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "call-message-tail",
+      }),
+    );
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(true);
+  });
+
+  test("chat.history mirrors successful message tool sends before the next user turn", async () => {
+    const replyText = "Delivered before the next user.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "first prompt" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-before-user",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-before-user",
+        content: { ok: true, messageId: "24270" },
+        timestamp: 3,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "second prompt" }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual([
+      "first prompt",
+      replyText,
+      "second prompt",
+    ]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(true);
+  });
+
+  test("chat.history mirrors successful message tool sends before a normal assistant reply", async () => {
+    const replyText = "Delivered before assistant text.";
+    const followupText = "Normal assistant follow-up.";
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "send and continue" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-before-assistant",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: replyText,
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-before-assistant",
+        content: { ok: true, messageId: "24270" },
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: followupText }],
+        timestamp: 4,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual([
+      "send and continue",
+      replyText,
+      followupText,
+    ]);
+    expect(
+      historyMessages.some(
+        (message) =>
+          Boolean(message) &&
+          typeof message === "object" &&
+          Boolean((message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror),
+      ),
+    ).toBe(true);
+  });
+
   test("chat.history hides raw delivery-mirror rows but keeps message-tool mirrors", async () => {
     const replyText = "One visible send.";
     const historyMessages = await loadChatHistoryWithMessages([

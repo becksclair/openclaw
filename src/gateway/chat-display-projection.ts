@@ -1016,12 +1016,12 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
     }
 
     if (record.role === "user") {
-      clearPending();
+      flushSucceededMirrors();
       next.push(message);
       continue;
     }
 
-    const flushAfterCurrentMessage: PendingMessageToolVisibleReply[] = [];
+    let newlySucceededMessage = false;
     const deliveryMirrorText = readMessageToolDeliveryMirrorText(record);
     const matchingDeliveryMirrorPending = deliveryMirrorText
       ? pending.filter((item) => item.text.trim() === deliveryMirrorText)
@@ -1040,7 +1040,7 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       matchingDeliveryMirrorPending.length === 0 &&
       isRenderableAssistantDisplayMessage(record)
     ) {
-      clearPending();
+      flushSucceededMirrors();
     }
 
     if (pending.length > 0) {
@@ -1048,11 +1048,11 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
         if (!item.succeeded && isSuccessfulMessageToolResult(record, item)) {
           item.succeeded = true;
           item.completionAnchor = item.deliveryMirrorAnchor ?? record;
+          newlySucceededMessage = true;
           if (item.deliveryMirrorAnchor) {
             if (typeof item.deliveryMirrorIndex === "number") {
               next[item.deliveryMirrorIndex] = { ...item.deliveryMirrorAnchor, display: false };
             }
-            flushAfterCurrentMessage.push(item);
           }
         }
       }
@@ -1074,10 +1074,13 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       item.deliveryMirrorAnchor = record;
       item.deliveryMirrorIndex = next.length;
     }
+    if (newlySucceededMessage) {
+      changed = true;
+    }
     next.push(message);
-    flushSelectedMirrors(flushAfterCurrentMessage);
   }
 
+  flushSucceededMirrors();
   return changed ? next : messages;
 }
 
