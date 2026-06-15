@@ -383,7 +383,7 @@ class SecurePrefs(
   }
 
   internal fun setWearTargetSessionKey(value: String?) {
-    val normalized = value?.trim()?.takeIf { it.isNotEmpty() }
+    val normalized = normalizeWearTargetSessionKeyOverride(value)
     plainPrefs.edit {
       if (normalized == null) {
         remove(wearTargetSessionKeyKey)
@@ -608,5 +608,16 @@ class SecurePrefs(
     }
   }
 
-  private fun loadWearTargetSessionKey(): String? = plainPrefs.getString(wearTargetSessionKeyKey, null)?.trim()?.takeIf { it.isNotEmpty() }
+  private fun loadWearTargetSessionKey(): String? {
+    val normalized = normalizeWearTargetSessionKeyOverride(plainPrefs.getString(wearTargetSessionKeyKey, null))
+    if (normalized == null && plainPrefs.contains(wearTargetSessionKeyKey)) {
+      plainPrefs.edit { remove(wearTargetSessionKeyKey) }
+    }
+    return normalized
+  }
+
+  private fun normalizeWearTargetSessionKeyOverride(value: String?): String? =
+    value
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() && it != "main" }
 }

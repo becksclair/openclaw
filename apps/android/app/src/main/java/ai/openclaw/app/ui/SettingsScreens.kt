@@ -393,7 +393,7 @@ private fun VoiceSettingsScreen(
   var wearTargetSessionKeyDraft by remember(wearTargetSessionKey) {
     mutableStateOf(wearTargetSessionKey.orEmpty())
   }
-  val normalizedWearTargetSessionKeyDraft = wearTargetSessionKeyDraft.trim().takeIf { it.isNotEmpty() }
+  val normalizedWearTargetSessionKeyDraft = normalizeWearTargetSessionKeyOverride(wearTargetSessionKeyDraft)
   val effectiveWearTargetSessionKey = normalizedWearTargetSessionKeyDraft ?: mainSessionKey
 
   SettingsDetailFrame(title = "Talk Provider Setup", subtitle = "Configure voice, transport, and playback.", icon = Icons.Default.Mic, onBack = onBack) {
@@ -428,6 +428,11 @@ private fun VoiceSettingsScreen(
     }
   }
 }
+
+private fun normalizeWearTargetSessionKeyOverride(value: String?): String? =
+  value
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() && it != "main" }
 
 @Composable
 private fun VoiceSetupPanel(
