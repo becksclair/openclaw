@@ -23,6 +23,7 @@ Replay classification:
 | ACP backend-managed runtime options       | Runtime carry         | High       | Target runtime capabilities expose config option keys, but not backend-managed keys. Replay keeps `managedRuntimeOptionKeys` so backend-owned controls are not redundantly written by core.                                                                                                                                                             |
 | Native Codex message-tool TTS delivery    | Partial-overlap carry | High       | Target has adjacent media delivery support, but not generated TTS local-media trust or lightweight bundled channel TTS capability artifacts for transcode-aware voice-note delivery.                                                                                                                                                                    |
 | Gateway message-tool history projection   | Runtime carry         | High       | Target still drops current-session `message` tool sends from client-visible history unless a silent completion or delivery mirror later flushes them. Replay carries successful-send mirroring at next user turn, normal assistant reply, and history tail while preserving raw `toolResult` rows for debug/projection callers.                         |
+| Gateway main session display title        | Runtime carry         | Medium     | Target lets direct-channel `origin.label` become the primary `displayName` for canonical main sessions, so Telegram-routed main rows can appear as `telegram:<id>` in Android and other session lists instead of staying visibly main. Replay keeps origin metadata searchable but not the main row title.                                              |
 | Control UI read aloud through Talk        | Partial-overlap carry | Medium     | Target has Gateway Talk/TTS, but not the browser read-aloud control path, Markdown stripping, or `talk.speak` client integration.                                                                                                                                                                                                                       |
 | Discord 30032 command deploy recovery     | Runtime carry         | Medium     | Target still lacks the Discord application-command-limit recovery predicate and force-overwrite redeploy path.                                                                                                                                                                                                                                          |
 | Discord auto-presence account auth store  | Runtime carry         | Medium     | Target auto-presence loads its auth store via bare `ensureAuthProfileStore()`, which resolves `resolveDefaultAgentDir({})` to the built-in `main` agent dir; with a non-`main` configured default agent the store is empty and bots pin an idle "runtime degraded" presence. Replay carries account-bound store resolution.                             |
@@ -72,6 +73,7 @@ Replay classification:
 - `9349edd41c` - active seam: keep ACP backend-managed runtime options hidden from core runtime control writes.
 - `gateway-runtime-metadata-hotpath` - active seam: keep Gateway request/status hot paths on prepared plugin metadata snapshots, lifecycle-cleared runtime config caches, cached bundled channel/package-state facts, and model-cost indexes scoped to the active manifest snapshot.
 - `gateway-message-tool-history-projection` - active seam: keep successful current-session `message` tool sends visible in `chat.history` and recent-history projections even when there is no later `NO_REPLY` row or delivery mirror. Flush successful pending message-tool mirrors before the next user turn, before the next normal assistant reply, and at the history tail; preserve the successful `toolResult` rows so debug/projection clients do not lose execution evidence.
+- `gateway-main-session-display-title` - active seam: keep canonical agent main sessions visibly main in `sessions.list` when their latest route/origin metadata comes from Telegram or another direct channel. Direct non-main sessions still use `entry.label`/`origin.label`, and search still finds the main row by origin label.
 - `5d62565271` - support/proof carry: keep the operator verifier for target-backed remote ACP bindings, with machine/channel ids supplied by flags or environment only.
 - `extensions/acpx-remote` - active seam: keep the local target-backed remote ACP bridge as a separate nested/excluded plugin lifecycle; do not fold it into the outer repo replay.
 - `c5991de10f` - active seam: keep Control UI read-aloud routed through the Gateway Talk/TTS surface, with Markdown/noisy markup stripped before speech.
@@ -221,6 +223,27 @@ Rebase notes:
 - Keep the projection transport-neutral: the behavior is keyed to successful current-session `message` tool sends, not Telegram-specific session keys, phone names, or device ids.
 - Preserve `toolResult` rows when adding synthetic visible assistant mirrors. The mirror makes the agent reply readable to clients; the raw result keeps execution/debug evidence available to projection callers.
 - Live proof for this seam is host-local: build, restart `openclaw-gateway.service`, then call `chat.history` for the affected session and confirm mirrored assistant text rows appear alongside the successful `toolResult` rows.
+
+### Gateway main session display title
+
+Carry behavior: canonical agent main sessions must keep a stable primary session-list title even when their current route, delivery context, and origin metadata point at Telegram or another direct channel. `sessions.list` should continue to expose `origin.label` for route context and search, but it must not project that label as `displayName` for unlabeled main rows. Direct non-main sessions still fall through to `entry.label` or `origin.label`, so channel DMs remain readable without turning the main row into a peer-id row.
+
+Primary seam files:
+
+- `src/gateway/session-utils.ts`
+- `src/gateway/session-utils.test.ts`
+- `bex-fork.md`
+
+Primary seam tests:
+
+- `node scripts/run-vitest.mjs src/gateway/session-utils.test.ts`
+
+Rebase notes:
+
+- Preserve the row distinction: canonical main keys such as `agent:<agentId>:<mainKey>` suppress only the `origin.label` -> `displayName` fallback. Explicit `entry.displayName` and `entry.label` still win, and group/channel sessions still use `buildGroupDisplayName`.
+- Keep `origin` and delivery fields on the row. Android, Control UI, and Gateway search still need to know the last direct-channel route; the seam changes only the primary title shown for the main session.
+- Do not move this into the Android app as a client-only workaround. Other clients consume `sessions.list`, and the Gateway is the owner of the row display contract.
+- Live proof for this seam is host-local: build/restart the managed Gateway, call `sessions.list`, and confirm the `agent:sky:main` row has no Telegram peer `displayName` while its `origin.label` remains present.
 
 ### ACP remote target-backed bridge
 

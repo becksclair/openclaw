@@ -231,6 +231,33 @@ describe("gateway session utils", () => {
     expect(listed.sessions[0]?.displayName).toBe("openclaw-tui");
   });
 
+  test("session list search includes canonical main origin labels without displaying them", () => {
+    const cfg = { agents: { list: [{ id: "sky", default: true }] } } as OpenClawConfig;
+    const store = {
+      "agent:sky:main": {
+        chatType: "direct",
+        channel: "telegram",
+        origin: { label: "telegram:1637222485" },
+        updatedAt: 2,
+      } as SessionEntry,
+      "agent:sky:cron:daily": {
+        label: "Daily check",
+        updatedAt: 1,
+      } as SessionEntry,
+    };
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { search: "1637222485" },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual(["agent:sky:main"]);
+    expect(listed.sessions[0]?.displayName).toBeUndefined();
+    expect(listed.sessions[0]?.origin?.label).toBe("telegram:1637222485");
+  });
+
   test("session lists mark the final offset page without hasMore", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(
@@ -770,6 +797,24 @@ describe("gateway session utils", () => {
       entry,
     });
     expect(row.displayName).toBe("openclaw-tui");
+  });
+
+  test("buildGatewaySessionRow does not use origin label as canonical main displayName", () => {
+    const cfg = { agents: { list: [{ id: "sky", default: true }] } } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "telegram",
+      origin: { label: "telegram:1637222485" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:sky:main": entry },
+      key: "agent:sky:main",
+      entry,
+    });
+    expect(row.displayName).toBeUndefined();
+    expect(row.origin?.label).toBe("telegram:1637222485");
   });
 
   test("buildGatewaySessionRow displayName uses group display name for group sessions", () => {
