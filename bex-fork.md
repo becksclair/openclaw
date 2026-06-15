@@ -226,7 +226,7 @@ Rebase notes:
 
 ### Gateway main session display title
 
-Carry behavior: canonical agent main sessions must keep a stable primary session-list title even when their current route, delivery context, and origin metadata point at Telegram or another direct channel. `sessions.list` should continue to expose `origin.label` for route context and search, but it must not project that label as `displayName` for unlabeled main rows. Direct non-main sessions still fall through to `entry.label` or `origin.label`, so channel DMs remain readable without turning the main row into a peer-id row.
+Carry behavior: canonical agent main sessions must keep a stable primary session-list title even when their current route, delivery context, and origin metadata point at Telegram or another direct channel. `sessions.list` should expose `displayName: "Main session"` for canonical main rows and continue to expose `origin.label` for route context and search. Synthetic heartbeat rows are maintenance sessions, so normal session lists hide them unless a caller explicitly searches for them. Direct non-main sessions still fall through to `entry.label` or `origin.label`, so channel DMs remain readable without turning the main row into a peer-id row.
 
 Primary seam files:
 
@@ -240,10 +240,10 @@ Primary seam tests:
 
 Rebase notes:
 
-- Preserve the row distinction: canonical main keys such as `agent:<agentId>:<mainKey>` suppress only the `origin.label` -> `displayName` fallback. Explicit `entry.displayName` and `entry.label` still win, and group/channel sessions still use `buildGroupDisplayName`.
+- Preserve the row distinction: canonical main keys such as `agent:<agentId>:<mainKey>` use the stable `Main session` display name after explicit `entry.displayName`/`entry.label` checks. Group/channel sessions still use `buildGroupDisplayName`, and non-main direct rows can still fall back to `origin.label`.
 - Keep `origin` and delivery fields on the row. Android, Control UI, and Gateway search still need to know the last direct-channel route; the seam changes only the primary title shown for the main session.
 - Do not move this into the Android app as a client-only workaround. Other clients consume `sessions.list`, and the Gateway is the owner of the row display contract.
-- Live proof for this seam is host-local: build/restart the managed Gateway, call `sessions.list`, and confirm the `agent:sky:main` row has no Telegram peer `displayName` while its `origin.label` remains present.
+- Live proof for this seam is host-local: build/restart the managed Gateway, call `sessions.list`, and confirm the `agent:sky:main` row has `displayName: "Main session"` while its `origin.label` remains present and `agent:sky:main:heartbeat` is absent from the default list.
 
 ### ACP remote target-backed bridge
 
@@ -405,11 +405,16 @@ Rebase notes:
 
 Carry behavior: the Android app ships a Wear OS companion module for push-to-talk voice turns. The watch discovers phones advertising `openclaw_relay_phone`, pins each turn to one reachable phone node, streams 24 kHz PCM chunks over the Wearable Data Layer, and accepts only terminal audio/status/error messages for the active turn and active phone node. The phone-side relay uses buffered Gateway transcription for STT, sends the transcript through normal `chat.send` with `deliver: true` to the configured Wear target session, asks Gateway for the trusted local final TTS media generated for that same run, and only falls back to `talk.speak` when no reusable final audio is available. Gateway keeps a short-lived run-scoped final-audio registry so the watch can reuse the shared autoTTS artifact without depending on Telegram adapter output.
 
+Session target carry behavior: this fork keeps Android node identity device-scoped for presence, pairing, and capability commands, but makes the conversation target explicit. The default `SessionTargetMode.FollowSelected` starts from the Gateway canonical main session and lets chat, phone voice, Canvas restore/actions, and Wear voice follow the currently selected phone chat session. `SessionTargetMode.Main` pins those surfaces to the Gateway canonical main session, and `SessionTargetMode.Device` preserves upstream-style per-device node session isolation. First launch with this seam clears legacy Wear-only target overrides so old `wear.targetSessionKey` values do not keep the watch pinned to a stale session; after migration, a nonblank `wear.targetSessionKey` remains an explicit override for watch turns only.
+
 Primary seam files:
 
 - `apps/android/app/src/main/AndroidManifest.xml`
 - `apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt`
+- `apps/android/app/src/main/java/ai/openclaw/app/SessionKey.kt`
+- `apps/android/app/src/main/java/ai/openclaw/app/SessionTargetMode.kt`
 - `apps/android/app/src/main/java/ai/openclaw/app/SecurePrefs.kt`
+- `apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt`
 - `apps/android/app/src/main/java/ai/openclaw/app/wear/WearAudioRelay.kt`
 - `apps/android/app/src/main/java/ai/openclaw/app/wear/WearSttTtsSession.kt`
 - `apps/android/app/src/main/java/ai/openclaw/app/wear/WearRelayService.kt`
@@ -445,6 +450,8 @@ Primary seam files:
 - `apps/android/wear/src/test/java/ai/openclaw/wear/audio/AudioPlayerTest.kt`
 - `apps/android/wear/src/test/java/ai/openclaw/wear/audio/PcmBoundarySmootherTest.kt`
 - `apps/android/wear/src/test/java/ai/openclaw/wear/client/AudioStreamAssemblerTest.kt`
+- `apps/android/app/src/test/java/ai/openclaw/app/SecurePrefsTest.kt`
+- `apps/android/app/src/test/java/ai/openclaw/app/SessionKeyTest.kt`
 - `package.json`
 - `src/gateway/chat-final-audio.ts`
 - `src/gateway/talk-transcription-relay.ts`
@@ -469,7 +476,8 @@ Rebase notes:
 - Keep `Close` before transcription `Ready` user-visible on the watch instead of leaving the watch stuck in `Processing`.
 - Keep `WearRelayService` as the background Wearable Data Layer entrypoint, but let the foreground `NodeRuntime` relay own messages when it is already initialized so duplicate service delivery does not double-handle a turn.
 - Keep the phone-side Wear relay on the normal durable turn path. STT still uses Gateway `talk.session.*` transcription events, but assistant replies should route through `chat.send`, reusable final TTS audio, and `talk.speak` only as fallback.
-- Keep Wear target-session routing generic. By default, unset `wear.targetSessionKey` follows the phone's current main session; set Voice settings -> Wear OS Session to `agent:sky:direct:bex` for Bex's Telegram-routed watch turns. Wear code should read the configured key and must not depend on Telegram-specific adapter internals.
+- Keep mobile target-session routing generic. By default, `SessionTargetMode.FollowSelected` plus an unset `wear.targetSessionKey` makes phone voice, Canvas actions, and Wear voice follow the phone's currently selected chat session. `SessionTargetMode.Main` pins those surfaces to the Gateway canonical main session, `SessionTargetMode.Device` keeps the upstream per-device node session, and an explicit Session Target panel Wear override value overrides only watch turns. Wear code must not depend on Telegram-specific adapter internals or personal device names.
+- Keep active voice turns session-stable. Phone PTT turns capture the target session at `chat.send` time, realtime Talk Mode sessions capture it at `talk.session.create` time, and Wear turns capture it at recording start. Visible chat selection may change while these are in flight, but completion events, history fallback, tool calls, and steer calls must continue using the captured session.
 - Keep `chat.finalAudio.get` additive and hidden. It should expose only trusted, run-scoped local audio already produced by the chat reply pipeline, return not-found/unreadable states as fallback signals, and avoid persistent state.
 - A Wear service cold start must not restore persisted phone manual mic capture. Restore that preference only from foreground/UI runtime activation.
 - Wear consults and phone Talk Mode turns can overlap; pending chat completion tracking must be per `runId`, not a single shared waiter.

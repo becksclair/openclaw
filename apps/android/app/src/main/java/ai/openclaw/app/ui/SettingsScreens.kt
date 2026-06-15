@@ -9,8 +9,11 @@ import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
+import ai.openclaw.app.SessionTargetMode
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.normalizeWearTargetSessionKeyOverride
 import ai.openclaw.app.node.DeviceNotificationListenerService
+import ai.openclaw.app.resolveWearConversationTargetSessionKey
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListPanel
@@ -388,13 +391,21 @@ private fun VoiceSettingsScreen(
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
   val micEnabled by viewModel.micEnabled.collectAsState()
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
+  val sessionTargetMode by viewModel.sessionTargetMode.collectAsState()
   val wearTargetSessionKey by viewModel.wearTargetSessionKey.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
+  val chatSessionKey by viewModel.chatSessionKey.collectAsState()
   var wearTargetSessionKeyDraft by remember(wearTargetSessionKey) {
     mutableStateOf(wearTargetSessionKey.orEmpty())
   }
   val normalizedWearTargetSessionKeyDraft = normalizeWearTargetSessionKeyOverride(wearTargetSessionKeyDraft)
-  val effectiveWearTargetSessionKey = normalizedWearTargetSessionKeyDraft ?: mainSessionKey
+  val effectiveWearTargetSessionKey =
+    resolveWearConversationTargetSessionKey(
+      explicitWearTargetSessionKey = wearTargetSessionKeyDraft,
+      mode = sessionTargetMode,
+      mainSessionKey = mainSessionKey,
+      currentSessionKey = chatSessionKey,
+    )
 
   SettingsDetailFrame(title = "Talk Provider Setup", subtitle = "Configure voice, transport, and playback.", icon = Icons.Default.Mic, onBack = onBack) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -414,11 +425,16 @@ private fun VoiceSettingsScreen(
       )
       ClawPanel {
         Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-          Text(text = "Wear OS Session", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Text(text = "Session Target", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          ClawSegmentedControl(
+            options = sessionTargetModeLabels,
+            selected = sessionTargetMode.label,
+            onSelect = { label -> viewModel.setSessionTargetMode(label.toSessionTargetMode()) },
+          )
           Text(text = "Current: $effectiveWearTargetSessionKey", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-          ClawTextField(value = wearTargetSessionKeyDraft, onValueChange = { wearTargetSessionKeyDraft = it }, placeholder = "Follow current phone session")
+          ClawTextField(value = wearTargetSessionKeyDraft, onValueChange = { wearTargetSessionKeyDraft = it }, placeholder = "Wear override session key")
           ClawPrimaryButton(
-            text = "Save Session",
+            text = "Save Wear Override",
             onClick = { viewModel.setWearTargetSessionKey(wearTargetSessionKeyDraft) },
             enabled = normalizedWearTargetSessionKeyDraft != wearTargetSessionKey,
           )
@@ -429,10 +445,22 @@ private fun VoiceSettingsScreen(
   }
 }
 
-private fun normalizeWearTargetSessionKeyOverride(value: String?): String? =
-  value
-    ?.trim()
-    ?.takeIf { it.isNotEmpty() && it != "main" }
+private val sessionTargetModeLabels = listOf("Follow", "Main", "Device")
+
+private val SessionTargetMode.label: String
+  get() =
+    when (this) {
+      SessionTargetMode.FollowSelected -> "Follow"
+      SessionTargetMode.Main -> "Main"
+      SessionTargetMode.Device -> "Device"
+    }
+
+private fun String.toSessionTargetMode(): SessionTargetMode =
+  when (this) {
+    "Main" -> SessionTargetMode.Main
+    "Device" -> SessionTargetMode.Device
+    else -> SessionTargetMode.FollowSelected
+  }
 
 @Composable
 private fun VoiceSetupPanel(

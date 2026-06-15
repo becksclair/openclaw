@@ -231,7 +231,7 @@ describe("gateway session utils", () => {
     expect(listed.sessions[0]?.displayName).toBe("openclaw-tui");
   });
 
-  test("session list search includes canonical main origin labels without displaying them", () => {
+  test("session list search includes canonical main origin labels while preserving main title", () => {
     const cfg = { agents: { list: [{ id: "sky", default: true }] } } as OpenClawConfig;
     const store = {
       "agent:sky:main": {
@@ -254,8 +254,95 @@ describe("gateway session utils", () => {
     });
 
     expect(listed.sessions.map((session) => session.key)).toEqual(["agent:sky:main"]);
-    expect(listed.sessions[0]?.displayName).toBeUndefined();
+    expect(listed.sessions[0]?.displayName).toBe("Main session");
     expect(listed.sessions[0]?.origin?.label).toBe("telegram:1637222485");
+
+    const visibleTitleListed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { search: "main session" },
+    });
+
+    expect(visibleTitleListed.sessions.map((session) => session.key)).toEqual(["agent:sky:main"]);
+  });
+
+  test("session lists hide synthetic heartbeat rows unless explicitly searched", () => {
+    const cfg = { agents: { list: [{ id: "sky", default: true }] } } as OpenClawConfig;
+    const store = {
+      "agent:sky:main:heartbeat": {
+        displayName: "Heartbeat",
+        label: "Heartbeat",
+        heartbeatIsolatedBaseSessionKey: "agent:sky:main",
+        updatedAt: 3,
+      } as SessionEntry,
+      "agent:sky:main": {
+        updatedAt: 2,
+      } as SessionEntry,
+      "agent:sky:alerts:heartbeat": {
+        displayName: "Alerts heartbeat",
+        updatedAt: 1,
+      } as SessionEntry,
+      "agent:sky:alerts:heartbeat:heartbeat": {
+        displayName: "Alerts heartbeat isolated",
+        heartbeatIsolatedBaseSessionKey: "agent:sky:alerts:heartbeat",
+        updatedAt: 0,
+      } as SessionEntry,
+    };
+
+    const defaultList = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: {},
+    });
+    expect(defaultList.sessions.map((session) => session.key)).toEqual([
+      "agent:sky:main",
+      "agent:sky:alerts:heartbeat",
+    ]);
+
+    const labelFiltered = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { label: "Heartbeat" },
+    });
+    expect(labelFiltered.sessions).toEqual([]);
+
+    const searched = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { search: "heartbeat" },
+    });
+    expect(searched.sessions.map((session) => session.key)).toEqual([
+      "agent:sky:main:heartbeat",
+      "agent:sky:alerts:heartbeat",
+      "agent:sky:alerts:heartbeat:heartbeat",
+    ]);
+  });
+
+  test("async session lists hide synthetic heartbeat rows by default", async () => {
+    const cfg = { agents: { list: [{ id: "sky", default: true }] } } as OpenClawConfig;
+    const store = {
+      "agent:sky:main:heartbeat": {
+        displayName: "Heartbeat",
+        heartbeatIsolatedBaseSessionKey: "agent:sky:main",
+        updatedAt: 3,
+      } as SessionEntry,
+      "agent:sky:main": {
+        updatedAt: 2,
+      } as SessionEntry,
+    };
+
+    const listed = await listSessionsFromStoreAsync({
+      cfg,
+      storePath: "",
+      store,
+      opts: {},
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual(["agent:sky:main"]);
   });
 
   test("session lists mark the final offset page without hasMore", () => {
@@ -799,7 +886,7 @@ describe("gateway session utils", () => {
     expect(row.displayName).toBe("openclaw-tui");
   });
 
-  test("buildGatewaySessionRow does not use origin label as canonical main displayName", () => {
+  test("buildGatewaySessionRow uses stable canonical main displayName instead of origin label", () => {
     const cfg = { agents: { list: [{ id: "sky", default: true }] } } as OpenClawConfig;
     const entry = {
       chatType: "direct",
@@ -813,7 +900,7 @@ describe("gateway session utils", () => {
       key: "agent:sky:main",
       entry,
     });
-    expect(row.displayName).toBeUndefined();
+    expect(row.displayName).toBe("Main session");
     expect(row.origin?.label).toBe("telegram:1637222485");
   });
 

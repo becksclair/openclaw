@@ -74,6 +74,8 @@ class WearAudioRelay(
 
   @Volatile private var activeResponseFormat: String = WearSttTtsSession.RESPONSE_FORMAT_PCM_24K
 
+  @Volatile private var activeTargetSessionKey: String? = null
+
   init {
     messageClient.addListener(watchMessageListener)
     Log.d(TAG, "registered foreground watch message listener")
@@ -112,6 +114,7 @@ class WearAudioRelay(
     activeWatchTurnId = turnId
     isRecording = true
     activeResponseFormat = chooseResponseFormat(startPayload)
+    activeTargetSessionKey = wearTargetSessionKeyProvider()
     synchronized(audioBufferLock) { audioBuffer.clear() }
     sendStatus("Recording...")
   }
@@ -163,12 +166,14 @@ class WearAudioRelay(
           if (activeWatchTurnId == watchTurnId) {
             activeWatchTurnId = null
           }
+          activeTargetSessionKey = null
           return
         }
         audioBuffer.toList()
       }
     val targetNodeId = activeWatchNodeId
     val responseFormat = activeResponseFormat
+    val targetSessionKey = activeTargetSessionKey ?: wearTargetSessionKeyProvider()
     scope.launch {
       if (!isCurrentTurn(counterTurnId)) return@launch
       Log.d(TAG, "watch turn captured ${capturedFrames.size} audio frames (${summarizePcm16Audio(capturedFrames)})")
@@ -181,7 +186,7 @@ class WearAudioRelay(
         WearSttTtsSession(
           scope = scope,
           session = gatewaySession,
-          sessionKey = wearTargetSessionKeyProvider(),
+          sessionKey = targetSessionKey,
           responseFormat = responseFormat,
           onAudioResponse = { audioResponse ->
             if (isActiveSession()) {
@@ -207,6 +212,7 @@ class WearAudioRelay(
               if (activeWatchTurnId == watchTurnId) {
                 activeWatchTurnId = null
               }
+              activeTargetSessionKey = null
             }
           },
         )
@@ -238,6 +244,7 @@ class WearAudioRelay(
     activeSession = null
     activeWatchNodeId = null
     activeWatchTurnId = null
+    activeTargetSessionKey = null
   }
 
   fun handleGatewayEvent(

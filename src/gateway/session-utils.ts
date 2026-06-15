@@ -155,6 +155,7 @@ export type {
 } from "./session-utils.types.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
+const CANONICAL_MAIN_DISPLAY_NAME = "Main session";
 
 function tryResolveExistingPath(value: string): string | null {
   try {
@@ -1874,7 +1875,7 @@ export function buildGatewaySessionRow(params: {
   const origin = entry?.origin;
   const originLabel = origin?.label;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
-  const shouldUseOriginDisplayName = !isCanonicalMainSessionKey({ cfg, key });
+  const isCanonicalMain = isCanonicalMainSessionKey({ cfg, key });
   const displayName =
     entry?.displayName ??
     (isGroupSession && channel
@@ -1888,7 +1889,7 @@ export function buildGatewaySessionRow(params: {
         })
       : undefined) ??
     entry?.label ??
-    (shouldUseOriginDisplayName ? originLabel : undefined);
+    (isCanonicalMain ? CANONICAL_MAIN_DISPLAY_NAME : originLabel);
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(
@@ -2223,7 +2224,17 @@ function isCanonicalMainSessionKey(params: { cfg: OpenClawConfig; key: string })
   return parsed?.rest === normalizeMainKey(params.cfg.session?.mainKey);
 }
 
+function isSyntheticHeartbeatSessionListEntry(key: string, entry?: SessionEntry): boolean {
+  const baseSessionKey = entry?.heartbeatIsolatedBaseSessionKey?.trim();
+  if (!baseSessionKey || !key.startsWith(baseSessionKey)) {
+    return false;
+  }
+  const suffix = key.slice(baseSessionKey.length);
+  return suffix.length > 0 && /^(:heartbeat)+$/.test(suffix);
+}
+
 function resolveSessionListSearchDisplayName(
+  cfg: OpenClawConfig,
   key: string,
   entry?: SessionEntry,
 ): string | undefined {
@@ -2242,7 +2253,10 @@ function resolveSessionListSearchDisplayName(
       key,
     });
   }
-  return entry?.label ?? entry?.origin?.label;
+  return (
+    entry?.label ??
+    (isCanonicalMainSessionKey({ cfg, key }) ? CANONICAL_MAIN_DISPLAY_NAME : entry?.origin?.label)
+  );
 }
 
 function addSessionListSearchModelFields(
@@ -2505,6 +2519,7 @@ function filterSessionEntries(params: {
   const label = normalizeOptionalString(opts.label) ?? "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
+  const includeSyntheticMaintenanceRows = Boolean(search);
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
@@ -2538,6 +2553,9 @@ function filterSessionEntries(params: {
     })
     .filter(([key, entry]) => {
       if (isPhantomAgentStoreListEntry(key, entry)) {
+        return false;
+      }
+      if (!includeSyntheticMaintenanceRows && isSyntheticHeartbeatSessionListEntry(key, entry)) {
         return false;
       }
       if (!spawnedBy) {
@@ -2579,8 +2597,9 @@ function filterSessionEntries(params: {
   if (search) {
     entries = entries.filter(([key, entry]) => {
       const cheapFields = [
-        resolveSessionListSearchDisplayName(key, entry),
+        resolveSessionListSearchDisplayName(cfg, key, entry),
         entry?.label,
+        entry?.origin?.label,
         entry?.subject,
         entry?.sessionId,
         key,
