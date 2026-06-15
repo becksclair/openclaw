@@ -160,6 +160,9 @@ class TalkModeManager internal constructor(
   private var mainSessionKey: String = "main"
 
   @Volatile private var pendingRunId: String? = null
+  // PTT completion uses the send-time session; visible chat can switch while the
+  // run is in flight.
+  @Volatile private var pendingRunSessionKey: String? = null
   private var pendingFinal: CompletableDeferred<Boolean>? = null
   private val completedRunsLock = Any()
   private val completedRunStates = LinkedHashMap<String, Boolean>()
@@ -168,6 +171,7 @@ class TalkModeManager internal constructor(
   private val startGeneration = AtomicLong(0L)
 
   @Volatile private var realtimeSessionId: String? = null
+  @Volatile private var realtimeSessionKey: String? = null
   private var realtimeCaptureJob: Job? = null
   private var realtimeAppendJob: Job? = null
 
@@ -458,8 +462,15 @@ class TalkModeManager internal constructor(
 
     // Only speak events for the active session — prevents TTS from other
     // sessions/channels leaking into voice mode (privacy + correctness).
+    val pending = pendingRunId
+    val pendingSession = pendingRunSessionKey
     val eventSession = obj["sessionKey"]?.asStringOrNull()
-    val activeSession = mainSessionKey.ifBlank { "main" }
+    val activeSession =
+      if (pending == runId && pendingSession != null) {
+        pendingSession
+      } else {
+        realtimeSessionKey ?: normalizeSessionKey(mainSessionKey)
+      }
     if (eventSession != null && eventSession != activeSession) return
 
     if (maybeCompleteRealtimeToolCall(runId = runId, state = state, messageEl = obj["message"])) {
@@ -471,7 +482,6 @@ class TalkModeManager internal constructor(
 
     // If this is a response we initiated, handle normally below.
     // Otherwise, if ttsOnAllResponses, finish streaming TTS on terminal events.
-    val pending = pendingRunId
     val knownRun = pending == runId || hasRunCompletion(runId)
     if (!knownRun) {
       if (ttsOnAllResponses && state == "final") {
@@ -507,6 +517,7 @@ class TalkModeManager internal constructor(
     pendingFinal?.complete(terminal)
     pendingFinal = null
     pendingRunId = null
+    pendingRunSessionKey = null
   }
 
   internal suspend fun runE2eRealtimeTurn(
@@ -591,6 +602,7 @@ class TalkModeManager internal constructor(
     stopRealtimeRelay()
     stopSpeaking()
     pendingRunId = null
+    pendingRunSessionKey = null
     pendingFinal?.cancel()
     pendingFinal = null
     synchronized(completedRunsLock) {
@@ -647,9 +659,10 @@ class TalkModeManager internal constructor(
     }
 
     _statusText.value = "Connecting…"
+    val targetSessionKey = normalizeSessionKey(mainSessionKey)
     val params =
       buildJsonObject {
-        put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
+        put("sessionKey", JsonPrimitive(targetSessionKey))
         put("mode", JsonPrimitive("realtime"))
         put("transport", JsonPrimitive("gateway-relay"))
         put("brain", JsonPrimitive("agent-consult"))
@@ -667,6 +680,7 @@ class TalkModeManager internal constructor(
     }
 
     realtimeSessionId = sessionId
+    realtimeSessionKey = targetSessionKey
     realtimeOutputSuppressed = false
     _isListening.value = true
     _statusText.value = "Listening"
@@ -1031,6 +1045,7 @@ class TalkModeManager internal constructor(
     val status = _statusText.value
     val sessionId = realtimeSessionId
     realtimeSessionId = null
+    realtimeSessionKey = null
     realtimeOutputSuppressed = false
     if (cancelCapture) {
       realtimeCaptureJob?.cancel()
@@ -1077,11 +1092,17 @@ class TalkModeManager internal constructor(
     forced: Boolean = false,
   ) {
     val relaySessionId = realtimeSessionId ?: return
+    val relaySessionKey = realtimeSessionKey ?: normalizeSessionKey(mainSessionKey)
     pendingRealtimeToolCalls.add(callId)
     scope.launch {
       try {
         if (name == REALTIME_AGENT_CONTROL_TOOL) {
-          submitRealtimeAgentControl(callId = callId, relaySessionId = relaySessionId, args = args)
+          submitRealtimeAgentControl(
+            callId = callId,
+            relaySessionId = relaySessionId,
+            sessionKey = relaySessionKey,
+            args = args,
+          )
           return@launch
         }
         if (forced) {
@@ -1089,7 +1110,7 @@ class TalkModeManager internal constructor(
         }
         val params =
           buildJsonObject {
-            put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
+            put("sessionKey", JsonPrimitive(relaySessionKey))
             put("callId", JsonPrimitive(callId))
             put("name", JsonPrimitive(name))
             put("relaySessionId", JsonPrimitive(relaySessionId))
@@ -1230,6 +1251,7 @@ class TalkModeManager internal constructor(
   private suspend fun submitRealtimeAgentControl(
     callId: String,
     relaySessionId: String,
+    sessionKey: String,
     args: JsonElement?,
   ) {
     val argsObject = args.asObjectOrNull()
@@ -1247,7 +1269,7 @@ class TalkModeManager internal constructor(
     val params =
       buildJsonObject {
         put("sessionId", JsonPrimitive(relaySessionId))
-        put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
+        put("sessionKey", JsonPrimitive(sessionKey))
         put("text", JsonPrimitive(text.ifEmpty { "status" }))
         if (!mode.isNullOrEmpty()) put("mode", JsonPrimitive(mode))
       }
@@ -1615,8 +1637,9 @@ class TalkModeManager internal constructor(
 
     try {
       val startedAt = System.currentTimeMillis().toDouble() / 1000.0
-      Log.d(tag, "chat.send start sessionKey=${mainSessionKey.ifBlank { "main" }} chars=${prompt.length}")
-      val ack = sendChat(prompt, session)
+      val targetSessionKey = normalizeSessionKey(mainSessionKey)
+      Log.d(tag, "chat.send start sessionKey=$targetSessionKey chars=${prompt.length}")
+      val ack = sendChat(prompt, session, targetSessionKey)
       val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
       Log.d(tag, "chat.send ok runId=$runId status=${ack.status}")
       if (ack.isTerminalFailure) {
@@ -1632,9 +1655,10 @@ class TalkModeManager internal constructor(
       val assistant =
         consumeRunText(runId)
           ?: waitForAssistantText(
-            session,
-            chatSendAckHistorySinceSeconds(ack, startedAt),
-            if (ok) 12_000 else 25_000,
+            session = session,
+            sinceSeconds = chatSendAckHistorySinceSeconds(ack, startedAt),
+            timeoutMs = if (ok) 12_000 else 25_000,
+            sessionKey = targetSessionKey,
           )
       if (assistant.isNullOrBlank()) {
         _statusText.value = "No reply"
@@ -1743,12 +1767,13 @@ class TalkModeManager internal constructor(
   private suspend fun sendChat(
     message: String,
     session: GatewaySession,
+    targetSessionKey: String = normalizeSessionKey(mainSessionKey),
   ): ChatSendAck {
     val runId = UUID.randomUUID().toString()
-    armPendingRun(runId)
+    armPendingRun(runId, targetSessionKey)
     val params =
       buildJsonObject {
-        put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
+        put("sessionKey", JsonPrimitive(targetSessionKey))
         put("message", JsonPrimitive(message))
         put("thinking", JsonPrimitive("low"))
         put("timeoutMs", JsonPrimitive(30_000))
@@ -1760,6 +1785,7 @@ class TalkModeManager internal constructor(
       val actualRunId = parsed.runId ?: runId
       if (actualRunId != runId) {
         pendingRunId = actualRunId
+        pendingRunSessionKey = targetSessionKey
       }
       if (parsed.isTerminal) {
         clearPendingRun(actualRunId)
@@ -1795,10 +1821,14 @@ class TalkModeManager internal constructor(
     return result
   }
 
-  private fun armPendingRun(runId: String): CompletableDeferred<Boolean> {
+  private fun armPendingRun(
+    runId: String,
+    sessionKey: String = normalizeSessionKey(mainSessionKey),
+  ): CompletableDeferred<Boolean> {
     pendingFinal?.cancel()
     val deferred = CompletableDeferred<Boolean>()
     pendingRunId = runId
+    pendingRunSessionKey = sessionKey
     pendingFinal = deferred
     return deferred
   }
@@ -1807,7 +1837,13 @@ class TalkModeManager internal constructor(
     if (pendingRunId == runId) {
       pendingFinal = null
       pendingRunId = null
+      pendingRunSessionKey = null
     }
+  }
+
+  private fun normalizeSessionKey(sessionKey: String?): String {
+    val trimmed = sessionKey?.trim().orEmpty()
+    return trimmed.ifEmpty { "main" }
   }
 
   private fun cacheRunCompletion(
@@ -1847,10 +1883,11 @@ class TalkModeManager internal constructor(
     session: GatewaySession,
     sinceSeconds: Double?,
     timeoutMs: Long,
+    sessionKey: String = normalizeSessionKey(mainSessionKey),
   ): String? {
     val deadline = SystemClock.elapsedRealtime() + timeoutMs
     while (SystemClock.elapsedRealtime() < deadline) {
-      val text = fetchLatestAssistantText(session, sinceSeconds)
+      val text = fetchLatestAssistantText(session, sinceSeconds, sessionKey)
       if (!text.isNullOrBlank()) return text
       delay(300)
     }
@@ -1860,8 +1897,9 @@ class TalkModeManager internal constructor(
   private suspend fun fetchLatestAssistantText(
     session: GatewaySession,
     sinceSeconds: Double? = null,
+    sessionKey: String = normalizeSessionKey(mainSessionKey),
   ): String? {
-    val key = mainSessionKey.ifBlank { "main" }
+    val key = sessionKey
     val res = session.request("chat.history", "{\"sessionKey\":\"$key\"}")
     val root = json.parseToJsonElement(res).asObjectOrNull() ?: return null
     val messages = root["messages"] as? JsonArray ?: return null

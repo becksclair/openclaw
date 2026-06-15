@@ -333,7 +333,11 @@ class NodeRuntime(
     return buildNodeMainSessionKey(deviceId, agentId)
   }
 
-  private val _mainSessionKey = MutableStateFlow(resolveNodeMainSessionKey())
+  @Volatile private var activeAgentId: String? = null
+  @Volatile private var gatewayMainSessionKey: String = "main"
+  @Volatile private var nodeMainSessionKey: String = resolveNodeMainSessionKey()
+
+  private val _mainSessionKey = MutableStateFlow(resolvePreferredMainSessionKey())
   val mainSessionKey: StateFlow<String> = _mainSessionKey.asStateFlow()
 
   private val cameraHudSeq = AtomicLong(0)
@@ -463,7 +467,10 @@ class NodeRuntime(
         _gatewayVersion.value = hello.serverVersion
         _gatewayUpdateAvailable.value = hello.updateAvailable
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-        syncMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
+        syncMainSessionKey(
+          agentId = resolveAgentIdFromMainSessionKey(hello.mainSessionKey),
+          gatewayMainKey = hello.mainSessionKey,
+        )
         updateStatus()
         micCapture.onGatewayConnectionChanged(true)
         scope.launch {
@@ -651,7 +658,7 @@ class NodeRuntime(
         onRunIdKnown(idempotencyKey)
         val params =
           buildJsonObject {
-            put("sessionKey", JsonPrimitive(resolveMainSessionKey()))
+            put("sessionKey", JsonPrimitive(resolveVoiceTargetSessionKey()))
             put("message", JsonPrimitive(message))
             put("thinking", JsonPrimitive(chatThinkingLevel.value))
             put("timeoutMs", JsonPrimitive(30_000))
@@ -739,16 +746,26 @@ class NodeRuntime(
   internal val wearAudioRelay: ai.openclaw.app.wear.WearAudioRelay
     get() = wearAudioRelayLazy.value
 
-  private fun syncMainSessionKey(agentId: String?) {
-    val resolvedKey = resolveNodeMainSessionKey(agentId)
-    // Always push the resolved session key into TalkMode, even when the
-    // state flow value is unchanged, so lazy TalkMode instances do not
-    // stay on the default "main" session key.
-    talkMode.setMainSessionKey(resolvedKey)
-    if (_mainSessionKey.value == resolvedKey) return
-    _mainSessionKey.value = resolvedKey
-    chat.applyMainSessionKey(resolvedKey)
-    updateHomeCanvasState()
+  private fun syncMainSessionKey(
+    agentId: String?,
+    gatewayMainKey: String? = null,
+  ) {
+    if (!agentId.isNullOrBlank()) {
+      activeAgentId = agentId
+    }
+    nodeMainSessionKey = resolveNodeMainSessionKey(activeAgentId)
+    if (gatewayMainKey != null) {
+      gatewayMainSessionKey = buildGatewayMainSessionKey(activeAgentId, gatewayMainKey)
+    } else if (gatewayMainSessionKey == "main") {
+      gatewayMainSessionKey = buildGatewayMainSessionKey(activeAgentId, gatewayMainSessionKey)
+    }
+    val resolvedKey = resolvePreferredMainSessionKey()
+    if (_mainSessionKey.value != resolvedKey) {
+      _mainSessionKey.value = resolvedKey
+      chat.applyMainSessionKey(resolvedKey)
+      updateHomeCanvasState()
+    }
+    refreshVoiceTargetSessionKey()
   }
 
   private fun updateStatus() {
@@ -793,11 +810,34 @@ class NodeRuntime(
     return if (trimmed.isEmpty()) "main" else trimmed
   }
 
+  private fun resolvePreferredMainSessionKey(): String =
+    when (prefs.sessionTargetMode.value) {
+      SessionTargetMode.Device -> nodeMainSessionKey
+      SessionTargetMode.Main,
+      SessionTargetMode.FollowSelected,
+      -> gatewayMainSessionKey.trim().takeIf { it.isNotEmpty() && it != "main" } ?: nodeMainSessionKey
+    }
+
+  private fun resolveVoiceTargetSessionKey(): String =
+    resolveConversationTargetSessionKey(
+      mode = prefs.sessionTargetMode.value,
+      mainSessionKey = resolveMainSessionKey(),
+      currentSessionKey = chat.sessionKey.value,
+    )
+
+  private fun refreshVoiceTargetSessionKey() {
+    // Voice and Wear turns may intentionally follow the visible chat session,
+    // while node presence remains device-scoped.
+    talkMode.setMainSessionKey(resolveVoiceTargetSessionKey())
+  }
+
   private fun resolveWearTargetSessionKey(): String =
-    prefs.wearTargetSessionKey.value
-      ?.trim()
-      ?.takeIf { it.isNotEmpty() }
-      ?: resolveMainSessionKey()
+    resolveWearConversationTargetSessionKey(
+      explicitWearTargetSessionKey = prefs.wearTargetSessionKey.value,
+      mode = prefs.sessionTargetMode.value,
+      mainSessionKey = resolveMainSessionKey(),
+      currentSessionKey = chat.sessionKey.value,
+    )
 
   private fun showLocalCanvasOnConnect() {
     _canvasA2uiHydrated.value = false
@@ -920,7 +960,7 @@ class NodeRuntime(
       _canvasRehydratePending.value = true
       _canvasRehydrateErrorText.value = null
 
-      val sessionKey = resolveMainSessionKey()
+      val sessionKey = resolveVoiceTargetSessionKey()
       val prompt =
         "Restore canvas now for session=$sessionKey source=$source. " +
           "If existing A2UI state exists, replay it immediately. " +
@@ -1002,6 +1042,7 @@ class NodeRuntime(
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
     prefs.notificationForwardingMaxEventsPerMinute
   val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
+  val sessionTargetMode: StateFlow<SessionTargetMode> = prefs.sessionTargetMode
   val wearTargetSessionKey: StateFlow<String?> = prefs.wearTargetSessionKey
 
   private var didAutoConnect = false
@@ -1239,6 +1280,12 @@ class NodeRuntime(
 
   fun setNotificationForwardingSessionKey(value: String?) {
     prefs.setNotificationForwardingSessionKey(value)
+  }
+
+  fun setSessionTargetMode(value: SessionTargetMode) {
+    if (prefs.sessionTargetMode.value == value) return
+    prefs.setSessionTargetMode(value)
+    syncMainSessionKey(activeAgentId)
   }
 
   fun setWearTargetSessionKey(value: String?) {
@@ -1822,7 +1869,7 @@ class NodeRuntime(
           .ifEmpty { "-" }
       val contextJson = (userActionObj["context"] as? JsonObject)?.toString()
 
-      val sessionKey = resolveMainSessionKey()
+      val sessionKey = resolveVoiceTargetSessionKey()
       val message =
         OpenClawCanvasA2UIAction.formatAgentMessage(
           actionName = name,
@@ -1875,6 +1922,7 @@ class NodeRuntime(
   fun loadChat(sessionKey: String) {
     val key = sessionKey.trim().ifEmpty { resolveMainSessionKey() }
     chat.load(key)
+    refreshVoiceTargetSessionKey()
   }
 
   fun refreshChat() {
@@ -1891,6 +1939,7 @@ class NodeRuntime(
 
   fun switchChatSession(sessionKey: String) {
     chat.switchSession(sessionKey)
+    refreshVoiceTargetSessionKey()
   }
 
   fun abortChat() {
@@ -2012,6 +2061,7 @@ class NodeRuntime(
       val root = json.parseToJsonElement(res).asObjectOrNull() ?: return
       val defaultAgentId = root["defaultId"].asStringOrNull()?.trim().orEmpty()
       val mainKey = normalizeMainKey(root["mainKey"].asStringOrNull())
+      val sessionScope = root["scope"].asStringOrNull()
       val agents =
         (root["agents"] as? JsonArray)?.mapNotNull { item ->
           val obj = item.asObjectOrNull() ?: return@mapNotNull null
@@ -2033,7 +2083,16 @@ class NodeRuntime(
 
       _gatewayDefaultAgentId.value = defaultAgentId.ifEmpty { null }
       _gatewayAgents.value = agents
-      syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
+      val resolvedAgentId = resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value
+      syncMainSessionKey(
+        agentId = resolvedAgentId,
+        gatewayMainKey =
+          resolveGatewayMainSessionKey(
+            agentId = resolvedAgentId,
+            mainKey = mainKey,
+            scope = sessionScope,
+          ),
+      )
       updateHomeCanvasState()
     } catch (_: Throwable) {
       // ignore

@@ -108,6 +108,7 @@ class MainViewModel(
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
     prefs.notificationForwardingMaxEventsPerMinute
   val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
+  val sessionTargetMode: StateFlow<SessionTargetMode> = prefs.sessionTargetMode
   val wearTargetSessionKey: StateFlow<String?> = prefs.wearTargetSessionKey
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
@@ -397,6 +398,10 @@ class MainViewModel(
 
   fun setNotificationForwardingSessionKey(value: String?) {
     ensureRuntime().setNotificationForwardingSessionKey(value)
+  }
+
+  fun setSessionTargetMode(value: SessionTargetMode) {
+    ensureRuntime().setSessionTargetMode(value)
   }
 
   fun setWearTargetSessionKey(value: String?) {

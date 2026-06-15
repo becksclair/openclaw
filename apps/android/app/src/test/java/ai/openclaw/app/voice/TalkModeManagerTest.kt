@@ -78,11 +78,55 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun pendingTalkFinalUsesPinnedSessionAfterVisibleSessionChanges() {
+    val manager = createManager()
+    val final = CompletableDeferred<Boolean>()
+
+    manager.setMainSessionKey("session-a")
+    setPrivateField(manager, "pendingRunId", "run-talk")
+    setPrivateField(manager, "pendingRunSessionKey", "session-a")
+    setPrivateField(manager, "pendingFinal", final)
+
+    manager.setMainSessionKey("session-b")
+    manager.handleGatewayEvent(
+      "chat",
+      chatFinalPayload(
+        runId = "run-talk",
+        text = "spoken once",
+        sessionKey = "session-a",
+      ),
+    )
+
+    assertTrue(final.isCompleted)
+  }
+
+  @Test
   fun nonPendingFinalStillUsesAllResponseTts() {
     val manager = createManager()
 
     manager.ttsOnAllResponses = true
     manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-other", text = "speak this"))
+
+    assertEquals(1L, playbackGeneration(manager).get())
+  }
+
+  @Test
+  fun realtimeFinalUsesPinnedSessionAfterVisibleSessionChanges() {
+    val manager = createManager()
+
+    manager.ttsOnAllResponses = true
+    manager.setMainSessionKey("session-b")
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    setPrivateField(manager, "realtimeSessionKey", "session-a")
+
+    manager.handleGatewayEvent(
+      "chat",
+      chatFinalPayload(
+        runId = "run-other",
+        text = "speak this",
+        sessionKey = "session-a",
+      ),
+    )
 
     assertEquals(1L, playbackGeneration(manager).get())
   }
@@ -531,11 +575,12 @@ class TalkModeManagerTest {
     runId: String,
     text: String,
     role: String = "assistant",
+    sessionKey: String = "main",
   ): String =
     """
     {
       "runId": "$runId",
-      "sessionKey": "main",
+      "sessionKey": "$sessionKey",
       "state": "final",
       "message": {
         "role": "$role",

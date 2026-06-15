@@ -162,7 +162,12 @@ fun ChatScreen(
     verticalArrangement = Arrangement.spacedBy(5.dp),
   ) {
     ChatHeader(
-      sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
+      sessionTitle =
+        currentSessionTitle(
+          sessionKey = sessionKey,
+          sessions = sessions,
+          mainSessionKey = mainSessionKey,
+        ),
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
       onMore = {
@@ -912,7 +917,10 @@ private fun AttachmentChip(
 private fun currentSessionTitle(
   sessionKey: String,
   sessions: List<ChatSessionEntry>,
+  mainSessionKey: String,
 ): String {
+  val mainKey = mainSessionKey.trim().ifEmpty { "main" }
+  if (sessionKey == mainKey || sessionKey == "main") return "Main session"
   val entry = sessions.firstOrNull { it.key == sessionKey }
   val name = entry?.displayName?.takeIf { it.isNotBlank() } ?: return "New chat"
   return friendlySessionName(name)
