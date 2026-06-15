@@ -62,6 +62,7 @@ export type CodexAppServerToolTelemetry = {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
+  toolSpokenText?: string;
   successfulCronAdds?: number;
 };
 
@@ -423,6 +424,7 @@ export class CodexAppServerEventProjector {
       toolMediaUrls: this.buildToolMediaUrls(toolTelemetry),
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       toolTrustedLocalMedia: toolTelemetry.toolTrustedLocalMedia,
+      toolSpokenText: toolTelemetry.toolSpokenText,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       cloudCodeAssistFormatError: false,
       attemptUsage: this.tokenUsage,

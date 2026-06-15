@@ -69,8 +69,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -737,7 +737,7 @@ class NodeRuntime(
       ai.openclaw.app.wear.WearAudioRelay(
         context = appContext,
         gatewaySession = operatorSession,
-        mainSessionKeyProvider = { resolveMainSessionKey() },
+        wearTargetSessionKeyProvider = { resolveWearTargetSessionKey() },
       )
     }
 
@@ -801,6 +801,12 @@ class NodeRuntime(
     val trimmed = _mainSessionKey.value.trim()
     return if (trimmed.isEmpty()) "main" else trimmed
   }
+
+  private fun resolveWearTargetSessionKey(): String =
+    prefs.wearTargetSessionKey.value
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
+      ?: resolveMainSessionKey()
 
   private fun showLocalCanvasOnConnect() {
     _canvasA2uiHydrated.value = false
@@ -1005,6 +1011,7 @@ class NodeRuntime(
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
     prefs.notificationForwardingMaxEventsPerMinute
   val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
+  val wearTargetSessionKey: StateFlow<String?> = prefs.wearTargetSessionKey
 
   private var didAutoConnect = false
 
@@ -1241,6 +1248,10 @@ class NodeRuntime(
 
   fun setNotificationForwardingSessionKey(value: String?) {
     prefs.setNotificationForwardingSessionKey(value)
+  }
+
+  fun setWearTargetSessionKey(value: String?) {
+    prefs.setWearTargetSessionKey(value)
   }
 
   fun setVoiceScreenActive(active: Boolean) {

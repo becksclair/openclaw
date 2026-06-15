@@ -2517,6 +2517,8 @@ export async function dispatchReplyFromConfig(
       throwIfFinalDeliveryAborted();
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
       throwIfFinalDeliveryAborted();
+      await params.replyOptions?.onFinalReplyPayload?.(normalizedPayload);
+      throwIfFinalDeliveryAborted();
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
         kind: "final",
@@ -3623,6 +3625,8 @@ export async function dispatchReplyFromConfig(
               { visibleTextAlreadyDelivered: true },
             );
             const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
+            throwIfDispatchOperationAborted();
+            await params.replyOptions?.onFinalReplyPayload?.(normalizedTtsOnlyPayload);
             throwIfDispatchOperationAborted();
             const result = await routeReplyToOriginating(normalizedTtsOnlyPayload, {
               abortSignal: getDispatchAbortSignal(),

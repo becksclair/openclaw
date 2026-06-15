@@ -2,6 +2,7 @@
  * Gateway request context construction tests.
  */
 import { describe, expect, it, vi } from "vitest";
+import { createChatFinalAudioRegistry } from "./chat-final-audio.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import {
   createGatewayRequestContext,
@@ -51,6 +52,7 @@ function makeContextParams(
     chatDeltaLastBroadcastText: new Map(),
     agentDeltaSentAt: new Map(),
     bufferedAgentEvents: new Map(),
+    chatFinalAudio: createChatFinalAudioRegistry(),
     clearChatRunState: vi.fn(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),

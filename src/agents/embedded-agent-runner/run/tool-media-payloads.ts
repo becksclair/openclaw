@@ -22,6 +22,7 @@ export function mergeAttemptToolMediaPayloads(params: {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
+  toolSpokenText?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): EmbeddedRunPayload[] | undefined {
   // Trim and dedupe tool media before merging with assistant-owned payload media.
@@ -51,6 +52,7 @@ export function mergeAttemptToolMediaPayloads(params: {
         mediaUrl: deliverableMediaUrls[0],
         audioAsVoice: true,
         trustedLocalMedia: true,
+        ...(params.toolSpokenText ? { spokenText: params.toolSpokenText } : {}),
       }),
     ];
   }
@@ -74,6 +76,9 @@ export function mergeAttemptToolMediaPayloads(params: {
       mediaUrl: payload.mediaUrl ?? mergedMediaUrls[0],
       audioAsVoice: payload.audioAsVoice || params.toolAudioAsVoice || undefined,
       trustedLocalMedia: payload.trustedLocalMedia || params.toolTrustedLocalMedia || undefined,
+      ...((payload.spokenText ?? params.toolSpokenText)
+        ? { spokenText: payload.spokenText ?? params.toolSpokenText }
+        : {}),
     });
     return payloads;
   }
@@ -86,6 +91,7 @@ export function mergeAttemptToolMediaPayloads(params: {
       mediaUrl: mediaUrls[0],
       audioAsVoice: params.toolAudioAsVoice || undefined,
       trustedLocalMedia: params.toolTrustedLocalMedia || undefined,
+      ...(params.toolSpokenText ? { spokenText: params.toolSpokenText } : {}),
     },
   ];
 }

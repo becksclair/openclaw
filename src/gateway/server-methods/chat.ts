@@ -26,6 +26,7 @@ import {
   errorShape,
   formatValidationErrors,
   validateChatAbortParams,
+  validateChatFinalAudioGetParams,
   validateChatHistoryParams,
   validateChatInjectParams,
   validateChatMetadataParams,
@@ -145,6 +146,10 @@ import {
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
+import {
+  resolveChatFinalAudioGetPayload,
+  resolveTrustedFinalAudioCandidate,
+} from "../chat-final-audio.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
@@ -476,8 +481,47 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return false;
 }
 
+function registerChatFinalAudioFromPayloads(params: {
+  context: GatewayRequestContext;
+  runId: string;
+  sessionKey: string;
+  agentId?: string;
+  mediaAgentId?: string;
+  payloads: readonly ReplyPayload[];
+}) {
+  const candidate = resolveTrustedFinalAudioCandidate(params.payloads);
+  if (!candidate) {
+    return;
+  }
+  params.context.chatFinalAudio.set({
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    mediaAgentId: params.mediaAgentId,
+    mediaPath: candidate.mediaPath,
+    spokenText: candidate.spokenText,
+  });
+}
+
 function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyPayload {
   return isReplyPayloadTtsSupplement(payload) ? buildTtsSupplementMediaPayload(payload) : payload;
+}
+
+function normalizePromotedToolSpokenText(text: string | undefined): string | undefined {
+  const trimmed = text?.trim();
+  return trimmed ? trimmed.replace(/^\(spoken\)\s*/i, "") : undefined;
+}
+
+function promoteToolMediaPayloadToFinal(payload: ReplyPayload): ReplyPayload {
+  const spokenText =
+    payload.spokenText ??
+    getReplyPayloadTtsSupplement(payload)?.spokenText ??
+    (payload.audioAsVoice === true ? normalizePromotedToolSpokenText(payload.text) : undefined);
+  return {
+    ...payload,
+    text: undefined,
+    ...(spokenText ? { spokenText } : {}),
+  };
 }
 
 function resolveTtsSupplementMarkerText(text: string): string {
@@ -3105,6 +3149,25 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
   },
   "chat.metadata": handleChatMetadataRequest,
+  "chat.finalAudio.get": async ({ params, respond, context }) => {
+    if (!validateChatFinalAudioGetParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid chat.finalAudio.get params: ${formatValidationErrors(validateChatFinalAudioGetParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const result = await resolveChatFinalAudioGetPayload({ context, params });
+    if (!result.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error));
+      return;
+    }
+    respond(true, result.payload);
+  },
   "chat.message.get": async ({ params, respond, context }) => {
     if (!validateChatMessageGetParams(params)) {
       respond(
@@ -4165,6 +4228,16 @@ export const chatHandlers: GatewayRequestHandlers = {
             case "block":
             case "final":
               deliveredReplies.push({ payload, kind: info.kind });
+              if (info.kind === "final") {
+                registerChatFinalAudioFromPayloads({
+                  context,
+                  runId: clientRunId,
+                  sessionKey,
+                  agentId: selectedAgent.agentId,
+                  mediaAgentId: agentId,
+                  payloads: [payload],
+                });
+              }
               await appendWebchatAgentMediaTranscriptIfNeeded(payload);
               break;
             case "tool":
@@ -4172,9 +4245,15 @@ export const chatHandlers: GatewayRequestHandlers = {
               // to "final" so the downstream audio extraction path can pick them up.
               // Strip text to avoid leaking tool summary into the combined reply.
               if (isMediaBearingPayload(payload)) {
-                deliveredReplies.push({
-                  payload: { ...payload, text: undefined },
-                  kind: "final",
+                const finalPayload = promoteToolMediaPayloadToFinal(payload);
+                deliveredReplies.push({ payload: finalPayload, kind: "final" });
+                registerChatFinalAudioFromPayloads({
+                  context,
+                  runId: clientRunId,
+                  sessionKey,
+                  agentId: selectedAgent.agentId,
+                  mediaAgentId: agentId,
+                  payloads: [finalPayload],
                 });
               }
               break;
@@ -4287,6 +4366,16 @@ export const chatHandlers: GatewayRequestHandlers = {
                     }
                   }
                 }
+              },
+              onFinalReplyPayload: (payload) => {
+                registerChatFinalAudioFromPayloads({
+                  context,
+                  runId: clientRunId,
+                  sessionKey,
+                  agentId: selectedAgent.agentId,
+                  mediaAgentId: agentId,
+                  payloads: [payload],
+                });
               },
               onModelSelected: (modelSelection) => {
                 updateChatRunProvider(context.chatAbortControllers, {

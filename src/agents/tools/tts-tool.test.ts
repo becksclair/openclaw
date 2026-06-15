@@ -57,6 +57,7 @@ describe("createTtsTool", () => {
     expect(requireRecord(details.media, "TTS media details")).toEqual({
       mediaUrl: "/tmp/reply.opus",
       trustedLocalMedia: true,
+      spokenText: "hello",
       audioAsVoice: true,
     });
     expect(JSON.stringify(result.content)).not.toContain("MEDIA:");
@@ -172,14 +173,19 @@ describe("createTtsTool", () => {
     const result = await tool.execute("call-1", { text: spoken });
 
     const rendered = (result.content as Array<{ type: string; text: string }>)[0].text;
+    const media = requireRecord(requireRecord(result.details, "TTS result details").media, "media");
     // The literal directive tokens must not appear verbatim, so
     // parseReplyDirectives can no longer surface them as media/audio flags.
     expect(rendered).not.toMatch(/^MEDIA:/m);
     expect(rendered).not.toContain("[[audio_as_voice]]");
+    expect(media.spokenText).not.toMatch(/^MEDIA:/m);
+    expect(media.spokenText).not.toContain("[[audio_as_voice]]");
     // The transcript still contains the original characters, just interrupted
     // by a zero-width word joiner (U+2060) that keeps the pattern from firing.
     expect(rendered).toContain("\u2060MEDIA:");
     expect(rendered).toContain("[\u2060[audio_as_voice]]");
+    expect(media.spokenText).toContain("\u2060MEDIA:");
+    expect(media.spokenText).toContain("[\u2060[audio_as_voice]]");
   });
 
   it("defuses MEDIA lines with non-ASCII leading whitespace", async () => {

@@ -675,7 +675,7 @@ class EmbeddedAttemptPromptErrorWithCleanupTakeoverError extends Error {
 }
 
 function hasVisiblePendingToolMediaReply(
-  reply: { mediaUrls?: string[]; audioAsVoice?: boolean } | null | undefined,
+  reply: { mediaUrls?: string[]; audioAsVoice?: boolean; spokenText?: string } | null | undefined,
 ): boolean {
   return Boolean(
     reply &&
@@ -5778,6 +5778,7 @@ export async function runEmbeddedAttempt(
         toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
         toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
         hasToolMediaBlockReply: hasToolMediaBlockReplyNow,
+        toolSpokenText: pendingToolMediaReply?.spokenText,
         successfulCronAdds: getSuccessfulCronAdds(),
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),

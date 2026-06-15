@@ -81,6 +81,7 @@ function createTestContext(): {
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
       pendingToolTrustedLocalMedia: false,
+      pendingToolSpokenText: undefined,
       deterministicApprovalPromptPending: false,
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       messagingToolSentTexts: [],
@@ -2757,6 +2758,98 @@ describe("messaging tool media URL tracking", () => {
         mediaUrls: ["file:///tmp/reply.png"],
         channelData: { source: "tui" },
         idempotencyKey: "stable-source-reply",
+      },
+    ]);
+  });
+
+  it("preserves trusted TTS metadata on internal-ui source replies", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-internal-source-reply-tts",
+      args: { action: "send", message: "spoken reply" },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-internal-source-reply-tts",
+      isError: false,
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          sourceReplySink: "internal-ui",
+          sourceReply: {
+            text: "spoken reply",
+            mediaUrl: "/tmp/source-reply.mp3",
+            mediaUrls: ["/tmp/source-reply.mp3"],
+            audioAsVoice: true,
+            trustedLocalMedia: true,
+            spokenText: "spoken reply",
+            ttsSupplement: {
+              spokenText: "spoken reply",
+              visibleTextAlreadyDelivered: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([
+      {
+        text: "spoken reply",
+        mediaUrl: "/tmp/source-reply.mp3",
+        mediaUrls: ["/tmp/source-reply.mp3"],
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+        spokenText: "spoken reply",
+        ttsSupplement: {
+          spokenText: "spoken reply",
+          visibleTextAlreadyDelivered: true,
+        },
+      },
+    ]);
+  });
+
+  it("does not trust local media from external internal-ui source replies", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-external-source-reply-tts",
+      args: { action: "send", message: "spoken reply" },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-external-source-reply-tts",
+      isError: false,
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          mcpServer: "external",
+          sourceReplySink: "internal-ui",
+          sourceReply: {
+            text: "spoken reply",
+            mediaUrl: "/tmp/source-reply.mp3",
+            audioAsVoice: true,
+            trustedLocalMedia: true,
+            spokenText: "spoken reply",
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([
+      {
+        text: "spoken reply",
+        spokenText: "spoken reply",
       },
     ]);
   });

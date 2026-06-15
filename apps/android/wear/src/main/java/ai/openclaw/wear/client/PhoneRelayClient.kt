@@ -67,7 +67,7 @@ class PhoneRelayClient(
   // the assembler when a slow collector falls behind. Collectors get a typed
   // "playback unavailable" failure if they actually missed events; here we
   // optimise for liveness, since stalled audio is worse than slightly chopped
-  // audio for a real-time playback path.
+  // audio for push-to-talk playback.
   private val _audioStreamEvents =
     MutableSharedFlow<AudioStreamEvent>(
       extraBufferCapacity = 64,

@@ -23,6 +23,7 @@ import { appendSessionTranscriptMessage } from "../../config/sessions/transcript
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { getAgentRunContext } from "../../infra/agent-events.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createChatFinalAudioRegistry } from "../chat-final-audio.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -65,6 +66,7 @@ const mockState = vi.hoisted(() => ({
       isError?: boolean;
     };
   }>,
+  routeFinalViaReplyOptions: false,
   dispatchError: null as Error | null,
   dispatchWait: null as Promise<void> | null,
   dispatchErrorAfterAgentRunStart: null as Error | null,
@@ -231,6 +233,17 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       ) => void;
       replyOptions?: {
         onAgentRunStart?: (runId: string) => void;
+        onFinalReplyPayload?: (payload: {
+          text?: string;
+          mediaUrl?: string;
+          mediaUrls?: string[];
+          spokenText?: string;
+          ttsSupplement?: { spokenText: string };
+          audioAsVoice?: boolean;
+          trustedLocalMedia?: boolean;
+          isReasoning?: boolean;
+          isError?: boolean;
+        }) => Promise<void> | void;
         userTurnTranscriptRecorder?: {
           message?: unknown;
           resolveMessage?: () => Promise<unknown>;
@@ -283,6 +296,10 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           }
           if (reply.kind === "block") {
             params.dispatcher.sendBlockReply(reply.payload);
+            continue;
+          }
+          if (mockState.routeFinalViaReplyOptions) {
+            await params.replyOptions?.onFinalReplyPayload?.(reply.payload);
             continue;
           }
           params.dispatcher.sendFinalReply(reply.payload);
@@ -675,6 +692,7 @@ function createChatContext(): Pick<
   | "chatDeltaLastBroadcastText"
   | "agentDeltaSentAt"
   | "bufferedAgentEvents"
+  | "chatFinalAudio"
   | "chatAbortedRuns"
   | "clearChatRunState"
   | "addChatRun"
@@ -698,6 +716,7 @@ function createChatContext(): Pick<
     chatDeltaLastBroadcastText: new Map(),
     agentDeltaSentAt: new Map(),
     bufferedAgentEvents: new Map(),
+    chatFinalAudio: createChatFinalAudioRegistry(),
     chatAbortedRuns: new Map(),
     clearChatRunState: vi.fn(),
     addChatRun: vi.fn(),
@@ -815,6 +834,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.finalText = "[[reply_to_current]]";
     mockState.finalPayload = null;
     mockState.dispatchedReplies = [];
+    mockState.routeFinalViaReplyOptions = false;
     mockState.dispatchError = null;
     mockState.dispatchWait = null;
     mockState.dispatchErrorAfterAgentRunStart = null;
@@ -1339,6 +1359,228 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(assistantUpdates[0]?.message)).not.toContain(
       "This text is already in the model transcript.",
     );
+
+    const finalAudioRespond = vi.fn();
+    await chatHandlers["chat.finalAudio.get"]({
+      params: {
+        sessionKey: "main",
+        runId: "idem-agent-tts",
+      },
+      respond: finalAudioRespond as unknown as Parameters<
+        (typeof chatHandlers)["chat.finalAudio.get"]
+      >[0]["respond"],
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const finalAudioCall = lastRespondCall(finalAudioRespond);
+    expect(finalAudioCall?.[0]).toBe(true);
+    expect(finalAudioCall?.[1]).toEqual({
+      found: true,
+      audioBase64: Buffer.from([0xff, 0xfb, 0x90, 0x00]).toString("base64"),
+      outputFormat: "mp3",
+      mimeType: "audio/mpeg",
+      fileExtension: ".mp3",
+      spokenText: "This text is already in the model transcript.",
+    });
+    expect(finalAudioCall?.[2]).toBeUndefined();
+  });
+
+  it("registers default global final audio without requiring a hidden default agent id", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-global-tts-final-");
+    const audioPath = path.join(transcriptDir, "global-tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+        list: [{ id: "main", default: true }],
+      },
+      session: { scope: "global" },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          spokenText: "Global speech.",
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+          ttsSupplement: { spokenText: "Global speech." },
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "global",
+      idempotencyKey: "idem-global-tts",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const finalAudioRespond = vi.fn();
+    await chatHandlers["chat.finalAudio.get"]({
+      params: {
+        sessionKey: "global",
+        runId: "idem-global-tts",
+      },
+      respond: finalAudioRespond as unknown as Parameters<
+        (typeof chatHandlers)["chat.finalAudio.get"]
+      >[0]["respond"],
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const finalAudioCall = lastRespondCall(finalAudioRespond);
+    expect(finalAudioCall?.[0]).toBe(true);
+    expect(finalAudioCall?.[1]).toEqual({
+      found: true,
+      audioBase64: Buffer.from([0xff, 0xfb, 0x90, 0x00]).toString("base64"),
+      outputFormat: "mp3",
+      mimeType: "audio/mpeg",
+      fileExtension: ".mp3",
+      spokenText: "Global speech.",
+    });
+    expect(finalAudioCall?.[2]).toBeUndefined();
+  });
+
+  it("registers trusted TTS tool audio even when spoken text is not on the media payload", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-tts-tool-");
+    const audioPath = path.join(transcriptDir, "tool-tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "tool",
+        payload: {
+          text: "(spoken) Tool generated speech.",
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-tool-tts",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const finalAudioRespond = vi.fn();
+    await chatHandlers["chat.finalAudio.get"]({
+      params: {
+        sessionKey: "main",
+        runId: "idem-agent-tool-tts",
+      },
+      respond: finalAudioRespond as unknown as Parameters<
+        (typeof chatHandlers)["chat.finalAudio.get"]
+      >[0]["respond"],
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const finalAudioCall = lastRespondCall(finalAudioRespond);
+    expect(finalAudioCall?.[0]).toBe(true);
+    expect(finalAudioCall?.[1]).toEqual({
+      found: true,
+      audioBase64: Buffer.from([0xff, 0xfb, 0x90, 0x00]).toString("base64"),
+      outputFormat: "mp3",
+      mimeType: "audio/mpeg",
+      fileExtension: ".mp3",
+      spokenText: "Tool generated speech.",
+    });
+    expect(finalAudioCall?.[2]).toBeUndefined();
+  });
+
+  it("registers trusted final TTS audio before routed delivery bypasses the webchat dispatcher", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-routed-tts-");
+    const audioPath = path.join(transcriptDir, "routed-tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.routeFinalViaReplyOptions = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          spokenText: "Routed speech.",
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+          ttsSupplement: { spokenText: "Routed speech." },
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-routed-tts",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const finalAudioRespond = vi.fn();
+    await chatHandlers["chat.finalAudio.get"]({
+      params: {
+        sessionKey: "main",
+        runId: "idem-routed-tts",
+      },
+      respond: finalAudioRespond as unknown as Parameters<
+        (typeof chatHandlers)["chat.finalAudio.get"]
+      >[0]["respond"],
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const finalAudioCall = lastRespondCall(finalAudioRespond);
+    expect(finalAudioCall?.[0]).toBe(true);
+    expect(finalAudioCall?.[1]).toEqual({
+      found: true,
+      audioBase64: Buffer.from([0xff, 0xfb, 0x90, 0x00]).toString("base64"),
+      outputFormat: "mp3",
+      mimeType: "audio/mpeg",
+      fileExtension: ".mp3",
+      spokenText: "Routed speech.",
+    });
+    expect(finalAudioCall?.[2]).toBeUndefined();
   });
 
   it("does not mirror agent-run stale media final text from live delivery", async () => {

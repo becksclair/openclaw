@@ -16,7 +16,7 @@ Replay classification:
 
 | Seam                                      | Decision              | Importance | v2026.6.5 evidence                                                                                                                                                                                                                                                                                                                                      |
 | ----------------------------------------- | --------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Wear OS Talk relay companion              | Runtime carry         | Critical   | Target still has no `apps/android/wear` module or shared `apps/android/audio` module. Replay carries the watch app, phone Wearable Data Layer relay, audio assembly/playback, and Wear tests.                                                                                                                                                           |
+| Wear OS voice companion                   | Runtime carry         | Critical   | Target still has no `apps/android/wear` module or shared `apps/android/audio` module. Replay carries the watch app, phone Wearable Data Layer relay, audio assembly/playback, and Wear tests.                                                                                                                                                           |
 | ACP remote target-backed bridge           | Runtime carry         | Critical   | Target has adjacent ACP `cwd` and backend support, but still lacks `runtime.acp.target`, persistent binding `target` metadata, and the codex-devbox ACP verifier. The private `extensions/acpx-remote` implementation remains outside this repo.                                                                                                        |
 | Gateway runtime metadata hotpath          | Partial-overlap carry | Critical   | Target has substantial plugin metadata work, but replay still carries current-snapshot reuse for registry/manifest hot paths, lifecycle-cleared package-state probes, provider auth alias cache fixes, and runtime config invalidation details.                                                                                                         |
 | ACP backend alias routing                 | Runtime carry         | High       | Target resolves selected ACP agents but still does not pass the selected config agent's `runtime.acp.backend` into ACP session creation.                                                                                                                                                                                                                |
@@ -47,7 +47,7 @@ Replay classification:
 
 | Seam                                      | Decision                                     | Importance | v2026.5.22 evidence                                                                                                                                                                                            |
 | ----------------------------------------- | -------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Wear OS Talk relay companion              | Runtime carry                                | Critical   | No `:wear` or shared `:audio` module existed on the target; the port adds the watch app, phone Data Layer relay, `WearSttTtsSession`, chunked/streaming audio response handling, and packaging proof surfaces. |
+| Wear OS voice companion                   | Runtime carry                                | Critical   | No `:wear` or shared `:audio` module existed on the target; the port adds the watch app, phone Data Layer relay, `WearSttTtsSession`, chunked/streaming audio response handling, and packaging proof surfaces. |
 | ACP remote target-backed bridge           | Runtime carry plus external plugin lifecycle | Critical   | Target ACP bindings lacked `target`, backend-specific targets, and the verifier; core carries generic `target`/`cwd` runtime options while `acpx-remote` remains a separate private plugin lifecycle.          |
 | ACP backend alias routing                 | Runtime carry                                | High       | Target resolved `runtime.acp.agent` but fell back to global `acp.backend`; replay carries selected-agent `runtime.acp.backend`.                                                                                |
 | ACP backend-managed runtime options       | Runtime carry                                | High       | Target runtime capabilities exposed only config option keys; replay carries `managedRuntimeOptionKeys` so backend-owned controls are not redundantly written by core.                                          |
@@ -76,7 +76,7 @@ Replay classification:
 - `discord-deploy-30032-recovery` - active seam: keep the 30032 (application command limit) reconcile-to-overwrite recovery path that bypasses the deploy hash cache with `force: true` and logs the initial failure as recoverable instead of error.
 - `discord-auto-presence-account-auth-store` - active seam: keep Discord auto-presence runtime availability evaluated against the auth profile store of the agent bound to the account (account-level route binding -> agent dir) instead of the bare default store path, which ignores the configured default agent and reads an empty `main`-agent store.
 - `realtime-android-discord-audio` - absorbed upstream: v2026.5.22 already has Android Gateway relay Talk and Discord realtime voice by default; do not replay wholesale unless focused proof finds a regression.
-- `wear-os-talk-relay` - active seam: keep the Wear OS push-to-talk companion app and phone-side Wearable Data Layer relay wired to Gateway realtime Talk, including turn ids, phone-node pinning, chunked audio response assembly, app bundle packaging, and narrow review-work proof gates.
+- `wear-os-talk-relay` - active seam: keep the Wear OS push-to-talk companion app and phone-side Wearable Data Layer relay on the durable STT -> `chat.send` -> final TTS audio path, including the configured Wear target session, `deliver: true` chat routing, trusted final-audio reuse, turn ids, phone-node pinning, chunked audio response assembly, app bundle packaging, and narrow review-work proof gates.
 - `02915314ae` - absorbed upstream: v2026.5.22 already preserves TTS intent for transcribed inbound audio through the shared dispatch path; no source carry unless proof fails.
 - `native-codex-message-tool-tts` - partial-overlap carry: keep native Codex `message_tool_only` visible replies TTS-capable, preserve trusted local voice tool media through source-reply suppression, and keep Telegram/Discord voice-note delivery on the proper transcode-aware path instead of leaking raw WAV attachments.
 - `6c4503c385` - pending/drop candidate: agent-scoped TTS conversion config was not visibly missing on v2026.5.22; keep pending for live triage instead of replaying without a failing proof.
@@ -354,14 +354,15 @@ Rebase notes:
 - Keep Discord receive audio decoded into the shared PCM16 24 kHz realtime contract before sending it to the provider bridge.
 - When Bex asks to build the Android app without naming a flavor, build the sideloadable third-party release APK with `cd apps/android && ./gradlew :app:assembleThirdPartyRelease`; do not default to the Play flavor because the third-party flavor keeps SMS and Call Log permissions.
 
-### Wear OS Talk relay companion
+### Wear OS voice companion
 
-Carry behavior: the Android app ships a Wear OS companion module for push-to-talk voice turns. The watch discovers phones advertising `openclaw_relay_phone`, pins each turn to one reachable phone node, streams 24 kHz PCM chunks over the Wearable Data Layer, and accepts only terminal audio/status/error messages for the active turn and active phone node. The phone-side relay receives foreground or background watch messages, bridges the captured audio into Gateway realtime Talk with `transport: "gateway-relay"`, handles `openclaw_agent_consult` tool calls, and returns either single-message or serialized chunked PCM audio back to the requesting watch.
+Carry behavior: the Android app ships a Wear OS companion module for push-to-talk voice turns. The watch discovers phones advertising `openclaw_relay_phone`, pins each turn to one reachable phone node, streams 24 kHz PCM chunks over the Wearable Data Layer, and accepts only terminal audio/status/error messages for the active turn and active phone node. The phone-side relay uses buffered Gateway transcription for STT, sends the transcript through normal `chat.send` with `deliver: true` to the configured Wear target session, asks Gateway for the trusted local final TTS media generated for that same run, and only falls back to `talk.speak` when no reusable final audio is available. Gateway keeps a short-lived run-scoped final-audio registry so the watch can reuse the shared autoTTS artifact without depending on Telegram adapter output.
 
 Primary seam files:
 
 - `apps/android/app/src/main/AndroidManifest.xml`
 - `apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt`
+- `apps/android/app/src/main/java/ai/openclaw/app/SecurePrefs.kt`
 - `apps/android/app/src/main/java/ai/openclaw/app/wear/WearAudioRelay.kt`
 - `apps/android/app/src/main/java/ai/openclaw/app/wear/WearSttTtsSession.kt`
 - `apps/android/app/src/main/java/ai/openclaw/app/wear/WearRelayService.kt`
@@ -398,14 +399,17 @@ Primary seam files:
 - `apps/android/wear/src/test/java/ai/openclaw/wear/audio/PcmBoundarySmootherTest.kt`
 - `apps/android/wear/src/test/java/ai/openclaw/wear/client/AudioStreamAssemblerTest.kt`
 - `package.json`
+- `src/gateway/chat-final-audio.ts`
 - `src/gateway/talk-transcription-relay.ts`
 - `src/gateway/talk-transcription-audio.ts`
+- `src/gateway/server-methods/chat.ts`
 - `src/gateway/gateway-misc.test.ts`
+- `src/gateway/chat-final-audio.test.ts`
 
 Primary seam tests:
 
 - `cd apps/android && ./gradlew :app:compilePlayDebugKotlin :wear:compileDebugKotlin :app:testPlayDebugUnitTest :wear:testDebugUnitTest :app:ktlintCheck :wear:ktlintCheck`
-- `pnpm test src/gateway/gateway-misc.test.ts src/gateway/talk-realtime-relay.test.ts src/gateway/talk-transcription-relay.test.ts`
+- `node scripts/run-vitest.mjs src/gateway/chat-final-audio.test.ts src/gateway/gateway-misc.test.ts src/gateway/talk-transcription-relay.test.ts`
 - `pnpm exec oxfmt --check --threads=1 apps/android/scripts/build-release-aab.ts src/gateway/gateway-misc.test.ts package.json`
 - `git diff --check`
 
@@ -415,9 +419,11 @@ Rebase notes:
 - Keep each watch turn pinned to one phone node and one turn id. Do not broadcast active-turn audio to every connected phone; late status/error/audio from another node or stale turn must be ignored.
 - Preserve compatibility for legacy/no-turn terminal responses only while a turn is active. Both `PhoneRelayClient` and `WatchViewModel` must treat a null response turn id as the active turn, then clear active state on terminal audio/error/incomplete chunk timeout.
 - Keep chunked audio responses serialized with a done payload carrying `chunkCount`; do not emit partial audio until every expected chunk is assembled, and keep the timeout path user-visible as `Audio response incomplete`.
-- Keep `Close` before realtime `Ready` user-visible on the watch instead of leaving the watch stuck in `Processing`.
+- Keep `Close` before transcription `Ready` user-visible on the watch instead of leaving the watch stuck in `Processing`.
 - Keep `WearRelayService` as the background Wearable Data Layer entrypoint, but let the foreground `NodeRuntime` relay own messages when it is already initialized so duplicate service delivery does not double-handle a turn.
-- Keep the phone-side Wear relay on upstream's realtime runtime event surface. Gateway relay responses arrive as `talk.event`; watch RPC methods remain `talk.realtime.*`.
+- Keep the phone-side Wear relay on the normal durable turn path. STT still uses Gateway `talk.session.*` transcription events, but assistant replies should route through `chat.send`, reusable final TTS audio, and `talk.speak` only as fallback.
+- Keep Wear target-session routing generic. By default, unset `wear.targetSessionKey` follows the phone's current main session; set Voice settings -> Wear OS Session to `agent:sky:direct:bex` for Bex's Telegram-routed watch turns. Wear code should read the configured key and must not depend on Telegram-specific adapter internals.
+- Keep `chat.finalAudio.get` additive and hidden. It should expose only trusted, run-scoped local audio already produced by the chat reply pipeline, return not-found/unreadable states as fallback signals, and avoid persistent state.
 - A Wear service cold start must not restore persisted phone manual mic capture. Restore that preference only from foreground/UI runtime activation.
 - Wear consults and phone Talk Mode turns can overlap; pending chat completion tracking must be per `runId`, not a single shared waiter.
 - Keep outbound Wear Data Layer sends bounded and node-pinned. Audio chunks may be dropped under backpressure, but control messages must still be delivered in order.

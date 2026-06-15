@@ -52,6 +52,7 @@ export function startGatewayMaintenanceTimers(params: {
     | "agentDeltaSentAt"
     | "bufferedAgentEvents"
   >;
+  clearChatRunState?: (runId: string) => void;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
@@ -69,6 +70,14 @@ export function startGatewayMaintenanceTimers(params: {
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
 } {
+  const clearChatRunState = (runId: string) => {
+    if (params.clearChatRunState) {
+      params.clearChatRunState(runId);
+      return;
+    }
+    params.chatRunState.clearRun(runId);
+  };
+
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
       stateVersion: {
@@ -233,7 +242,7 @@ export function startGatewayMaintenanceTimers(params: {
         continue;
       }
       params.chatRunState.abortedRuns.delete(runId);
-      params.chatRunState.clearRun(runId);
+      clearChatRunState(runId);
     }
 
     // Prune expired control-plane rate-limit buckets to prevent unbounded
@@ -253,7 +262,7 @@ export function startGatewayMaintenanceTimers(params: {
       if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
         continue;
       }
-      params.chatRunState.clearRun(runId);
+      clearChatRunState(runId);
     }
     for (const [runId, lastUpdatedAt] of params.chatRunState.bufferUpdatedAt) {
       if (params.chatRunState.abortedRuns.has(runId)) {
@@ -265,7 +274,7 @@ export function startGatewayMaintenanceTimers(params: {
       if (now - lastUpdatedAt <= ABORTED_RUN_TTL_MS) {
         continue;
       }
-      params.chatRunState.clearRun(runId);
+      clearChatRunState(runId);
     }
     for (const [key, lastSentAt] of params.chatRunState.agentDeltaSentAt) {
       const runId = resolveAgentThrottleRunId(key);
@@ -278,7 +287,7 @@ export function startGatewayMaintenanceTimers(params: {
       if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
         continue;
       }
-      params.chatRunState.clearRun(runId);
+      clearChatRunState(runId);
     }
     // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
     sweepStaleRunContexts();

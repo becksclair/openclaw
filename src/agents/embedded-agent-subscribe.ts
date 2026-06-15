@@ -238,6 +238,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     pendingToolAudioAsVoice: false,
     pendingToolTrustedLocalMedia: false,
     hasToolMediaBlockReply: false,
+    pendingToolSpokenText: undefined,
     visibleBlockReplyCount: 0,
     pendingAssistantReplyDirectives: undefined,
     deterministicApprovalPromptPending: false,
@@ -1239,6 +1240,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingToolMediaUrls = [];
     state.pendingToolAudioAsVoice = false;
     state.pendingToolTrustedLocalMedia = false;
+    state.pendingToolSpokenText = undefined;
     state.visibleBlockReplyCount = 0;
     state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
     clearDeferredAssistantEvents();

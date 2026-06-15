@@ -15,6 +15,7 @@ import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import type { ChatFinalAudioRegistry } from "../chat-final-audio.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
@@ -110,6 +111,7 @@ export type GatewayRequestContext = {
   chatDeltaLastBroadcastText: Map<string, string>;
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, BufferedAgentEvent>;
+  chatFinalAudio: ChatFinalAudioRegistry;
   clearChatRunState: (runId: string) => void;
   addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
   removeChatRun: (

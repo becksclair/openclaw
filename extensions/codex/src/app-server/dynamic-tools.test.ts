@@ -909,6 +909,7 @@ describe("createCodexDynamicToolBridge", () => {
           mediaUrl: "/tmp/reply.opus",
           audioAsVoice: true,
           trustedLocalMedia: true,
+          spokenText: "hello",
         },
       },
     } satisfies AgentToolResult<unknown>;
@@ -936,6 +937,41 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.toolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(bridge.telemetry.toolAudioAsVoice).toBe(true);
     expect(bridge.telemetry.toolTrustedLocalMedia).toBe(true);
+    expect(bridge.telemetry.toolSpokenText).toBe("hello");
+  });
+
+  it("preserves trusted local tts spoken text without audio-as-voice", async () => {
+    const toolResult = {
+      content: [{ type: "text", text: "(spoken) hello" }],
+      details: {
+        media: {
+          mediaUrl: "/tmp/reply.wav",
+          trustedLocalMedia: true,
+          spokenText: "hello",
+        },
+      },
+    } satisfies AgentToolResult<unknown>;
+    const tool = createTool({
+      execute: vi.fn(async () => toolResult),
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "tts",
+      arguments: { text: "hello" },
+    });
+
+    expect(bridge.telemetry.toolMediaUrls).toEqual(["/tmp/reply.wav"]);
+    expect(bridge.telemetry.toolAudioAsVoice).toBe(false);
+    expect(bridge.telemetry.toolTrustedLocalMedia).toBe(true);
+    expect(bridge.telemetry.toolSpokenText).toBe("hello");
   });
 
   it("records messaging tool side effects while returning concise text to app-server", async () => {
@@ -1228,6 +1264,13 @@ describe("createCodexDynamicToolBridge", () => {
       sourceReply: {
         text: "visible reply",
         mediaUrls: ["/tmp/reply.png"],
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+        spokenText: "visible reply",
+        ttsSupplement: {
+          spokenText: "visible reply",
+          visibleTextAlreadyDelivered: true,
+        },
       },
     });
     const bridge = createBridgeWithToolResult("message", toolResult);
@@ -1247,6 +1290,45 @@ describe("createCodexDynamicToolBridge", () => {
         text: "visible reply",
         mediaUrl: "/tmp/reply.png",
         mediaUrls: ["/tmp/reply.png"],
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+        spokenText: "visible reply",
+        ttsSupplement: {
+          spokenText: "visible reply",
+          visibleTextAlreadyDelivered: true,
+        },
+      },
+    ]);
+  });
+
+  it("strips untrusted local media from internal UI source replies", async () => {
+    const toolResult = textToolResult("Sent to current chat.", {
+      mcpServer: "external",
+      mcpTool: "message",
+      status: "ok",
+      sourceReplySink: "internal-ui",
+      sourceReply: {
+        text: "visible reply",
+        mediaUrls: ["/tmp/reply.ogg", "https://media.example/reply.ogg"],
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+        spokenText: "visible reply",
+      },
+    });
+    const bridge = createBridgeWithToolResult("message", toolResult);
+
+    await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "visible reply",
+    });
+
+    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
+      {
+        text: "visible reply",
+        mediaUrl: "https://media.example/reply.ogg",
+        mediaUrls: ["https://media.example/reply.ogg"],
+        audioAsVoice: true,
+        spokenText: "visible reply",
       },
     ]);
   });

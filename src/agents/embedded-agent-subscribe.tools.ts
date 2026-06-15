@@ -691,6 +691,7 @@ type ToolResultMediaArtifact = {
   mediaUrls: string[];
   audioAsVoice?: boolean;
   trustedLocalMedia?: boolean;
+  spokenText?: string;
 };
 
 function readToolResultDetailsMedia(
@@ -777,10 +778,12 @@ export function extractToolResultMediaArtifact(
     }
     const mediaUrls = collectStructuredMediaUrls(detailsMedia);
     if (mediaUrls.length > 0) {
+      const spokenText = normalizeOptionalString(detailsMedia.spokenText);
       return {
         mediaUrls,
         ...(detailsMedia.audioAsVoice === true ? { audioAsVoice: true } : {}),
         ...(detailsMedia.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
+        ...(spokenText ? { spokenText } : {}),
       };
     }
   }

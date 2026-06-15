@@ -38,6 +38,7 @@ describe("mergeAttemptToolMediaPayloads", () => {
         toolMediaUrls: ["/tmp/reply.opus"],
         toolAudioAsVoice: true,
         toolTrustedLocalMedia: true,
+        toolSpokenText: "spoken reply",
       }),
     ).toEqual([
       {
@@ -46,6 +47,26 @@ describe("mergeAttemptToolMediaPayloads", () => {
         mediaUrl: "/tmp/reply.opus",
         audioAsVoice: true,
         trustedLocalMedia: true,
+        spokenText: "spoken reply",
+      },
+    ]);
+  });
+
+  it("preserves trusted TTS spoken text for non-voice audio files", () => {
+    expect(
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "done" }],
+        toolMediaUrls: ["/tmp/reply.wav"],
+        toolTrustedLocalMedia: true,
+        toolSpokenText: "spoken reply",
+      }),
+    ).toEqual([
+      {
+        text: "done",
+        mediaUrls: ["/tmp/reply.wav"],
+        mediaUrl: "/tmp/reply.wav",
+        trustedLocalMedia: true,
+        spokenText: "spoken reply",
       },
     ]);
   });
@@ -151,6 +172,7 @@ describe("mergeAttemptToolMediaPayloads", () => {
         toolMediaUrls: ["/tmp/reply.opus"],
         toolAudioAsVoice: true,
         toolTrustedLocalMedia: true,
+        toolSpokenText: "spoken reply",
         sourceReplyDeliveryMode: "message_tool_only",
       }) ?? [];
 
@@ -161,6 +183,7 @@ describe("mergeAttemptToolMediaPayloads", () => {
       mediaUrl: "/tmp/reply.opus",
       audioAsVoice: true,
       trustedLocalMedia: true,
+      spokenText: "spoken reply",
     });
     expect(getReplyPayloadMetadata(mediaOnly ?? {})).toEqual({
       deliverDespiteSourceReplySuppression: true,

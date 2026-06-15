@@ -437,6 +437,10 @@ class GatewaySession(
       } catch (err: TimeoutCancellationException) {
         pending.remove(id)
         throw IllegalStateException("request timeout")
+      } finally {
+        if (!deferred.isCompleted) {
+          pending.remove(id)
+        }
       }
     }
 

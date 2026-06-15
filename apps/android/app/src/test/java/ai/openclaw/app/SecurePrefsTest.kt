@@ -103,6 +103,36 @@ class SecurePrefsTest {
   }
 
   @Test
+  fun wearTargetSessionKey_defaultsToCurrentSessionAndPersistsOverride() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    assertNull(prefs.wearTargetSessionKey.value)
+
+    prefs.setWearTargetSessionKey(" custom-session ")
+
+    assertEquals("custom-session", prefs.wearTargetSessionKey.value)
+    assertEquals("custom-session", SecurePrefs(context).wearTargetSessionKey.value)
+
+    prefs.setWearTargetSessionKey("")
+
+    assertNull(prefs.wearTargetSessionKey.value)
+    assertFalse(plainPrefs.contains("wear.targetSessionKey"))
+
+    prefs.setWearTargetSessionKey(" global ")
+
+    assertEquals("global", prefs.wearTargetSessionKey.value)
+    assertEquals("global", plainPrefs.getString("wear.targetSessionKey", null))
+
+    prefs.setWearTargetSessionKey("main")
+
+    assertEquals("main", prefs.wearTargetSessionKey.value)
+    assertEquals("main", plainPrefs.getString("wear.targetSessionKey", null))
+  }
+
+  @Test
   fun saveGatewayBootstrapToken_persistsSeparatelyFromSharedToken() {
     val context = RuntimeEnvironment.getApplication()
     val securePrefs = context.getSharedPreferences("openclaw.node.secure.test", Context.MODE_PRIVATE)
