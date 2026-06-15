@@ -1874,6 +1874,7 @@ export function buildGatewaySessionRow(params: {
   const origin = entry?.origin;
   const originLabel = origin?.label;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
+  const shouldUseOriginDisplayName = !isCanonicalMainSessionKey({ cfg, key });
   const displayName =
     entry?.displayName ??
     (isGroupSession && channel
@@ -1887,7 +1888,7 @@ export function buildGatewaySessionRow(params: {
         })
       : undefined) ??
     entry?.label ??
-    originLabel;
+    (shouldUseOriginDisplayName ? originLabel : undefined);
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(
@@ -2207,6 +2208,14 @@ export function buildGatewaySessionRow(params: {
     latestCompactionCheckpoint,
     pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
   };
+}
+
+function isCanonicalMainSessionKey(params: { cfg: OpenClawConfig; key: string }): boolean {
+  if (params.cfg.session?.scope === "global" && params.key === "global") {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(params.key);
+  return parsed?.rest === normalizeMainKey(params.cfg.session?.mainKey);
 }
 
 function resolveSessionListSearchDisplayName(
