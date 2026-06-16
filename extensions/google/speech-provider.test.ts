@@ -656,6 +656,33 @@ describe("Google speech provider", () => {
     });
   });
 
+  it("honors Google Talk volume gain overrides", () => {
+    const provider = buildGoogleSpeechProvider();
+
+    expect(
+      provider.resolveTalkConfig?.({
+        cfg: {},
+        baseTtsConfig: {
+          providers: {
+            google: {
+              apiKey: "google-test-key",
+              volumeGain: 1.2,
+            },
+          },
+        },
+        talkProviderConfig: {
+          voiceId: "Sulafat",
+          volumeGain: 2,
+        },
+        timeoutMs: 1,
+      }),
+    ).toMatchObject({
+      apiKey: "google-test-key",
+      voiceName: "Sulafat",
+      volumeGain: 2,
+    });
+  });
+
   it("lists Gemini prebuilt TTS voices", async () => {
     const provider = buildGoogleSpeechProvider();
 

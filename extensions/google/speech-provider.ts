@@ -646,6 +646,9 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
         ...(trimToUndefined(talkProviderConfig.voiceId) == null
           ? {}
           : { voiceName: normalizeGoogleTtsVoiceName(talkProviderConfig.voiceId) }),
+        ...(talkProviderConfig.volumeGain === undefined
+          ? {}
+          : { volumeGain: normalizeGoogleTtsVolumeGain(talkProviderConfig.volumeGain) }),
       };
     },
     resolveTalkOverrides: ({ params }) => ({

@@ -109,6 +109,7 @@ Defaults:
 - `providers.elevenlabs.modelId`: defaults to `eleven_v3` when unset.
 - `providers.mlx.modelId`: defaults to `mlx-community/Soprano-80M-bf16` when unset.
 - `providers.elevenlabs.apiKey`: falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).
+- `providers.google.volumeGain`: local PCM gain for Google batch TTS Talk playback. Default `1.2`; use a higher value such as `2` for quiet small-speaker devices.
 - `consultThinkingLevel`: optional thinking level override for the full OpenClaw agent run behind realtime `openclaw_agent_consult` calls.
 - `consultFastMode`: optional fast-mode override for realtime `openclaw_agent_consult` calls.
 - `realtime.provider`: selects the active browser/server realtime voice provider. Use `openai` for WebRTC, `google` for provider WebSocket, or a bridge-only provider through Gateway relay.
