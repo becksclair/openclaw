@@ -403,7 +403,7 @@ Rebase notes:
 
 ### Wear OS voice companion
 
-Carry behavior: the Android app ships a Wear OS companion module for push-to-talk voice turns. The watch discovers phones advertising `openclaw_relay_phone`, pins each turn to one reachable phone node, streams 24 kHz PCM chunks over the Wearable Data Layer, and accepts only terminal audio/status/error messages for the active turn and active phone node. The phone-side relay uses buffered Gateway transcription for STT, sends the transcript through normal `chat.send` with `deliver: true` to the configured Wear target session, asks Gateway for the trusted local final TTS media generated for that same run, and only falls back to `talk.speak` when no reusable final audio is available. Gateway keeps a short-lived run-scoped final-audio registry so the watch can reuse the shared autoTTS artifact without depending on Telegram adapter output.
+Carry behavior: the Android app ships a Wear OS companion module for push-to-talk voice turns. The watch discovers phones advertising `openclaw_relay_phone`, pins each turn to one reachable phone node, and accepts only terminal audio/status/error messages for the active turn and active phone node. The default watch capture path uses the platform `SpeechRecognizer` and sends final nonblank text over `/openclaw/watch/text/{turnId}`; this avoids watch-side raw audio endpointing in normal environments and lets Wear OS own speech detection. The raw 24 kHz PCM relay remains as the fallback when no recognizer service is available and as the debug path for synthetic endpointing/replay validation. The phone-side relay handles text turns by skipping Gateway transcription and sending the transcript through normal `chat.send` with `deliver: true`, `thinking: "low"`, and the configured Wear target session. Raw PCM turns still use buffered Gateway transcription first. Both paths ask Gateway for trusted local final TTS media generated for the same run, prefer MP3/Opus response formats when negotiated, and only fall back to `talk.speak` when no reusable final audio is available. Gateway keeps a short-lived run-scoped final-audio registry so the watch can reuse the shared autoTTS artifact without depending on Telegram adapter output.
 
 Session target carry behavior: this fork keeps Android node identity device-scoped for presence, pairing, and capability commands, but makes the conversation target explicit. The default `SessionTargetMode.FollowSelected` starts from the Gateway canonical main session and lets chat, phone voice, Canvas restore/actions, and Wear voice follow the currently selected phone chat session. `SessionTargetMode.Main` pins those surfaces to the Gateway canonical main session, and `SessionTargetMode.Device` preserves upstream-style per-device node session isolation. First launch with this seam clears legacy Wear-only target overrides so old `wear.targetSessionKey` values do not keep the watch pinned to a stale session; after migration, a nonblank `wear.targetSessionKey` remains an explicit override for watch turns only.
 
@@ -418,10 +418,14 @@ Primary seam files:
 - `apps/android/app/src/main/java/ai/openclaw/app/wear/WearAudioRelay.kt`
 - `apps/android/app/src/main/java/ai/openclaw/app/wear/WearSttTtsSession.kt`
 - `apps/android/app/src/main/java/ai/openclaw/app/wear/WearRelayService.kt`
+- `apps/android/app/src/test/java/ai/openclaw/app/wear/WearAudioRelayTextTurnTest.kt`
 - `apps/android/app/src/main/res/values/wear.xml`
 - `apps/android/audio/build.gradle.kts`
 - `apps/android/audio/src/main/java/ai/openclaw/audio/PcmAudio.kt`
 - `apps/android/audio/src/main/java/ai/openclaw/audio/AndroidCompressedAudioDecoder.kt`
+- `apps/android/common/build.gradle.kts`
+- `apps/android/common/src/main/java/ai/openclaw/common/speech/SpeechRecognizerHelper.kt`
+- `apps/android/common/src/main/java/ai/openclaw/common/wear/WearRelayProtocol.kt`
 - `apps/android/README.md`
 - `apps/android/gradle.properties`
 - `apps/android/gradle/libs.versions.toml`
@@ -435,8 +439,10 @@ Primary seam files:
 - `apps/android/wear/src/main/java/ai/openclaw/wear/WatchMainActivity.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/WatchViewModel.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/audio/AudioCapture.kt`
+- `apps/android/wear/src/main/java/ai/openclaw/wear/audio/AudioEndpointDetector.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/audio/AudioPlayer.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/audio/AudioTrackFactory.kt`
+- `apps/android/wear/src/main/java/ai/openclaw/wear/audio/WearAudioRecord.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/audio/PcmBoundarySmoother.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/audio/AcousticAudioDebugCapture.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/audio/PlaybackAudioDebugCapture.kt`
@@ -445,8 +451,13 @@ Primary seam files:
 - `apps/android/wear/src/main/java/ai/openclaw/wear/client/AudioStreamAssembler.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/client/BufferedAudioResponseReceiver.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/client/StreamingAudioResponseReceiver.kt`
+- `apps/android/wear/src/main/java/ai/openclaw/wear/speech/SpeechDictation.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/ui/WatchFace.kt`
 - `apps/android/wear/src/main/res/xml/data_extraction_rules.xml`
+- `apps/android/wear/src/main/res/xml/network_security_config.xml`
+- `apps/android/wear/src/test/java/ai/openclaw/wear/WatchViewModelTest.kt`
+- `apps/android/wear/src/test/java/ai/openclaw/wear/audio/AudioCaptureTest.kt`
+- `apps/android/wear/src/test/java/ai/openclaw/wear/audio/AudioEndpointDetectorTest.kt`
 - `apps/android/wear/src/test/java/ai/openclaw/wear/audio/AudioPlayerTest.kt`
 - `apps/android/wear/src/test/java/ai/openclaw/wear/audio/PcmBoundarySmootherTest.kt`
 - `apps/android/wear/src/test/java/ai/openclaw/wear/client/AudioStreamAssemblerTest.kt`
@@ -462,6 +473,10 @@ Primary seam files:
 
 Primary seam tests:
 
+- `cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest --tests ai.openclaw.app.wear.WearAudioRelayTextTurnTest`
+- `cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest --tests ai.openclaw.app.wear.WearSttTtsSessionTest`
+- `cd apps/android && ./gradlew :wear:testDebugUnitTest --tests ai.openclaw.wear.WatchViewModelTest`
+- `cd apps/android && ./gradlew :wear:testDebugUnitTest --tests ai.openclaw.wear.audio.AudioCaptureTest --tests ai.openclaw.wear.audio.AudioEndpointDetectorTest --tests ai.openclaw.wear.audio.PcmAudioTest`
 - `cd apps/android && ./gradlew :app:compilePlayDebugKotlin :wear:compileDebugKotlin :app:testPlayDebugUnitTest :wear:testDebugUnitTest :app:ktlintCheck :wear:ktlintCheck`
 - `node scripts/run-vitest.mjs src/gateway/chat-final-audio.test.ts src/gateway/gateway-misc.test.ts src/gateway/talk-transcription-relay.test.ts`
 - `pnpm exec oxfmt --check --threads=1 apps/android/scripts/build-release-aab.ts src/gateway/gateway-misc.test.ts package.json`
@@ -476,6 +491,10 @@ Rebase notes:
 - Keep `Close` before transcription `Ready` user-visible on the watch instead of leaving the watch stuck in `Processing`.
 - Keep `WearRelayService` as the background Wearable Data Layer entrypoint, but let the foreground `NodeRuntime` relay own messages when it is already initialized so duplicate service delivery does not double-handle a turn.
 - Keep the phone-side Wear relay on the normal durable turn path. STT still uses Gateway `talk.session.*` transcription events, but assistant replies should route through `chat.send`, reusable final TTS audio, and `talk.speak` only as fallback.
+- Keep watch dictation text turns as the primary user path. Fall back to raw PCM only before capture starts when `SpeechRecognizer` is unavailable or debug PCM/endpoint replay is explicitly invoked; once recognition has started, no-match/client/network errors should surface briefly and return to idle instead of trying to reconstruct missed audio.
+- Keep `/openclaw/watch/text/{turnId}` additive and shared through `apps/android/common`. Phone text turns must not create `talk.session.*` transcription sessions, and blank transcripts must fail without starting `chat.send`.
+- Keep watch-initiated `chat.send` using low reasoning. This is a latency/thermal constraint for the watch UX, not a general Android chat default.
+- Keep compressed response negotiation honest. MP3 and Opus payloads can be passed through only when the watch advertises support and the decoder path is covered; otherwise the phone should decode to PCM before delivery.
 - Keep mobile target-session routing generic. By default, `SessionTargetMode.FollowSelected` plus an unset `wear.targetSessionKey` makes phone voice, Canvas actions, and Wear voice follow the phone's currently selected chat session. `SessionTargetMode.Main` pins those surfaces to the Gateway canonical main session, `SessionTargetMode.Device` keeps the upstream per-device node session, and an explicit Session Target panel Wear override value overrides only watch turns. Wear code must not depend on Telegram-specific adapter internals or personal device names.
 - Keep active voice turns session-stable. Phone PTT turns capture the target session at `chat.send` time, realtime Talk Mode sessions capture it at `talk.session.create` time, and Wear turns capture it at recording start. Visible chat selection may change while these are in flight, but completion events, history fallback, tool calls, and steer calls must continue using the captured session.
 - Keep `chat.finalAudio.get` additive and hidden. It should expose only trusted, run-scoped local audio already produced by the chat reply pipeline, return not-found/unreadable states as fallback signals, and avoid persistent state.
@@ -486,6 +505,7 @@ Rebase notes:
 - Keep the shared `:audio` module for PCM/resampling/codec helpers that both `:app` and `:wear` consume. Do not duplicate codec logic back into either module.
 - Keep the `AudioStreamAssembler` + `BufferedAudioResponseReceiver`/`StreamingAudioResponseReceiver` split so the watch can switch between whole-buffer and streaming audio delivery without rewriting the relay client.
 - Keep `WearSttTtsSession` as the canonical phone-side session class; do not resurrect the old `WearAudioSession` split.
+- Keep a watch-side no-response watchdog for active `Processing` turns so stale phone/chat failures do not leave the watch spinning indefinitely.
 - Keep the gateway-side μ-law → WAV conversion inline on the main thread (no worker spawn); the loop is tight O(n) integer math and worker overhead dominates runtime.
 
 ### Telegram transcribed-audio TTS intent
