@@ -1,5 +1,6 @@
 package ai.openclaw.wear.client
 
+import ai.openclaw.common.wear.WearRelayProtocol
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -11,7 +12,7 @@ internal class BufferedAudioResponseReceiver(
   private val scope: CoroutineScope,
   private val activeTurnId: () -> String?,
   private val completeActiveTurn: (String?) -> Unit,
-  private val emitAudioResponse: (String?, PhoneRelayClient.AudioResponse) -> Unit,
+  private val emitAudioResponse: (String?, PhoneRelayAudioResponse) -> Unit,
   private val emitError: suspend (String) -> Unit,
 ) {
   companion object {
@@ -28,7 +29,7 @@ internal class BufferedAudioResponseReceiver(
       onComplete = ::onAssemblerComplete,
       onIncomplete = ::onAssemblerIncomplete,
     )
-  private var format: String = PhoneRelayClient.RESPONSE_FORMAT_PCM_24K
+  private var format: String = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K
   private var aborted = false
   private var completionTimeoutJob: Job? = null
 
@@ -81,7 +82,7 @@ internal class BufferedAudioResponseReceiver(
       aborted = true
       assembler.reset()
       accumulator.reset()
-      format = PhoneRelayClient.RESPONSE_FORMAT_PCM_24K
+      format = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K
     }
     cancelCompletionTimeout()
     completeActiveTurn(turnId)
@@ -97,7 +98,7 @@ internal class BufferedAudioResponseReceiver(
       aborted = true
       assembler.reset()
       accumulator.reset()
-      format = PhoneRelayClient.RESPONSE_FORMAT_PCM_24K
+      format = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K
       cancelCompletionTimeout()
       completeActiveTurn(turnId)
       scope.launch { emitError("Audio response incomplete") }
@@ -114,11 +115,11 @@ internal class BufferedAudioResponseReceiver(
     val completedFormat = format
     val turnId = activeTurnId()
     accumulator.reset()
-    format = PhoneRelayClient.RESPONSE_FORMAT_PCM_24K
+    format = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K
     cancelCompletionTimeout()
     emitAudioResponse(
       turnId,
-      PhoneRelayClient.AudioResponse(turnId = null, audioBytes = bytes, format = completedFormat),
+      PhoneRelayAudioResponse(turnId = null, audioBytes = bytes, format = completedFormat),
     )
   }
 
@@ -128,7 +129,7 @@ internal class BufferedAudioResponseReceiver(
     val turnId = activeTurnId()
     aborted = true
     accumulator.reset()
-    format = PhoneRelayClient.RESPONSE_FORMAT_PCM_24K
+    format = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K
     cancelCompletionTimeout()
     completeActiveTurn(turnId)
     scope.launch { emitError("Audio response incomplete") }
@@ -147,7 +148,7 @@ internal class BufferedAudioResponseReceiver(
             aborted = true
             assembler.reset()
             accumulator.reset()
-            format = PhoneRelayClient.RESPONSE_FORMAT_PCM_24K
+            format = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K
             CompletionTimeoutResult(missing, turnId)
           }
         if (timeoutResult == null) return@launch
@@ -165,7 +166,7 @@ internal class BufferedAudioResponseReceiver(
 
   private fun resetLocked() {
     accumulator.reset()
-    format = PhoneRelayClient.RESPONSE_FORMAT_PCM_24K
+    format = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K
     aborted = false
     assembler.reset()
   }

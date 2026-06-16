@@ -1,5 +1,11 @@
 package ai.openclaw.wear.client
 
+import ai.openclaw.common.wear.WearRelayAudioDonePayload
+import ai.openclaw.common.wear.WearRelayErrorPayload
+import ai.openclaw.common.wear.WearRelayProtocol
+import ai.openclaw.common.wear.WearRelayStartPayload
+import ai.openclaw.common.wear.WearRelayStatusPayload
+import ai.openclaw.common.wear.WearRelayTextPayload
 import android.content.Context
 import android.util.Log
 import com.google.android.gms.common.ConnectionResult
@@ -19,34 +25,73 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 
-class PhoneRelayClient(
+internal data class PhoneRelayAudioResponse(
+  val turnId: String?,
+  val audioBytes: ByteArray,
+  val format: String = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K,
+)
+
+internal sealed interface PhoneRelayAudioStreamEvent {
+  val turnId: String?
+
+  /**
+   * Streaming-format negotiation has not landed; the assembler currently only
+   * receives PCM_24K chunks. The format field is intentionally absent here
+   * (vs. the per-message [PhoneRelayAudioResponse]) so we cannot accidentally
+   * claim a non-PCM format that the playback path is not yet wired to decode.
+   */
+  data class Chunk(
+    override val turnId: String?,
+    val audioBytes: ByteArray,
+  ) : PhoneRelayAudioStreamEvent
+
+  data class Done(
+    override val turnId: String?,
+    val chunkCount: Int,
+  ) : PhoneRelayAudioStreamEvent
+}
+
+internal interface WearPhoneRelay {
+  val phoneConnected: StateFlow<Boolean>
+  val statusUpdates: SharedFlow<String>
+  val audioResponses: SharedFlow<PhoneRelayAudioResponse>
+  val audioStreamEvents: SharedFlow<PhoneRelayAudioStreamEvent>
+  val errors: SharedFlow<String>
+
+  fun isPhoneConnected(): Boolean
+
+  fun sendStartRecording(): String?
+
+  fun sendTextTurn(text: String): String?
+
+  fun sendEndRecording(turnId: String?)
+
+  fun sendCancel()
+
+  fun sendAudioChunk(
+    turnId: String?,
+    chunk: ByteArray,
+  )
+
+  fun disconnect()
+}
+
+internal class PhoneRelayClient(
   private val context: Context,
   private val scope: CoroutineScope,
-) {
+) : WearPhoneRelay {
   companion object {
     private const val TAG = "OpenClawWearRelay"
     private const val CAPABILITY_PHONE_APP = "openclaw_relay_phone"
-    private const val PATH_START = "/openclaw/watch/start"
-    private const val PATH_END = "/openclaw/watch/end"
-    private const val PATH_CANCEL = "/openclaw/watch/cancel"
-    private const val PATH_STATUS = "/openclaw/watch/status"
-    private const val PATH_ERROR = "/openclaw/watch/error"
-    private const val PATH_AUDIO_CHUNK = "/openclaw/watch/audio/chunk"
-
-    // MessageClient enforces a ~100 KB per-message ceiling; keep a safe margin.
-    private const val MAX_MESSAGE_BYTES = 90_000
-    private const val AUDIO_RESPONSE_PATH = "/openclaw/watch/audio"
-    private const val AUDIO_STREAM_RESPONSE_PATH = "/openclaw/watch/audio/stream"
+    private const val AUDIO_RESPONSE_PATH = WearRelayProtocol.PATH_AUDIO_RESPONSE
+    private const val AUDIO_STREAM_RESPONSE_PATH = "${WearRelayProtocol.PATH_AUDIO_RESPONSE}/stream"
 
     private const val MAX_OUTBOUND_MESSAGES = 64
-    const val RESPONSE_FORMAT_PCM_24K = "pcm_24000"
-    const val RESPONSE_FORMAT_OGG_OPUS = "ogg_opus"
   }
 
   private val messageClient: MessageClient = Wearable.getMessageClient(context)
@@ -55,13 +100,13 @@ class PhoneRelayClient(
   private val audioDebugCapture = WireAudioDebugCapture(context)
 
   private val _phoneConnected = MutableStateFlow(false)
-  val phoneConnected: StateFlow<Boolean> = _phoneConnected
+  override val phoneConnected: StateFlow<Boolean> = _phoneConnected
 
   private val _statusUpdates = MutableSharedFlow<String>(extraBufferCapacity = 16)
-  val statusUpdates: SharedFlow<String> = _statusUpdates
+  override val statusUpdates: SharedFlow<String> = _statusUpdates
 
-  private val _audioResponses = MutableSharedFlow<AudioResponse>(extraBufferCapacity = 4)
-  val audioResponses: SharedFlow<AudioResponse> = _audioResponses
+  private val _audioResponses = MutableSharedFlow<PhoneRelayAudioResponse>(extraBufferCapacity = 4)
+  override val audioResponses: SharedFlow<PhoneRelayAudioResponse> = _audioResponses
 
   // DROP_OLDEST keeps the latest audio frames flowing rather than backpressuring
   // the assembler when a slow collector falls behind. Collectors get a typed
@@ -69,14 +114,14 @@ class PhoneRelayClient(
   // optimise for liveness, since stalled audio is worse than slightly chopped
   // audio for push-to-talk playback.
   private val _audioStreamEvents =
-    MutableSharedFlow<AudioStreamEvent>(
+    MutableSharedFlow<PhoneRelayAudioStreamEvent>(
       extraBufferCapacity = 64,
       onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
     )
-  val audioStreamEvents: SharedFlow<AudioStreamEvent> = _audioStreamEvents
+  override val audioStreamEvents: SharedFlow<PhoneRelayAudioStreamEvent> = _audioStreamEvents
 
   private val _errors = MutableSharedFlow<String>(extraBufferCapacity = 4)
-  val errors: SharedFlow<String> = _errors
+  override val errors: SharedFlow<String> = _errors
 
   private var messageListener: MessageClient.OnMessageReceivedListener? = null
   private val outboundMessages = Channel<OutboundMessage>(MAX_OUTBOUND_MESSAGES)
@@ -122,9 +167,38 @@ class PhoneRelayClient(
     }
   }
 
-  fun isPhoneConnected(): Boolean = _phoneConnected.value
+  override fun isPhoneConnected(): Boolean = _phoneConnected.value
 
-  fun sendStartRecording(): String? {
+  override fun sendStartRecording(): String? {
+    val payload =
+      json
+        .encodeToString(
+          WearRelayStartPayload(
+            responseStreaming = false,
+            acceptedResponseFormats = WearRelayProtocol.ACCEPTED_RESPONSE_FORMATS,
+          ),
+        ).toByteArray()
+    return beginTurn(WearRelayProtocol.PATH_START, payload)
+  }
+
+  override fun sendTextTurn(text: String): String? {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return null
+    val payload =
+      json
+        .encodeToString(
+          WearRelayTextPayload(
+            text = trimmed,
+            acceptedResponseFormats = WearRelayProtocol.ACCEPTED_RESPONSE_FORMATS,
+          ),
+        ).toByteArray()
+    return beginTurn(WearRelayProtocol.PATH_TEXT, payload)
+  }
+
+  private fun beginTurn(
+    path: String,
+    payload: ByteArray,
+  ): String? {
     // A new turn must not inherit partial chunks from a prior response
     resetAudioAccumulator()
     val phoneNodeId = selectRelayPhoneNodeId()
@@ -137,33 +211,25 @@ class PhoneRelayClient(
     }
     val turnId = UUID.randomUUID().toString()
     activeTurn.set(ActiveTurn(turnId = turnId, phoneNodeId = phoneNodeId))
-    // Response streaming stays disabled until streaming has format negotiation and decode coverage.
-    sendMessage(
-      turnPath(PATH_START, turnId),
-      json
-        .encodeToString(
-          StartPayload(
-            responseStreaming = false,
-            acceptedResponseFormats = listOf(RESPONSE_FORMAT_OGG_OPUS, RESPONSE_FORMAT_PCM_24K),
-          ),
-        ).toByteArray(),
-      phoneNodeId,
-    )
+    sendMessage(WearRelayProtocol.turnPath(path, turnId), payload, phoneNodeId)
     return turnId
   }
 
-  fun sendEndRecording(turnId: String?) {
+  override fun sendEndRecording(turnId: String?) {
     if (turnId == null || activeTurnId != turnId) return
-    sendMessage(turnPath(PATH_END, turnId), byteArrayOf())
+    sendMessage(WearRelayProtocol.turnPath(WearRelayProtocol.PATH_END, turnId), byteArrayOf())
   }
 
-  fun sendCancel() {
+  override fun sendCancel() {
     val turnId = activeTurnId
     val phoneNodeId = activeRelayPhoneNodeId
     resetAudioAccumulator()
     drainOutboundMessages()
     activeTurn.set(null)
-    sendMessage(turnPath(PATH_CANCEL, turnId), byteArrayOf(), phoneNodeId)
+    if (turnId == null) return
+    // Cancel is scoped to a turn. If no turn is active there is nothing to
+    // cancel on the phone side; stale state is reset above by draining messages.
+    sendMessage(WearRelayProtocol.turnPath(WearRelayProtocol.PATH_CANCEL, turnId), byteArrayOf(), phoneNodeId)
   }
 
   private fun resetAudioAccumulator() {
@@ -171,16 +237,16 @@ class PhoneRelayClient(
     streamingAudioReceiver.reset()
   }
 
-  fun sendAudioChunk(
+  override fun sendAudioChunk(
     turnId: String?,
     chunk: ByteArray,
   ) {
     if (turnId == null || activeTurnId != turnId) return
-    if (chunk.size > MAX_MESSAGE_BYTES) return
-    sendMessage(turnPath(PATH_AUDIO_CHUNK, turnId), chunk)
+    if (chunk.size > WearRelayProtocol.MAX_MESSAGE_BYTES) return
+    sendMessage(WearRelayProtocol.turnPath(WearRelayProtocol.PATH_AUDIO_CHUNK, turnId), chunk)
   }
 
-  fun disconnect() {
+  override fun disconnect() {
     connectionMonitorJob?.cancel()
     connectionMonitorJob = null
     messageListener?.let { messageClient.removeListener(it) }
@@ -202,8 +268,8 @@ class PhoneRelayClient(
     val listener =
       MessageClient.OnMessageReceivedListener { event ->
         when {
-          event.path == PATH_STATUS -> handleStatusMessage(event)
-          event.path == PATH_ERROR -> handleErrorMessage(event)
+          event.path == WearRelayProtocol.PATH_STATUS -> handleStatusMessage(event)
+          event.path == WearRelayProtocol.PATH_ERROR -> handleErrorMessage(event)
           event.path == AUDIO_STREAM_RESPONSE_PATH || event.path.startsWith("$AUDIO_STREAM_RESPONSE_PATH/") ->
             handleAudioStreamMessage(event)
           // Single-message audio response (small payload)
@@ -318,31 +384,27 @@ class PhoneRelayClient(
     return sourceNodeId == activeNodeId
   }
 
-  private fun turnPath(
-    basePath: String,
-    turnId: String?,
-  ): String = turnId?.let { "$basePath/$it" } ?: basePath
-
   private fun parseAudioDoneChunkCount(data: ByteArray): Int? {
     val payload = data.decodeToString()
     return runCatching {
-      json.decodeFromString<AudioDonePayload>(payload).chunkCount.takeIf { it >= 0 }
+      json.decodeFromString<WearRelayAudioDonePayload>(payload).chunkCount.takeIf { it >= 0 }
     }.getOrNull()
   }
 
   private fun parseAudioDoneFormat(data: ByteArray): String {
     val payload = data.decodeToString()
     return runCatching {
-      json.decodeFromString<AudioDonePayload>(payload).format.takeIf { it.isNotBlank() }
-    }.getOrNull() ?: RESPONSE_FORMAT_PCM_24K
+      json.decodeFromString<WearRelayAudioDonePayload>(payload).format.takeIf { it.isNotBlank() }
+    }.getOrNull() ?: WearRelayProtocol.RESPONSE_FORMAT_PCM_24K
   }
 
   private fun emitAudioResponse(
     turnId: String?,
-    audioResponse: AudioResponse?,
+    audioResponse: PhoneRelayAudioResponse?,
   ) {
     if (!isActiveTurn(turnId)) return
     if (audioResponse?.audioBytes?.isNotEmpty() == true) {
+      Log.d(TAG, "audio response received turnId=$turnId format=${audioResponse.format} bytes=${audioResponse.audioBytes.size}")
       audioDebugCapture.captureWholeResponse(turnId = turnId, data = audioResponse.audioBytes)
       completeActiveTurn(turnId)
       scope.launch {
@@ -354,7 +416,7 @@ class PhoneRelayClient(
   private fun handleStatusMessage(event: MessageEvent) {
     if (!isActiveRelayPhoneNode(event.sourceNodeId)) return
     val payload = event.data.decodeToString()
-    val status = runCatching { json.decodeFromString<StatusPayload>(payload) }.getOrNull()
+    val status = runCatching { json.decodeFromString<WearRelayStatusPayload>(payload) }.getOrNull()
     if (!isActiveTurn(status?.turnId)) return
     status?.let {
       scope.launch {
@@ -366,7 +428,7 @@ class PhoneRelayClient(
   private fun handleErrorMessage(event: MessageEvent) {
     if (!isActiveRelayPhoneNode(event.sourceNodeId)) return
     val payload = event.data.decodeToString()
-    val error = runCatching { json.decodeFromString<ErrorPayload>(payload) }.getOrNull()
+    val error = runCatching { json.decodeFromString<WearRelayErrorPayload>(payload) }.getOrNull()
     if (!isActiveTurn(error?.turnId)) return
     error?.let {
       completeActiveTurn(it.turnId)
@@ -379,19 +441,20 @@ class PhoneRelayClient(
   private fun handleAudioResponseMessage(
     turnId: String?,
     data: ByteArray,
-    format: String = RESPONSE_FORMAT_PCM_24K,
+    format: String = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K,
   ) {
     if (data.isEmpty()) return
     emitAudioResponse(
       turnId,
-      AudioResponse(turnId = null, audioBytes = data, format = normalizeResponseFormat(format)),
+      PhoneRelayAudioResponse(turnId = null, audioBytes = data, format = normalizeResponseFormat(format)),
     )
   }
 
   private fun normalizeResponseFormat(format: String): String =
     when (format) {
-      RESPONSE_FORMAT_OGG_OPUS -> RESPONSE_FORMAT_OGG_OPUS
-      else -> RESPONSE_FORMAT_PCM_24K
+      WearRelayProtocol.RESPONSE_FORMAT_OGG_OPUS -> WearRelayProtocol.RESPONSE_FORMAT_OGG_OPUS
+      WearRelayProtocol.RESPONSE_FORMAT_MP3 -> WearRelayProtocol.RESPONSE_FORMAT_MP3
+      else -> WearRelayProtocol.RESPONSE_FORMAT_PCM_24K
     }
 
   private fun completeActiveTurn(turnId: String?) {
@@ -412,7 +475,7 @@ class PhoneRelayClient(
       Log.w(TAG, "dropping outbound message after disconnect: $path")
       return
     }
-    if (path.startsWith(PATH_AUDIO_CHUNK)) {
+    if (path.startsWith(WearRelayProtocol.PATH_AUDIO_CHUNK)) {
       Log.w(TAG, "dropping audio chunk because outbound relay queue is full")
       return
     }
@@ -435,8 +498,15 @@ class PhoneRelayClient(
     scope.launch(Dispatchers.IO) {
       for (message in outboundMessages) {
         try {
-          val nodeIds = message.targetNodeId?.let(::setOf) ?: relayPhoneNodeIds
-          val nodes = nodeClient.connectedNodes.await().filter { it.id in nodeIds }
+          val targetNodeId = message.targetNodeId
+          if (targetNodeId != null) {
+            // Fast path: send directly to the known relay node instead of querying
+            // connectedNodes for every chunk in an audio turn.
+            messageClient.sendMessage(targetNodeId, message.path, message.data).await()
+            _phoneConnected.value = true
+            continue
+          }
+          val nodes = nodeClient.connectedNodes.await().filter { it.id in relayPhoneNodeIds }
           if (nodes.isEmpty()) {
             _phoneConnected.value = false
             continue
@@ -453,7 +523,7 @@ class PhoneRelayClient(
     }
   }
 
-  private fun enqueueAudioStreamEvent(event: AudioStreamEvent) {
+  private fun enqueueAudioStreamEvent(event: PhoneRelayAudioStreamEvent) {
     // SharedFlow has DROP_OLDEST overflow + a 64-frame buffer; tryEmit() is
     // synchronous and never suspends. If we still cannot enqueue (collector not
     // attached yet), drop and log: stalling on emit() under a slow collector
@@ -500,31 +570,6 @@ class PhoneRelayClient(
     return capabilityInfo.nodes.mapTo(mutableSetOf()) { it.id }
   }
 
-  @Serializable
-  private data class StartPayload(
-    val responseStreaming: Boolean,
-    val acceptedResponseFormats: List<String> = emptyList(),
-  )
-
-  @Serializable
-  private data class StatusPayload(
-    val state: String,
-    val message: String,
-    val turnId: String? = null,
-  )
-
-  @Serializable
-  private data class ErrorPayload(
-    val message: String,
-    val turnId: String? = null,
-  )
-
-  @Serializable
-  private data class AudioDonePayload(
-    val chunkCount: Int,
-    val format: String = RESPONSE_FORMAT_PCM_24K,
-  )
-
   private data class OutboundMessage(
     val path: String,
     val data: ByteArray,
@@ -535,30 +580,4 @@ class PhoneRelayClient(
     val turnId: String,
     val phoneNodeId: String,
   )
-
-  data class AudioResponse(
-    val turnId: String?,
-    val audioBytes: ByteArray,
-    val format: String = RESPONSE_FORMAT_PCM_24K,
-  )
-
-  sealed interface AudioStreamEvent {
-    val turnId: String?
-
-    /**
-     * Streaming-format negotiation has not landed; the assembler currently only
-     * receives PCM_24K chunks. The format field is intentionally absent here
-     * (vs. the per-message [AudioResponse]) so we cannot accidentally claim a
-     * non-PCM format that the playback path is not yet wired to decode.
-     */
-    data class Chunk(
-      override val turnId: String?,
-      val audioBytes: ByteArray,
-    ) : AudioStreamEvent
-
-    data class Done(
-      override val turnId: String?,
-      val chunkCount: Int,
-    ) : AudioStreamEvent
-  }
 }

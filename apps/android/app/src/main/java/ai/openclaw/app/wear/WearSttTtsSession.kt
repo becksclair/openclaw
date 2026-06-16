@@ -4,7 +4,8 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.voice.ChatEventText
 import ai.openclaw.audio.AndroidCompressedAudioDecoder
 import ai.openclaw.audio.PcmAudio
-import android.util.Base64
+import ai.openclaw.common.wear.WearRelayProtocol
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -24,8 +25,10 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.coroutineContext
 
 private const val FINAL_AUDIO_WAIT_WITH_TEXT_MS = 2_000L
@@ -45,16 +48,66 @@ private data class ChatFinalAudioResult(
   val spokenText: String?,
 )
 
+internal interface WearGateway {
+  suspend fun request(
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long = 15_000,
+  ): String
+
+  suspend fun requestDetailed(
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long = 15_000,
+  ): GatewaySession.RpcResult
+}
+
+internal class GatewaySessionWearGateway(
+  private val session: GatewaySession,
+) : WearGateway {
+  override suspend fun request(
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long,
+  ): String = session.request(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)
+
+  override suspend fun requestDetailed(
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long,
+  ): GatewaySession.RpcResult = session.requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)
+}
+
 internal class WearSttTtsSession(
   private val scope: CoroutineScope,
-  private val session: GatewaySession,
+  private val gateway: WearGateway,
   private val sessionKey: String,
-  private val responseFormat: String = RESPONSE_FORMAT_PCM_24K,
+  private val responseFormat: String = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K,
   private val onAudioResponse: (WearAudioResponse) -> Unit,
   private val onStatus: (String) -> Unit,
   private val onError: (String) -> Unit,
   private val onComplete: (WearSttTtsSession) -> Unit,
 ) {
+  constructor(
+    scope: CoroutineScope,
+    session: GatewaySession,
+    sessionKey: String,
+    responseFormat: String = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K,
+    onAudioResponse: (WearAudioResponse) -> Unit,
+    onStatus: (String) -> Unit,
+    onError: (String) -> Unit,
+    onComplete: (WearSttTtsSession) -> Unit,
+  ) : this(
+    scope = scope,
+    gateway = GatewaySessionWearGateway(session),
+    sessionKey = sessionKey,
+    responseFormat = responseFormat,
+    onAudioResponse = onAudioResponse,
+    onStatus = onStatus,
+    onError = onError,
+    onComplete = onComplete,
+  )
+
   companion object {
     private const val TAG = "WearSttTtsSession"
     private const val INPUT_SAMPLE_RATE_HZ = 24_000
@@ -67,15 +120,13 @@ internal class WearSttTtsSession(
     private const val FINAL_AUDIO_TIMEOUT_MS = 20_000L
     private const val SPEAK_TIMEOUT_MS = 120_000L
     private const val WATCH_OUTPUT_SAMPLE_RATE_HZ = 24_000
-    const val RESPONSE_FORMAT_PCM_24K = "pcm_24000"
-    const val RESPONSE_FORMAT_OGG_OPUS = "ogg_opus"
   }
 
   private val json = Json { ignoreUnknownKeys = true }
 
   @Volatile private var transcriptionSessionId: String? = null
 
-  @Volatile private var pendingRunIdKeys: Set<String> = emptySet()
+  private val pendingRunIdKeys = AtomicReference<Set<String>>(emptySet())
 
   @Volatile private var transcriptSignal: CompletableDeferred<String>? = null
 
@@ -85,49 +136,50 @@ internal class WearSttTtsSession(
 
   @Volatile private var startJob: Job? = null
 
+  // Once cancel() has been called the session must not start new gateway work,
+  // even if a late caller invokes start() or startTranscript() afterward.
+  private val cancelled = AtomicBoolean(false)
+
   // Single-closer guard: cancel() and the start job's finally block can race to
   // close the gateway transcription session. The first to flip this flag owns
   // the close call; the other side becomes a no-op.
   private val transcriptionClosing = AtomicBoolean(false)
 
   fun start(audioFrames: List<ByteArray>) {
+    startInternal(audioFrames = audioFrames, initialTranscript = null)
+  }
+
+  fun startTranscript(transcript: String) {
+    startInternal(audioFrames = emptyList(), initialTranscript = transcript)
+  }
+
+  private fun startInternal(
+    audioFrames: List<ByteArray>,
+    initialTranscript: String?,
+  ) {
     synchronized(startLock) {
-      if (startJob != null) return
+      if (cancelled.get() || startJob != null) return
       startJob =
         scope.launch {
+          val turnStartedAtMs = SystemClock.elapsedRealtime()
           var phase = "starting"
           var sttSessionId: String? = null
           var transcriptionClosed = false
           try {
-            if (audioFrames.isEmpty()) {
-              onError("No audio recorded")
-              return@launch
-            }
-            phase = "creating transcription session"
-            onStatus("Transcribing...")
-            sttSessionId = createTranscriptionSession()
-            transcriptionSessionId = sttSessionId
-            // The gateway relay is ready to accept audio as soon as talk.session.create
-            // returns successfully; the "ready" talk.event is informational only.
-            Log.d(TAG, "transcription session created id=${sttSessionId.shortForLog()}")
-
-            phase = "sending audio"
-            val transcriptWaiter = CompletableDeferred<String>()
-            transcriptSignal = transcriptWaiter
-            val transcriptionAudio = withContext(Dispatchers.Default) { pcm24kFramesToPcmu8k(audioFrames) }
-            Log.d(TAG, "sending transcription audio bytes=${transcriptionAudio.size}")
-            sendTranscriptionAudio(sttSessionId, transcriptionAudio)
-
-            phase = "closing transcription session"
-            closeTranscriptionSession(sttSessionId)
-            transcriptionClosed = true
-
-            phase = "waiting for transcript"
-            val transcript = withTimeout(TRANSCRIPTION_TIMEOUT_MS) { transcriptWaiter.await() }.trim()
+            val transcript =
+              if (initialTranscript != null) {
+                initialTranscript.trim()
+              } else {
+                transcribeAudioFrames(audioFrames) { sessionId, closed ->
+                  sttSessionId = sessionId
+                  transcriptionClosed = closed
+                }
+              }
             if (transcript.isEmpty()) {
               onError("No transcript received")
               return@launch
             }
+            logTurnLatency("transcript-ready", turnStartedAtMs, "chars=${transcript.length}")
 
             phase = "sending chat"
             onStatus("Thinking...")
@@ -135,15 +187,16 @@ internal class WearSttTtsSession(
             chatFinalSignal = chatWaiter
             val chatStartedAtSeconds = System.currentTimeMillis().toDouble() / 1_000.0
             val runId = sendChat(transcript)
-            // sendChat already pre-registered the idempotency key as an acceptable runId;
-            // keep it while adding the parsed gateway runId so fast final events
-            // carrying either identifier are accepted.
-            pendingRunIdKeys = pendingRunIdKeys + runId
-            Log.d(TAG, "chat.send ok runId=${runId.shortForLog()} transcriptChars=${transcript.length}")
+            logTurnLatency("chat-send-ok", turnStartedAtMs, "runId=${runId.shortForLog()} transcriptChars=${transcript.length}")
 
             phase = "waiting for assistant"
             val finalEvent = withTimeoutOrNull(CHAT_TIMEOUT_MS) { chatWaiter.await() }
             val finalEventText = finalEvent?.assistantText?.trim()
+            logTurnLatency(
+              "chat-final",
+              turnStartedAtMs,
+              "received=${finalEvent != null} textChars=${finalEventText?.length ?: 0}",
+            )
 
             phase = "fetching final speech"
             onStatus("Preparing speech...")
@@ -155,6 +208,11 @@ internal class WearSttTtsSession(
             val finalAudioResult = fetchFinalAudio(runId, finalEvent, finalAudioWaitMs)
             var spokenAudio = finalAudioResult?.audio
             val finalAudioSpokenText = finalAudioResult?.spokenText?.trim()?.takeIf { it.isNotEmpty() }
+            logTurnLatency(
+              "final-audio",
+              turnStartedAtMs,
+              "found=${spokenAudio != null} format=${spokenAudio?.format ?: "-"} bytes=${spokenAudio?.audioBytes?.size ?: 0}",
+            )
 
             val assistantText =
               finalEventText
@@ -179,18 +237,24 @@ internal class WearSttTtsSession(
             }
 
             val audioToPlay =
-              spokenAudio
-                ?: run {
-                  coroutineContext.ensureActive()
-                  phase = "synthesizing speech"
-                  onStatus("Synthesizing speech...")
-                  speakAssistantText(assistantText)
-                }
+              resolveWearAudioToPlay(
+                assistantText = assistantText,
+                spokenAudio = spokenAudio,
+              ) { text ->
+                coroutineContext.ensureActive()
+                phase = "synthesizing speech"
+                onStatus("Synthesizing speech...")
+                speakAssistantText(text)
+              } ?: run {
+                onError("No assistant response received")
+                return@launch
+              }
             if (audioToPlay.audioBytes.isEmpty()) {
               onError("Speech returned empty audio")
               return@launch
             }
             coroutineContext.ensureActive()
+            logTurnLatency("audio-ready", turnStartedAtMs, "format=${audioToPlay.format} bytes=${audioToPlay.audioBytes.size}")
             onAudioResponse(audioToPlay)
           } catch (_: TimeoutCancellationException) {
             Log.w(TAG, "session timed out while $phase")
@@ -203,19 +267,49 @@ internal class WearSttTtsSession(
           } finally {
             synchronized(startLock) { startJob = null }
             transcriptionSessionId = null
-            pendingRunIdKeys = emptySet()
+            pendingRunIdKeys.set(emptySet())
             transcriptSignal = null
             chatFinalSignal = null
             transcriptionClosing.set(false)
-            if (sttSessionId != null && !transcriptionClosed) {
+            val pendingSttSessionId = sttSessionId
+            if (pendingSttSessionId != null && !transcriptionClosed) {
               withContext(NonCancellable) {
-                runCatching { closeTranscriptionSession(sttSessionId) }
+                runCatching { closeTranscriptionSession(pendingSttSessionId) }
               }
             }
             onComplete(this@WearSttTtsSession)
           }
         }
     }
+  }
+
+  private suspend fun transcribeAudioFrames(
+    audioFrames: List<ByteArray>,
+    onSessionState: (sessionId: String?, closed: Boolean) -> Unit,
+  ): String {
+    if (audioFrames.isEmpty()) {
+      onError("No audio recorded")
+      return ""
+    }
+    var transcriptionClosed = false
+    val sttSessionId = createTranscriptionSession()
+    onSessionState(sttSessionId, transcriptionClosed)
+    transcriptionSessionId = sttSessionId
+    // The gateway relay is ready to accept audio as soon as talk.session.create
+    // returns successfully; the "ready" talk.event is informational only.
+    Log.d(TAG, "transcription session created id=${sttSessionId.shortForLog()}")
+
+    val transcriptWaiter = CompletableDeferred<String>()
+    transcriptSignal = transcriptWaiter
+    val transcriptionAudio = withContext(Dispatchers.Default) { pcm24kFramesToPcmu8k(audioFrames) }
+    Log.d(TAG, "sending transcription audio bytes=${transcriptionAudio.size}")
+    sendTranscriptionAudio(sttSessionId, transcriptionAudio)
+
+    closeTranscriptionSession(sttSessionId)
+    transcriptionClosed = true
+    onSessionState(sttSessionId, transcriptionClosed)
+
+    return withTimeout(TRANSCRIPTION_TIMEOUT_MS) { transcriptWaiter.await() }.trim()
   }
 
   fun handleGatewayEvent(
@@ -234,7 +328,8 @@ internal class WearSttTtsSession(
   }
 
   fun cancel() {
-    val runIds = pendingRunIdKeys
+    if (cancelled.getAndSet(true)) return
+    val runIds = pendingRunIdKeys.getAndSet(emptySet())
     val chatSessionKey = sessionKey.ifBlank { "main" }
     synchronized(startLock) {
       startJob?.cancel()
@@ -246,7 +341,6 @@ internal class WearSttTtsSession(
     chatFinalSignal = null
     val sttSessionId = transcriptionSessionId
     transcriptionSessionId = null
-    pendingRunIdKeys = emptySet()
     for (runId in runIds) {
       if (runId.isNotBlank()) {
         scope.launch { runCatching { abortChatRun(chatSessionKey, runId) } }
@@ -259,7 +353,7 @@ internal class WearSttTtsSession(
 
   private suspend fun createTranscriptionSession(): String {
     val response =
-      session.request(
+      gateway.request(
         "talk.session.create",
         buildJsonObject {
           put("mode", JsonPrimitive("transcription"))
@@ -285,11 +379,11 @@ internal class WearSttTtsSession(
     while (offset < audioBytes.size) {
       val end = minOf(offset + MAX_APPEND_AUDIO_BYTES, audioBytes.size)
       val chunk = audioBytes.copyOfRange(offset, end)
-      session.request(
+      gateway.request(
         "talk.session.appendAudio",
         buildJsonObject {
           put("sessionId", JsonPrimitive(sessionId))
-          put("audioBase64", JsonPrimitive(Base64.encodeToString(chunk, Base64.NO_WRAP)))
+          put("audioBase64", JsonPrimitive(Base64.getEncoder().encodeToString(chunk)))
         }.toString(),
         timeoutMs = 8_000,
       )
@@ -300,7 +394,7 @@ internal class WearSttTtsSession(
   private suspend fun closeTranscriptionSession(sessionId: String) {
     if (!transcriptionClosing.compareAndSet(false, true)) return
     try {
-      session.request(
+      gateway.request(
         "talk.session.close",
         buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }.toString(),
         timeoutMs = 5_000,
@@ -315,7 +409,7 @@ internal class WearSttTtsSession(
     chatSessionKey: String,
     runId: String,
   ) {
-    session.request(
+    gateway.request(
       "chat.abort",
       buildJsonObject {
         put("sessionKey", JsonPrimitive(chatSessionKey))
@@ -326,14 +420,14 @@ internal class WearSttTtsSession(
   }
 
   private suspend fun sendChat(transcript: String): String {
-    val idempotencyKey = UUID.randomUUID().toString()
-    // Pre-register the idempotency key as an acceptable runId BEFORE chat.send returns.
-    // This closes the race where a fast chat "final" event arrives mid-request carrying
-    // either the idempotency key or the parsed gateway runId; both will be accepted.
-    pendingRunIdKeys = setOf(idempotencyKey)
+    // Generate the run id up-front and use it as the idempotency key, matching
+    // ChatController. This means pendingRunIdKeys is known before chat.send
+    // returns and a fast final event cannot arrive with an unrecognized runId.
+    val runId = UUID.randomUUID().toString()
+    pendingRunIdKeys.set(setOf(runId))
     Log.d(TAG, "chat.send start sessionKey=${sessionKey.ifBlank { "main" }} chars=${transcript.length}")
     val response =
-      session.request(
+      gateway.request(
         "chat.send",
         buildJsonObject {
           put("sessionKey", JsonPrimitive(sessionKey.ifBlank { "main" }))
@@ -341,12 +435,15 @@ internal class WearSttTtsSession(
           put("deliver", JsonPrimitive(true))
           put("thinking", JsonPrimitive("low"))
           put("timeoutMs", JsonPrimitive(30_000))
-          put("idempotencyKey", JsonPrimitive(idempotencyKey))
+          put("idempotencyKey", JsonPrimitive(runId))
         }.toString(),
         timeoutMs = 15_000,
       )
-    val parsedRunId = parseRunId(response) ?: idempotencyKey
-    pendingRunIdKeys = setOf(idempotencyKey, parsedRunId)
+    val parsedRunId = parseRunId(response) ?: runId
+    // Gateway may return a canonical run id; accept both during the transition.
+    if (parsedRunId != runId) {
+      pendingRunIdKeys.set(setOf(runId, parsedRunId))
+    }
     return parsedRunId
   }
 
@@ -359,7 +456,7 @@ internal class WearSttTtsSession(
     val finalAudioAgentId = finalEvent?.agentId
     val response =
       try {
-        session.requestDetailed(
+        gateway.requestDetailed(
           method = "chat.finalAudio.get",
           paramsJson =
             buildJsonObject {
@@ -393,7 +490,7 @@ internal class WearSttTtsSession(
     val audioBase64 = root["audioBase64"].asStringOrNull() ?: return null
     val audioBytes =
       try {
-        Base64.decode(audioBase64, Base64.NO_WRAP)
+        Base64.getDecoder().decode(audioBase64)
       } catch (err: Throwable) {
         Log.d(TAG, "chat.finalAudio.get audio decode failed: ${err.message ?: err::class.java.simpleName}")
         return null
@@ -403,9 +500,15 @@ internal class WearSttTtsSession(
     val fileExtension = root["fileExtension"].asStringOrNull()
     val spokenText = root["spokenText"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
     Log.d(TAG, "chat.finalAudio.get ok bytes=${audioBytes.size} format=${outputFormat ?: mimeType ?: fileExtension ?: "unknown"}")
-    if (responseFormat == RESPONSE_FORMAT_OGG_OPUS && isOggOpusAudio(outputFormat, mimeType, fileExtension)) {
+    if (responseFormat == WearRelayProtocol.RESPONSE_FORMAT_MP3 && isMp3GatewayAudio(outputFormat, mimeType, fileExtension)) {
       return ChatFinalAudioResult(
-        audio = WearAudioResponse(audioBytes = audioBytes, format = RESPONSE_FORMAT_OGG_OPUS),
+        audio = WearAudioResponse(audioBytes = audioBytes, format = WearRelayProtocol.RESPONSE_FORMAT_MP3),
+        spokenText = spokenText,
+      )
+    }
+    if (responseFormat == WearRelayProtocol.RESPONSE_FORMAT_OGG_OPUS && isOggOpusGatewayAudio(outputFormat, mimeType, fileExtension)) {
+      return ChatFinalAudioResult(
+        audio = WearAudioResponse(audioBytes = audioBytes, format = WearRelayProtocol.RESPONSE_FORMAT_OGG_OPUS),
         spokenText = spokenText,
       )
     }
@@ -428,16 +531,19 @@ internal class WearSttTtsSession(
       audio =
         WearAudioResponse(
           audioBytes = decodedAudio,
-          format = RESPONSE_FORMAT_PCM_24K,
+          format = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K,
         ),
       spokenText = spokenText,
     )
   }
 
   private suspend fun speakAssistantText(text: String): WearAudioResponse {
-    val requestedFormat = if (responseFormat == RESPONSE_FORMAT_OGG_OPUS) "opus" else RESPONSE_FORMAT_PCM_24K
+    // For PCM watches we still ask the gateway for opus and decode it here,
+    // because talk.speak does not emit raw PCM. For compressed watches request
+    // the negotiated format so the gateway can pass it through unchanged.
+    val requestedFormat = if (responseFormat == WearRelayProtocol.RESPONSE_FORMAT_PCM_24K) "opus" else responseFormat
     val response =
-      session.request(
+      gateway.request(
         "talk.speak",
         buildJsonObject {
           put("text", JsonPrimitive(text))
@@ -447,13 +553,22 @@ internal class WearSttTtsSession(
       )
     val root = json.parseToJsonElement(response).asObjectOrNull() ?: throw IllegalStateException("Invalid talk.speak response")
     val audioBase64 = root["audioBase64"].asStringOrNull() ?: throw IllegalStateException("talk.speak returned no audio")
-    val audioBytes = Base64.decode(audioBase64, Base64.NO_WRAP)
+    val audioBytes = Base64.getDecoder().decode(audioBase64)
     val outputFormat = root["outputFormat"].asStringOrNull()
     val mimeType = root["mimeType"].asStringOrNull()
     val fileExtension = root["fileExtension"].asStringOrNull()
     Log.d(TAG, "talk.speak ok bytes=${audioBytes.size} format=${outputFormat ?: mimeType ?: fileExtension ?: "unknown"}")
-    if (responseFormat == RESPONSE_FORMAT_OGG_OPUS && isOggOpusAudio(outputFormat, mimeType, fileExtension)) {
-      return WearAudioResponse(audioBytes = audioBytes, format = RESPONSE_FORMAT_OGG_OPUS)
+    val gatewayFormat =
+      when {
+        isMp3GatewayAudio(outputFormat, mimeType, fileExtension) -> WearRelayProtocol.RESPONSE_FORMAT_MP3
+        isOggOpusGatewayAudio(outputFormat, mimeType, fileExtension) -> WearRelayProtocol.RESPONSE_FORMAT_OGG_OPUS
+        else -> WearRelayProtocol.RESPONSE_FORMAT_PCM_24K
+      }
+    // Only pass through compressed audio when the gateway returned exactly the
+    // format negotiated with the watch; otherwise decode to PCM so the client
+    // receives audio it can actually play.
+    if (gatewayFormat != WearRelayProtocol.RESPONSE_FORMAT_PCM_24K && gatewayFormat == responseFormat) {
+      return WearAudioResponse(audioBytes = audioBytes, format = gatewayFormat)
     }
     return WearAudioResponse(
       audioBytes =
@@ -464,15 +579,17 @@ internal class WearSttTtsSession(
           fileExtension = fileExtension,
           errorContext = "talk.speak compressed audio",
         ),
-      format = RESPONSE_FORMAT_PCM_24K,
+      format = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K,
     )
   }
 
-  private fun isOggOpusAudio(
-    outputFormat: String?,
-    mimeType: String?,
-    fileExtension: String?,
-  ): Boolean = isOggOpusGatewayAudio(outputFormat = outputFormat, mimeType = mimeType, fileExtension = fileExtension)
+  private fun logTurnLatency(
+    phase: String,
+    startedAtMs: Long,
+    details: String,
+  ) {
+    Log.d(TAG, "turn latency phase=$phase elapsedMs=${SystemClock.elapsedRealtime() - startedAtMs} $details")
+  }
 
   private fun handleTranscriptionEvent(payloadJson: String?) {
     if (payloadJson.isNullOrBlank()) return
@@ -510,7 +627,7 @@ internal class WearSttTtsSession(
   private fun handleChatEvent(payloadJson: String?) {
     if (payloadJson.isNullOrBlank()) return
     val obj = runCatching { json.parseToJsonElement(payloadJson).asObjectOrNull() }.getOrNull() ?: return
-    val acceptedRunIds = pendingRunIdKeys
+    val acceptedRunIds = pendingRunIdKeys.get()
     if (acceptedRunIds.isEmpty()) return
     val eventRunId = obj["runId"].asStringOrNull() ?: return
     if (eventRunId !in acceptedRunIds) {
@@ -564,7 +681,7 @@ internal class WearSttTtsSession(
   private suspend fun fetchLatestAssistantText(sinceSeconds: Double): String? {
     val key = sessionKey.ifBlank { "main" }
     val response =
-      session.request(
+      gateway.request(
         "chat.history",
         buildJsonObject { put("sessionKey", JsonPrimitive(key)) }.toString(),
       )
@@ -697,6 +814,21 @@ private fun isOpusOutputFormat(normalizedFormat: String): Boolean =
     normalizedFormat == "ogg_opus" ||
     (normalizedFormat.startsWith("ogg-") && normalizedFormat.endsWith("-opus"))
 
+internal fun isMp3GatewayAudio(
+  outputFormat: String?,
+  mimeType: String?,
+  fileExtension: String?,
+): Boolean {
+  val normalizedFormat = outputFormat?.trim()?.lowercase().orEmpty()
+  val normalizedMime = mimeType?.trim()?.lowercase().orEmpty()
+  val normalizedExtension = fileExtension?.trim()?.lowercase().orEmpty()
+  return normalizedFormat == "mp3" ||
+    normalizedFormat.startsWith("mp3_") ||
+    normalizedMime == "audio/mpeg" ||
+    normalizedMime == "audio/mp3" ||
+    normalizedExtension == ".mp3"
+}
+
 internal fun resolveWearFinalAudioWaitMs(
   finalEventReceived: Boolean,
   assistantText: String?,
@@ -706,3 +838,22 @@ internal fun resolveWearFinalAudioWaitMs(
     assistantText.isNullOrEmpty() -> FINAL_AUDIO_WAIT_WITHOUT_TEXT_MS
     else -> FINAL_AUDIO_WAIT_WITH_TEXT_MS
   }
+
+internal fun shouldUseTalkSpeakForWearAudio(assistantText: String): Boolean = assistantText.trim().isNotEmpty()
+
+internal suspend fun resolveWearAudioToPlay(
+  assistantText: String,
+  spokenAudio: WearAudioResponse?,
+  speakAssistantText: suspend (String) -> WearAudioResponse,
+): WearAudioResponse? {
+  if (spokenAudio?.audioBytes?.isNotEmpty() == true) return spokenAudio
+  if (!shouldUseTalkSpeakForWearAudio(assistantText)) return spokenAudio
+  return try {
+    val synthesizedAudio = speakAssistantText(assistantText)
+    if (synthesizedAudio.audioBytes.isNotEmpty() || spokenAudio == null) synthesizedAudio else spokenAudio
+  } catch (err: CancellationException) {
+    throw err
+  } catch (err: Throwable) {
+    spokenAudio ?: throw err
+  }
+}

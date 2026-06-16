@@ -11,8 +11,8 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SessionTargetMode
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.normalizeWearTargetSessionKeyOverride
 import ai.openclaw.app.node.DeviceNotificationListenerService
+import ai.openclaw.app.normalizeWearTargetSessionKeyOverride
 import ai.openclaw.app.resolveWearConversationTargetSessionKey
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge

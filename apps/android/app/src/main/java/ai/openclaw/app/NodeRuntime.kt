@@ -339,7 +339,9 @@ class NodeRuntime(
   }
 
   @Volatile private var activeAgentId: String? = null
+
   @Volatile private var gatewayMainSessionKey: String = "main"
+
   @Volatile private var nodeMainSessionKey: String = resolveNodeMainSessionKey()
 
   private val _mainSessionKey = MutableStateFlow(resolvePreferredMainSessionKey())

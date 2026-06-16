@@ -1,11 +1,16 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.common.wear.WearRelayAudioDonePayload
+import ai.openclaw.common.wear.WearRelayErrorPayload
+import ai.openclaw.common.wear.WearRelayProtocol
+import ai.openclaw.common.wear.WearRelayStartPayload
+import ai.openclaw.common.wear.WearRelayStatusPayload
+import ai.openclaw.common.wear.WearRelayTextPayload
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import com.google.android.gms.wearable.MessageClient
-import com.google.android.gms.wearable.Node
-import com.google.android.gms.wearable.NodeClient
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -13,7 +18,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.util.concurrent.atomic.AtomicLong
@@ -23,45 +27,56 @@ import java.util.concurrent.atomic.AtomicLong
  * voice turns. Manages the Wearable Data Layer communication and the
  * per-turn [WearSttTtsSession] lifecycle.
  */
-class WearAudioRelay(
-  private val context: Context,
-  private val gatewaySession: GatewaySession,
+class WearAudioRelay internal constructor(
+  private val gateway: WearGateway,
   private val wearTargetSessionKeyProvider: () -> String,
+  private val transport: WearRelayTransport,
+  private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) {
+  constructor(
+    context: Context,
+    gatewaySession: GatewaySession,
+    wearTargetSessionKeyProvider: () -> String,
+  ) : this(
+    gateway = GatewaySessionWearGateway(gatewaySession),
+    wearTargetSessionKeyProvider = wearTargetSessionKeyProvider,
+    transport = GoogleWearRelayTransport(context),
+    scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+  )
+
   companion object {
     private const val TAG = "WearAudioRelay"
-    private const val PATH_START = "/openclaw/watch/start"
-    private const val PATH_END = "/openclaw/watch/end"
-    private const val PATH_CANCEL = "/openclaw/watch/cancel"
-    private const val PATH_AUDIO_CHUNK = "/openclaw/watch/audio/chunk"
-    private const val PATH_STATUS = "/openclaw/watch/status"
-    private const val PATH_ERROR = "/openclaw/watch/error"
-    private const val PATH_AUDIO_RESPONSE = "/openclaw/watch/audio"
-    private const val MAX_MESSAGE_BYTES = 90_000
+    private val WATCH_MESSAGE_PATHS =
+      arrayOf(
+        WearRelayProtocol.PATH_START,
+        WearRelayProtocol.PATH_END,
+        WearRelayProtocol.PATH_CANCEL,
+        WearRelayProtocol.PATH_AUDIO_CHUNK,
+        WearRelayProtocol.PATH_TEXT,
+      )
 
     // ~1 minute of 200ms chunks prevents unbounded buffered audio growth.
     private const val MAX_AUDIO_CHUNKS = 300
 
     internal fun isWatchMessagePath(path: String): Boolean =
-      path.matchesWatchPath(PATH_START) ||
-        path.matchesWatchPath(PATH_END) ||
-        path.matchesWatchPath(PATH_CANCEL) ||
-        path.matchesWatchPath(PATH_AUDIO_CHUNK)
+      path.matchesWatchPath(WearRelayProtocol.PATH_START) ||
+        path.matchesWatchPath(WearRelayProtocol.PATH_END) ||
+        path.matchesWatchPath(WearRelayProtocol.PATH_CANCEL) ||
+        path.matchesWatchPath(WearRelayProtocol.PATH_TEXT) ||
+        path.matchesWatchPath(WearRelayProtocol.PATH_AUDIO_CHUNK)
 
     private fun String.matchesWatchPath(basePath: String): Boolean = this == basePath || startsWith("$basePath/")
   }
 
-  private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-  private val messageClient: MessageClient = Wearable.getMessageClient(context)
-  private val nodeClient: NodeClient = Wearable.getNodeClient(context)
   private val json = Json { ignoreUnknownKeys = true }
 
   private val audioBuffer = mutableListOf<ByteArray>()
   private val audioBufferLock = Any()
+  private val turnStateLock = Any()
   private val turnCounter = AtomicLong(0)
   private val watchMessageListener =
-    MessageClient.OnMessageReceivedListener { event ->
-      handleWatchMessage(event.path, event.data, event.sourceNodeId)
+    WearRelayMessageListener { path, data, sourceNodeId ->
+      handleWatchMessage(path, data, sourceNodeId)
     }
 
   @Volatile private var activeSession: WearSttTtsSession? = null
@@ -72,12 +87,12 @@ class WearAudioRelay(
 
   @Volatile private var activeWatchTurnId: String? = null
 
-  @Volatile private var activeResponseFormat: String = WearSttTtsSession.RESPONSE_FORMAT_PCM_24K
+  @Volatile private var activeResponseFormat: String = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K
 
   @Volatile private var activeTargetSessionKey: String? = null
 
   init {
-    messageClient.addListener(watchMessageListener)
+    transport.addListener(watchMessageListener)
     Log.d(TAG, "registered foreground watch message listener")
   }
 
@@ -89,34 +104,100 @@ class WearAudioRelay(
     val watchMessage = parseWatchMessagePath(path) ?: return
     Log.d(TAG, "watch message received: path=$path bytes=${data.size} sourceNodeId=$sourceNodeId")
     when (watchMessage.path) {
-      PATH_START -> startRecording(sourceNodeId, watchMessage.turnId, parseStartPayload(data))
-      PATH_AUDIO_CHUNK -> receiveAudioChunk(data, sourceNodeId, watchMessage.turnId)
-      PATH_END -> stopRecording(sourceNodeId, watchMessage.turnId)
-      PATH_CANCEL -> cancel(sourceNodeId, watchMessage.turnId)
+      WearRelayProtocol.PATH_START -> startRecording(sourceNodeId, watchMessage.turnId, parseWearRelayStartPayload(data))
+      WearRelayProtocol.PATH_AUDIO_CHUNK -> receiveAudioChunk(data, sourceNodeId, watchMessage.turnId)
+      WearRelayProtocol.PATH_END -> stopRecording(sourceNodeId, watchMessage.turnId)
+      WearRelayProtocol.PATH_TEXT -> startTextTurn(sourceNodeId, watchMessage.turnId, parseWearRelayTextPayload(data))
+      WearRelayProtocol.PATH_CANCEL -> cancel(sourceNodeId, watchMessage.turnId)
     }
   }
 
   private fun startRecording(
     sourceNodeId: String? = null,
     turnId: String? = null,
-    startPayload: StartPayload? = null,
+    startPayload: WearRelayStartPayload? = null,
   ) {
-    if (isRecording) {
-      return
+    val currentTurnId: String?
+    synchronized(turnStateLock) {
+      if (isRecording) {
+        return
+      }
+      if (activeWatchTurnId != null && isActiveWatchNode(sourceNodeId) && isActiveWatchTurn(turnId)) {
+        return
+      }
+      turnCounter.incrementAndGet()
+      activeSession?.cancel()
+      activeSession = null
+      activeWatchNodeId = sourceNodeId
+      activeWatchTurnId = turnId
+      isRecording = true
+      activeResponseFormat = chooseResponseFormat(startPayload)
+      activeTargetSessionKey = wearTargetSessionKeyProvider()
+      currentTurnId = activeWatchTurnId
     }
-    if (activeWatchTurnId != null && isActiveWatchNode(sourceNodeId) && isActiveWatchTurn(turnId)) {
-      return
-    }
-    turnCounter.incrementAndGet()
-    activeSession?.cancel()
-    activeSession = null
-    activeWatchNodeId = sourceNodeId
-    activeWatchTurnId = turnId
-    isRecording = true
-    activeResponseFormat = chooseResponseFormat(startPayload)
-    activeTargetSessionKey = wearTargetSessionKeyProvider()
     synchronized(audioBufferLock) { audioBuffer.clear() }
-    sendStatus("Recording...")
+    sendStatus("Recording...", currentTurnId)
+  }
+
+  private fun startTextTurn(
+    sourceNodeId: String? = null,
+    turnId: String? = null,
+    textPayload: WearRelayTextPayload? = null,
+  ) {
+    val transcript = textPayload?.text?.trim().orEmpty()
+    val counterTurnId: Long
+    val watchTurnId: String?
+    val targetNodeId: String?
+    val responseFormat: String
+    val targetSessionKey: String
+    synchronized(turnStateLock) {
+      turnCounter.incrementAndGet()
+      activeSession?.cancel()
+      activeSession = null
+      activeWatchNodeId = sourceNodeId
+      activeWatchTurnId = turnId
+      isRecording = false
+      activeResponseFormat = chooseResponseFormat(textPayload?.acceptedResponseFormats.orEmpty())
+      activeTargetSessionKey = wearTargetSessionKeyProvider()
+      counterTurnId = turnCounter.get()
+      watchTurnId = activeWatchTurnId
+      targetNodeId = activeWatchNodeId
+      responseFormat = activeResponseFormat
+      targetSessionKey = activeTargetSessionKey ?: wearTargetSessionKeyProvider()
+    }
+    synchronized(audioBufferLock) { audioBuffer.clear() }
+    if (transcript.isEmpty()) {
+      sendError("No speech recognized", turnId)
+      completeActiveTurn(turnId)
+      return
+    }
+    scope.launch {
+      if (!isCurrentTurn(counterTurnId)) return@launch
+      Log.d(TAG, "watch text turn captured chars=${transcript.length}")
+      lateinit var session: WearSttTtsSession
+
+      fun isActiveSession(): Boolean = isCurrentTurn(counterTurnId) && activeSession === session
+      session =
+        createResponseSession(
+          targetSessionKey = targetSessionKey,
+          responseFormat = responseFormat,
+          targetNodeId = targetNodeId,
+          watchTurnId = watchTurnId,
+          counterTurnId = counterTurnId,
+          isActiveSession = ::isActiveSession,
+        )
+      val shouldStart =
+        synchronized(turnStateLock) {
+          val current = isCurrentTurn(counterTurnId)
+          if (current) activeSession = session
+          current
+        }
+      if (!shouldStart) {
+        session.cancel()
+        return@launch
+      }
+      session.startTranscript(transcript)
+    }
   }
 
   fun receiveAudioChunk(
@@ -124,13 +205,16 @@ class WearAudioRelay(
     sourceNodeId: String? = null,
     turnId: String? = null,
   ) {
-    if (!isRecording) {
+    val shouldStartRecording = synchronized(turnStateLock) { !isRecording }
+    if (shouldStartRecording) {
       Log.d(TAG, "starting watch turn from first audio chunk")
       startRecording(sourceNodeId, turnId)
     }
-    if (!isActiveWatchNode(sourceNodeId) || !isActiveWatchTurn(turnId)) {
-      Log.w(TAG, "ignoring audio chunk from non-active watch node")
-      return
+    synchronized(turnStateLock) {
+      if (!isActiveWatchNode(sourceNodeId) || !isActiveWatchTurn(turnId)) {
+        Log.w(TAG, "ignoring audio chunk from non-active watch node")
+        return
+      }
     }
     var shouldStopRecording = false
     synchronized(audioBufferLock) {
@@ -138,7 +222,7 @@ class WearAudioRelay(
         Log.w(TAG, "Audio buffer full - stopping recording")
         shouldStopRecording = true
       } else {
-        audioBuffer.add(chunk.copyOf())
+        audioBuffer.add(chunk)
       }
     }
     if (shouldStopRecording) stopRecording(turnId = activeWatchTurnId)
@@ -148,82 +232,116 @@ class WearAudioRelay(
     sourceNodeId: String? = null,
     turnId: String? = null,
   ) {
-    if (!isRecording) return
-    if (!isActiveWatchNode(sourceNodeId) || !isActiveWatchTurn(turnId)) {
-      Log.w(TAG, "ignoring stop from non-active watch node")
-      return
-    }
-    isRecording = false
-    val counterTurnId = turnCounter.get()
-    val watchTurnId = activeWatchTurnId
-
-    val capturedFrames =
-      synchronized(audioBufferLock) {
-        if (audioBuffer.isEmpty()) {
-          if (isCurrentTurn(counterTurnId)) {
-            sendError("No audio recorded", watchTurnId)
-          }
-          if (activeWatchTurnId == watchTurnId) {
-            activeWatchTurnId = null
-          }
-          activeTargetSessionKey = null
-          return
-        }
-        audioBuffer.toList()
+    val counterTurnId: Long
+    val watchTurnId: String?
+    val targetNodeId: String?
+    val responseFormat: String
+    val targetSessionKey: String
+    val capturedFrames: List<ByteArray>?
+    synchronized(turnStateLock) {
+      if (!isRecording) return
+      if (!isActiveWatchNode(sourceNodeId) || !isActiveWatchTurn(turnId)) {
+        Log.w(TAG, "ignoring stop from non-active watch node")
+        return
       }
-    val targetNodeId = activeWatchNodeId
-    val responseFormat = activeResponseFormat
-    val targetSessionKey = activeTargetSessionKey ?: wearTargetSessionKeyProvider()
+      isRecording = false
+      counterTurnId = turnCounter.get()
+      watchTurnId = activeWatchTurnId
+      targetNodeId = activeWatchNodeId
+      responseFormat = activeResponseFormat
+      targetSessionKey = activeTargetSessionKey ?: wearTargetSessionKeyProvider()
+      capturedFrames =
+        synchronized(audioBufferLock) {
+          if (audioBuffer.isEmpty()) {
+            if (isCurrentTurn(counterTurnId)) {
+              sendError("No audio recorded", watchTurnId)
+            }
+            activeWatchTurnId = null
+            activeTargetSessionKey = null
+            null
+          } else {
+            audioBuffer.toList()
+          }
+        }
+    }
+    if (capturedFrames == null) return
     scope.launch {
       if (!isCurrentTurn(counterTurnId)) return@launch
       Log.d(TAG, "watch turn captured ${capturedFrames.size} audio frames (${summarizePcm16Audio(capturedFrames)})")
-      Log.d(TAG, "watch turn using transcription, chat, autoTTS reuse, and talk.speak fallback")
+      Log.d(TAG, "watch turn using transcription, chat, and talk.speak")
 
       lateinit var session: WearSttTtsSession
 
       fun isActiveSession(): Boolean = isCurrentTurn(counterTurnId) && activeSession === session
       session =
-        WearSttTtsSession(
-          scope = scope,
-          session = gatewaySession,
-          sessionKey = targetSessionKey,
+        createResponseSession(
+          targetSessionKey = targetSessionKey,
           responseFormat = responseFormat,
-          onAudioResponse = { audioResponse ->
-            if (isActiveSession()) {
-              sendAudioResponse(audioResponse, watchTurnId, counterTurnId)
-            }
-          },
-          onStatus = { status ->
-            if (isActiveSession()) {
-              sendStatus(status)
-            }
-          },
-          onError = { error ->
-            if (isActiveSession()) {
-              sendError(error)
-            }
-          },
-          onComplete = { completedSession ->
-            if (activeSession === completedSession) {
-              activeSession = null
-              if (activeWatchNodeId == targetNodeId) {
-                activeWatchNodeId = null
-              }
-              if (activeWatchTurnId == watchTurnId) {
-                activeWatchTurnId = null
-              }
-              activeTargetSessionKey = null
-            }
-          },
+          targetNodeId = targetNodeId,
+          watchTurnId = watchTurnId,
+          counterTurnId = counterTurnId,
+          isActiveSession = ::isActiveSession,
         )
-      if (!isCurrentTurn(counterTurnId)) {
+      val shouldStart =
+        synchronized(turnStateLock) {
+          val current = isCurrentTurn(counterTurnId)
+          if (current) activeSession = session
+          current
+        }
+      if (!shouldStart) {
         session.cancel()
         return@launch
       }
-      activeSession = session
       session.start(capturedFrames)
     }
   }
+
+  private fun createResponseSession(
+    targetSessionKey: String,
+    responseFormat: String,
+    targetNodeId: String?,
+    watchTurnId: String?,
+    counterTurnId: Long,
+    isActiveSession: () -> Boolean,
+  ): WearSttTtsSession =
+    WearSttTtsSession(
+      scope = scope,
+      gateway = gateway,
+      sessionKey = targetSessionKey,
+      responseFormat = responseFormat,
+      onAudioResponse = { audioResponse ->
+        val active = synchronized(turnStateLock) { isActiveSession() }
+        if (active) {
+          sendAudioResponse(audioResponse, watchTurnId, counterTurnId)
+        }
+      },
+      onStatus = { status ->
+        val (active, currentTurnId) = synchronized(turnStateLock) { isActiveSession() to activeWatchTurnId }
+        if (active) {
+          sendStatus(status, currentTurnId)
+        }
+      },
+      onError = { error ->
+        val (active, currentTurnId) = synchronized(turnStateLock) { isActiveSession() to activeWatchTurnId }
+        if (active) {
+          sendError(error, currentTurnId)
+        }
+      },
+      onComplete = { completedSession ->
+        synchronized(turnStateLock) {
+          if (activeSession === completedSession) {
+            activeSession = null
+            if (activeWatchNodeId == targetNodeId) {
+              activeWatchNodeId = null
+            }
+            if (activeWatchTurnId == watchTurnId) {
+              activeWatchTurnId = null
+            }
+            activeTargetSessionKey = null
+          }
+        }
+      },
+    )
 
   fun cancel() {
     cancel(sourceNodeId = null, turnId = null)
@@ -233,18 +351,20 @@ class WearAudioRelay(
     sourceNodeId: String?,
     turnId: String?,
   ) {
-    if (!isActiveWatchNode(sourceNodeId) || !isActiveWatchTurn(turnId)) {
-      Log.w(TAG, "ignoring cancel from non-active watch node")
-      return
+    synchronized(turnStateLock) {
+      if (!isActiveWatchNode(sourceNodeId) || !isActiveWatchTurn(turnId)) {
+        Log.w(TAG, "ignoring cancel from non-active watch node")
+        return
+      }
+      turnCounter.incrementAndGet()
+      isRecording = false
+      activeSession?.cancel()
+      activeSession = null
+      activeWatchNodeId = null
+      activeWatchTurnId = null
+      activeTargetSessionKey = null
     }
-    turnCounter.incrementAndGet()
-    isRecording = false
     synchronized(audioBufferLock) { audioBuffer.clear() }
-    activeSession?.cancel()
-    activeSession = null
-    activeWatchNodeId = null
-    activeWatchTurnId = null
-    activeTargetSessionKey = null
   }
 
   fun handleGatewayEvent(
@@ -256,17 +376,19 @@ class WearAudioRelay(
 
   fun disconnect() {
     cancel()
-    messageClient.removeListener(watchMessageListener)
+    transport.removeListener(watchMessageListener)
     scope.cancel()
   }
 
   private fun isCurrentTurn(turnId: Long): Boolean = turnCounter.get() == turnId
 
   private fun completeActiveTurn(turnId: String?) {
-    if (turnId != null && activeWatchTurnId != turnId) return
-    activeSession = null
-    activeWatchNodeId = null
-    activeWatchTurnId = null
+    synchronized(turnStateLock) {
+      if (turnId != null && activeWatchTurnId != turnId) return
+      activeSession = null
+      activeWatchNodeId = null
+      activeWatchTurnId = null
+    }
   }
 
   private fun isActiveWatchNode(sourceNodeId: String?): Boolean {
@@ -280,7 +402,7 @@ class WearAudioRelay(
   }
 
   private fun parseWatchMessagePath(path: String): WatchMessagePath? {
-    for (basePath in listOf(PATH_START, PATH_END, PATH_CANCEL, PATH_AUDIO_CHUNK)) {
+    for (basePath in WATCH_MESSAGE_PATHS) {
       if (path == basePath) return WatchMessagePath(basePath, null)
       val prefix = "$basePath/"
       if (path.startsWith(prefix)) {
@@ -290,16 +412,25 @@ class WearAudioRelay(
     return null
   }
 
-  private fun parseStartPayload(data: ByteArray): StartPayload? {
+  private fun parseWearRelayStartPayload(data: ByteArray): WearRelayStartPayload? {
     if (data.isEmpty()) return null
-    return runCatching { json.decodeFromString<StartPayload>(data.decodeToString()) }.getOrNull()
+    return runCatching { json.decodeFromString<WearRelayStartPayload>(data.decodeToString()) }.getOrNull()
   }
 
-  private fun chooseResponseFormat(startPayload: StartPayload?): String =
-    if (startPayload?.acceptedResponseFormats?.contains(WearSttTtsSession.RESPONSE_FORMAT_OGG_OPUS) == true) {
-      WearSttTtsSession.RESPONSE_FORMAT_OGG_OPUS
+  private fun parseWearRelayTextPayload(data: ByteArray): WearRelayTextPayload? {
+    if (data.isEmpty()) return null
+    return runCatching { json.decodeFromString<WearRelayTextPayload>(data.decodeToString()) }.getOrNull()
+  }
+
+  private fun chooseResponseFormat(startPayload: WearRelayStartPayload?): String = chooseResponseFormat(startPayload?.acceptedResponseFormats.orEmpty())
+
+  private fun chooseResponseFormat(acceptedResponseFormats: List<String>): String =
+    if (acceptedResponseFormats.contains(WearRelayProtocol.RESPONSE_FORMAT_MP3)) {
+      WearRelayProtocol.RESPONSE_FORMAT_MP3
+    } else if (acceptedResponseFormats.contains(WearRelayProtocol.RESPONSE_FORMAT_OGG_OPUS)) {
+      WearRelayProtocol.RESPONSE_FORMAT_OGG_OPUS
     } else {
-      WearSttTtsSession.RESPONSE_FORMAT_PCM_24K
+      WearRelayProtocol.RESPONSE_FORMAT_PCM_24K
     }
 
   private fun summarizePcm16Audio(frames: List<ByteArray>): String {
@@ -324,16 +455,16 @@ class WearAudioRelay(
     message: String,
     turnId: String? = activeWatchTurnId,
   ) {
-    val payload = json.encodeToString(StatusPayload(state = "processing", message = message, turnId = turnId))
-    sendMessage(PATH_STATUS, payload.toByteArray())
+    val payload = json.encodeToString(WearRelayStatusPayload(state = "processing", message = message, turnId = turnId))
+    sendMessage(WearRelayProtocol.PATH_STATUS, payload.toByteArray())
   }
 
   private fun sendError(
     message: String,
     turnId: String? = activeWatchTurnId,
   ) {
-    val payload = json.encodeToString(ErrorPayload(message = message, turnId = turnId))
-    sendMessage(PATH_ERROR, payload.toByteArray())
+    val payload = json.encodeToString(WearRelayErrorPayload(message = message, turnId = turnId))
+    sendMessage(WearRelayProtocol.PATH_ERROR, payload.toByteArray())
   }
 
   private fun sendAudioResponse(
@@ -344,43 +475,32 @@ class WearAudioRelay(
     val audioBytes = audioResponse.audioBytes
     val format = audioResponse.format
     // Audio might be large; if it exceeds message size limit, chunk it.
-    // MessageClient has a ~100 KB limit, and per-path message ordering is not
-    // guaranteed across separate sends, so serialize chunks, done, and status
-    // in a single coroutine.
-    val maxChunkSize = MAX_MESSAGE_BYTES
-    if (format == WearSttTtsSession.RESPONSE_FORMAT_PCM_24K && audioBytes.size <= maxChunkSize) {
-      val targetNodeId = activeWatchNodeId
+    // MessageClient has a ~100 KB limit. Chunks are indexed and reassembled by
+    // the watch, so sequential indexed sends are sufficient.
+    val maxChunkSize = WearRelayProtocol.MAX_MESSAGE_BYTES
+    val targetNodeId = synchronized(turnStateLock) { activeWatchNodeId }
+    if (audioBytes.size <= maxChunkSize) {
       scope.launch {
         try {
-          sendMessageSuspending(turnPath(PATH_AUDIO_RESPONSE, turnId), audioBytes, targetNodeId)
-          sendMessageSuspending(PATH_STATUS, json.encodeToString(StatusPayload(state = "processing", message = "Response received", turnId = turnId)).toByteArray(), targetNodeId)
+          val startedAtMs = SystemClock.elapsedRealtime()
+          sendMessageSuspending(audioResponsePath(turnId, format), audioBytes, targetNodeId)
+          sendMessageSuspending(WearRelayProtocol.PATH_STATUS, json.encodeToString(WearRelayStatusPayload(state = "processing", message = "Response received", turnId = turnId)).toByteArray(), targetNodeId)
+          Log.d(TAG, "audio response send done turn=$turnId format=$format bytes=${audioBytes.size} elapsedMs=${SystemClock.elapsedRealtime() - startedAtMs}")
         } catch (err: Throwable) {
           Log.w(TAG, "sendAudioResponse failed: ${err.message}")
         }
       }
       return
     }
-    if (format == WearSttTtsSession.RESPONSE_FORMAT_OGG_OPUS && audioBytes.size <= maxChunkSize) {
-      val targetNodeId = activeWatchNodeId
-      scope.launch {
-        try {
-          sendMessageSuspending("${turnPath(PATH_AUDIO_RESPONSE, turnId)}/format/$format", audioBytes, targetNodeId)
-          sendMessageSuspending(PATH_STATUS, json.encodeToString(StatusPayload(state = "processing", message = "Response received", turnId = turnId)).toByteArray(), targetNodeId)
-        } catch (err: Throwable) {
-          Log.w(TAG, "sendAudioResponse failed: ${err.message}")
-        }
-      }
-      return
-    }
-    val targetNodeId = activeWatchNodeId
     scope.launch {
       try {
+        val startedAtMs = SystemClock.elapsedRealtime()
         if (!isCurrentTurn(counterTurnId)) return@launch
         val targetNodes =
           if (targetNodeId != null) {
             listOf(targetNodeId)
           } else {
-            nodeClient.connectedNodes.await().map { it.id }
+            transport.connectedNodeIds()
           }
         if (targetNodes.isEmpty()) {
           // No connected nodes means the watch is no longer reachable. There is
@@ -391,31 +511,41 @@ class WearAudioRelay(
           // orphaned: once activeSession is nulled, the session's own
           // onComplete callback can no longer match and will skip its cleanup.
           Log.w(TAG, "chunked audio response: no connected nodes; abandoning turn=$turnId")
-          activeSession?.cancel()
+          synchronized(turnStateLock) { activeSession?.cancel() }
           completeActiveTurn(turnId)
           return@launch
         }
         var offset = 0
         var chunkIndex = 0
+        val responseBasePath = turnPath(WearRelayProtocol.PATH_AUDIO_RESPONSE, turnId)
+        Log.d(
+          TAG,
+          "audio response chunked send start turn=$turnId format=$format bytes=${audioBytes.size} maxChunkBytes=$maxChunkSize",
+        )
         while (offset < audioBytes.size) {
           if (!isCurrentTurn(counterTurnId)) return@launch
           val end = minOf(offset + maxChunkSize, audioBytes.size)
           val chunk = audioBytes.copyOfRange(offset, end)
-          sendToNodeIds(targetNodes, "${turnPath(PATH_AUDIO_RESPONSE, turnId)}/$chunkIndex", chunk)
+          sendToNodeIds(targetNodes, "$responseBasePath/$chunkIndex", chunk)
           offset = end
           chunkIndex++
         }
+        if (!isCurrentTurn(counterTurnId)) return@launch
         sendToNodeIds(
           targetNodes,
-          "${turnPath(PATH_AUDIO_RESPONSE, turnId)}/done",
-          json.encodeToString(AudioDonePayload(chunkCount = chunkIndex, turnId = turnId, format = format)).toByteArray(),
+          "${turnPath(WearRelayProtocol.PATH_AUDIO_RESPONSE, turnId)}/done",
+          json.encodeToString(WearRelayAudioDonePayload(chunkCount = chunkIndex, turnId = turnId, format = format)).toByteArray(),
         )
         sendToNodeIds(
           targetNodes,
-          PATH_STATUS,
+          WearRelayProtocol.PATH_STATUS,
           json
-            .encodeToString(StatusPayload(state = "processing", message = "Response received", turnId = turnId))
+            .encodeToString(WearRelayStatusPayload(state = "processing", message = "Response received", turnId = turnId))
             .toByteArray(),
+        )
+        Log.d(
+          TAG,
+          "audio response chunked send done turn=$turnId format=$format bytes=${audioBytes.size} chunks=$chunkIndex elapsedMs=${SystemClock.elapsedRealtime() - startedAtMs}",
         )
       } catch (err: Throwable) {
         Log.w(TAG, "chunked audio response failed: ${err.message}")
@@ -442,20 +572,9 @@ class WearAudioRelay(
     targetNodeId: String? = activeWatchNodeId,
   ) {
     if (targetNodeId != null) {
-      sendToNode(targetNodeId, path, data)
+      transport.sendToNode(targetNodeId, path, data)
     } else {
-      val nodes = nodeClient.connectedNodes.await()
-      sendToNodes(nodes, path, data)
-    }
-  }
-
-  private suspend fun sendToNodes(
-    nodes: List<Node>,
-    path: String,
-    data: ByteArray,
-  ) {
-    for (node in nodes) {
-      sendToNode(node.id, path, data)
+      sendToNodeIds(transport.connectedNodeIds(), path, data)
     }
   }
 
@@ -465,51 +584,80 @@ class WearAudioRelay(
     data: ByteArray,
   ) {
     for (nodeId in nodeIds) {
-      sendToNode(nodeId, path, data)
+      transport.sendToNode(nodeId, path, data)
     }
   }
-
-  private suspend fun sendToNode(
-    nodeId: String,
-    path: String,
-    data: ByteArray,
-  ) {
-    messageClient.sendMessage(nodeId, path, data).await()
-  }
-
-  @Serializable
-  private data class StartPayload(
-    val responseStreaming: Boolean = false,
-    val acceptedResponseFormats: List<String> = emptyList(),
-  )
-
-  @Serializable
-  private data class StatusPayload(
-    val state: String,
-    val message: String,
-    val turnId: String? = null,
-  )
-
-  @Serializable
-  private data class ErrorPayload(
-    val message: String,
-    val turnId: String? = null,
-  )
-
-  @Serializable
-  private data class AudioDonePayload(
-    val chunkCount: Int,
-    val turnId: String? = null,
-    val format: String = WearSttTtsSession.RESPONSE_FORMAT_PCM_24K,
-  )
 
   private data class WatchMessagePath(
     val path: String,
     val turnId: String?,
   )
 
+  private fun audioResponsePath(
+    turnId: String?,
+    format: String,
+  ): String {
+    val base = turnPath(WearRelayProtocol.PATH_AUDIO_RESPONSE, turnId)
+    return if (format == WearRelayProtocol.RESPONSE_FORMAT_PCM_24K) base else "$base/format/$format"
+  }
+
   private fun turnPath(
     basePath: String,
     turnId: String?,
   ): String = turnId?.let { "$basePath/$it" } ?: basePath
+}
+
+internal fun interface WearRelayMessageListener {
+  fun onMessage(
+    path: String,
+    data: ByteArray,
+    sourceNodeId: String?,
+  )
+}
+
+internal interface WearRelayTransport {
+  fun addListener(listener: WearRelayMessageListener)
+
+  fun removeListener(listener: WearRelayMessageListener)
+
+  suspend fun connectedNodeIds(): List<String>
+
+  suspend fun sendToNode(
+    nodeId: String,
+    path: String,
+    data: ByteArray,
+  )
+}
+
+private class GoogleWearRelayTransport(
+  context: Context,
+) : WearRelayTransport {
+  private val messageClient: MessageClient = Wearable.getMessageClient(context)
+  private val nodeClient = Wearable.getNodeClient(context)
+  private var messageListener: MessageClient.OnMessageReceivedListener? = null
+
+  override fun addListener(listener: WearRelayMessageListener) {
+    val newListener =
+      MessageClient.OnMessageReceivedListener { event ->
+        listener.onMessage(event.path, event.data, event.sourceNodeId)
+      }
+    messageListener = newListener
+    messageClient.addListener(newListener)
+  }
+
+  override fun removeListener(listener: WearRelayMessageListener) {
+    val currentListener = messageListener ?: return
+    messageListener = null
+    messageClient.removeListener(currentListener)
+  }
+
+  override suspend fun connectedNodeIds(): List<String> = nodeClient.connectedNodes.await().map { it.id }
+
+  override suspend fun sendToNode(
+    nodeId: String,
+    path: String,
+    data: ByteArray,
+  ) {
+    messageClient.sendMessage(nodeId, path, data).await()
+  }
 }

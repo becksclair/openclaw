@@ -1,6 +1,6 @@
 package ai.openclaw.audio
 
-import java.io.ByteArrayOutputStream
+import kotlin.math.round
 
 object PcmAudio {
   private const val BYTES_PER_SAMPLE = 2
@@ -21,6 +21,23 @@ object PcmAudio {
     bytes[offset + 1] = ((sample shr 8) and 0xff).toByte()
   }
 
+  fun applyPcm16VolumeGain(
+    pcm: ByteArray,
+    gain: Double,
+  ): ByteArray {
+    if (gain == 1.0 || pcm.isEmpty()) return pcm
+    val boosted = pcm.copyOf()
+    val sampleBytes = boosted.size - (boosted.size % BYTES_PER_SAMPLE)
+    for (offset in 0 until sampleBytes step BYTES_PER_SAMPLE) {
+      val scaled =
+        round(readPcm16Sample(boosted, offset) * gain)
+          .toInt()
+          .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+      writePcm16Sample(boosted, offset, scaled)
+    }
+    return boosted
+  }
+
   fun resamplePcm16ToMono(
     pcm: ByteArray,
     sampleRateHz: Int,
@@ -34,6 +51,25 @@ object PcmAudio {
     if (channels == 1 && sampleRateHz == targetSampleRateHz) return pcm.copyOf(evenSize)
     val inputFrames = evenSize / (BYTES_PER_SAMPLE * channels)
     if (inputFrames <= 0) return ByteArray(0)
+    val outputFrames = ((inputFrames.toLong() * targetSampleRateHz) / sampleRateHz).toInt().coerceAtLeast(1)
+    val out = ByteArray(outputFrames * BYTES_PER_SAMPLE)
+    if (channels == 1) {
+      // Mono input: resample directly without allocating an intermediate IntArray.
+      for (frame in 0 until outputFrames) {
+        val sourcePosition = frame.toDouble() * sampleRateHz.toDouble() / targetSampleRateHz.toDouble()
+        val left = sourcePosition.toInt().coerceIn(0, inputFrames - 1)
+        val right = (left + 1).coerceAtMost(inputFrames - 1)
+        val fraction = sourcePosition - left
+        val leftSample = readPcm16Sample(pcm, left * BYTES_PER_SAMPLE).toDouble()
+        val rightSample = readPcm16Sample(pcm, right * BYTES_PER_SAMPLE).toDouble()
+        val sample =
+          (leftSample + ((rightSample - leftSample) * fraction))
+            .toInt()
+            .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+        writePcm16Sample(out, frame * BYTES_PER_SAMPLE, sample)
+      }
+      return out
+    }
     val mono = IntArray(inputFrames)
     for (frame in 0 until inputFrames) {
       var total = 0
@@ -42,8 +78,6 @@ object PcmAudio {
       }
       mono[frame] = total / channels
     }
-    val outputFrames = ((inputFrames.toLong() * targetSampleRateHz) / sampleRateHz).toInt().coerceAtLeast(1)
-    val out = ByteArray(outputFrames * BYTES_PER_SAMPLE)
     for (frame in 0 until outputFrames) {
       val sourcePosition = frame.toDouble() * sampleRateHz.toDouble() / targetSampleRateHz.toDouble()
       val left = sourcePosition.toInt().coerceIn(0, inputFrames - 1)
@@ -66,28 +100,30 @@ object PcmAudio {
     if (inputSampleRateHz <= 0 || targetSampleRateHz <= 0) {
       throw IllegalStateException("Invalid PCM sample rate")
     }
-    val pcm = ByteArrayOutputStream()
-    for (frame in frames) {
-      if (frame.isNotEmpty()) pcm.write(frame)
-    }
-    val input = pcm.toByteArray()
-    val inputSamples = input.size / BYTES_PER_SAMPLE
     val sampleRatio = (inputSampleRateHz / targetSampleRateHz).coerceAtLeast(1)
-    val output = ByteArrayOutputStream(inputSamples / sampleRatio + 1)
-    var sampleIndex = 0
-    while (sampleIndex < inputSamples) {
-      var total = 0
-      var count = 0
-      while (count < sampleRatio && sampleIndex < inputSamples) {
-        total += readPcm16Sample(input, sampleIndex * BYTES_PER_SAMPLE)
+    val inputSamples = frames.sumOf { it.size / BYTES_PER_SAMPLE }
+    val outputSamples = (inputSamples + sampleRatio - 1) / sampleRatio
+    val output = ByteArray(outputSamples)
+    var count = 0
+    var total = 0
+    var outputIndex = 0
+    for (frame in frames) {
+      var offset = 0
+      while (offset + 1 < frame.size) {
+        total += readPcm16Sample(frame, offset)
         count++
-        sampleIndex++
-      }
-      if (count > 0) {
-        output.write(linear16ToPcmu(total / count).toInt())
+        offset += BYTES_PER_SAMPLE
+        if (count == sampleRatio) {
+          output[outputIndex++] = linear16ToPcmu(total / count)
+          count = 0
+          total = 0
+        }
       }
     }
-    return output.toByteArray()
+    if (count > 0) {
+      output[outputIndex++] = linear16ToPcmu(total / count)
+    }
+    return if (outputIndex == output.size) output else output.copyOf(outputIndex)
   }
 
   fun extractPcm16MonoWav(
