@@ -304,6 +304,7 @@ To use Google as the default TTS provider:
         google: {
           model: "gemini-3.1-flash-tts-preview",
           speakerVoice: "Kore",
+          volumeGain: 2,
           audioProfile: "Speak professionally with a calm tone.",
         },
       },

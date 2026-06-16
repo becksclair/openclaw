@@ -853,7 +853,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="apiKey" type="string">Falls back to `GEMINI_API_KEY` / `GOOGLE_API_KEY`. If omitted, TTS can reuse `models.providers.google.apiKey` before env fallback.</ParamField>
     <ParamField path="model" type="string">Gemini TTS model. Default `gemini-3.1-flash-tts-preview`.</ParamField>
     <ParamField path="speakerVoice" type="string">Gemini prebuilt voice name. Default `Kore`. Legacy aliases: `voiceName`, `voice`.</ParamField>
-    <ParamField path="volumeGain" type="number">Local PCM gain applied after Gemini synthesis. Default `1.2`.</ParamField>
+    <ParamField path="volumeGain" type="number">Local PCM gain applied after Gemini synthesis. Default `1.2`. The same field is accepted under `talk.providers.google` for Talk playback.</ParamField>
     <ParamField path="audioProfile" type="string">Natural-language style prompt prepended before spoken text.</ParamField>
     <ParamField path="speakerName" type="string">Optional speaker label prepended before spoken text when your prompt uses a named speaker.</ParamField>
     <ParamField path="promptTemplate" type='"audio-profile-v1"'>Set to `audio-profile-v1` to wrap active persona prompt fields in a deterministic Gemini TTS prompt structure.</ParamField>
