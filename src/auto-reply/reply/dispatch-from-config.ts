@@ -120,6 +120,7 @@ import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
+  isReplyPayloadTtsSupplement,
   markReplyPayloadAsTtsSupplement,
   type ReplyPayload,
 } from "../reply-payload.js";
@@ -2502,7 +2503,9 @@ export async function dispatchReplyFromConfig(
         finalReplyDeliveryStarted = true;
       }
       const ttsPayload =
-        payload.isReasoning === true || payload.isCommentary === true
+        payload.isReasoning === true ||
+        payload.isCommentary === true ||
+        (sourceReplyTranscriptMirror && isReplyPayloadTtsSupplement(payload))
           ? payload
           : await maybeApplyTtsToReplyPayload({
               payload,

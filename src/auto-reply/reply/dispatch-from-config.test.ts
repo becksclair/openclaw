@@ -10464,6 +10464,69 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
   });
 
+  it("does not re-synthesize or redeliver internal source replies that already carry TTS media", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const sourceReply = setReplyPayloadMetadata(
+      {
+        text: "message tool reply",
+        mediaUrl: "/tmp/openclaw/source-reply.opus",
+        mediaUrls: ["/tmp/openclaw/source-reply.opus"],
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+        spokenText: "message tool reply",
+        ttsSupplement: {
+          spokenText: "message tool reply",
+          visibleTextAlreadyDelivered: true,
+        },
+      },
+      {
+        deliverDespiteSourceReplySuppression: true,
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:main",
+          agentId: "main",
+          text: "message tool reply",
+          mediaUrls: ["/tmp/openclaw/source-reply.opus"],
+          idempotencyKey: "run-existing-tts:internal-source-reply:0",
+        },
+      },
+    );
+    const duplicateFinal = { text: "message tool reply" } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async () => [sourceReply, duplicateFinal] satisfies ReplyPayload[]);
+    ttsMocks.maybeApplyTtsToPayload.mockClear();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "webchat", Surface: "webchat", SessionKey: "agent:main" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    const queuedPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0];
+    expect(queuedPayload).toMatchObject({
+      text: "message tool reply",
+      mediaUrl: "/tmp/openclaw/source-reply.opus",
+      mediaUrls: ["/tmp/openclaw/source-reply.opus"],
+      ttsSupplement: {
+        spokenText: "message tool reply",
+        visibleTextAlreadyDelivered: true,
+      },
+    });
+  });
+
   it("does not deliver marked runtime failure notices when sendPolicy denies delivery", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
