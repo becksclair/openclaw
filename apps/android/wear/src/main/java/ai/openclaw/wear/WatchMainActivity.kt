@@ -30,6 +30,8 @@ class WatchMainActivity : ComponentActivity() {
     private const val DEBUG_TURN_TAG = "OpenClawWearDebugTurn"
     private const val EXTRA_DEBUG_PROMPT_PCM_PATH = "openclaw.debugPromptPcmPath"
     private const val EXTRA_DEBUG_PROMPT_PCM_URL = "openclaw.debugPromptPcmUrl"
+    private const val EXTRA_DEBUG_ENDPOINT_PROMPT_PCM_PATH = "openclaw.debugEndpointPromptPcmPath"
+    private const val EXTRA_DEBUG_ENDPOINT_PROMPT_PCM_URL = "openclaw.debugEndpointPromptPcmUrl"
     private const val EXTRA_DEBUG_PLAYBACK_PCM_PATH = "openclaw.debugPlaybackPcmPath"
     private const val EXTRA_DEBUG_PLAYBACK_PCM_URL = "openclaw.debugPlaybackPcmUrl"
     private const val EXTRA_DEBUG_PLAYBACK_OPUS_PATH = "openclaw.debugPlaybackOpusPath"
@@ -91,11 +93,24 @@ class WatchMainActivity : ComponentActivity() {
     if (!Log.isLoggable(DEBUG_TURN_TAG, Log.VERBOSE)) return
     val promptPath = intent?.getStringExtra(EXTRA_DEBUG_PROMPT_PCM_PATH)?.takeIf { it.isNotBlank() }
     val promptUrl = intent?.getStringExtra(EXTRA_DEBUG_PROMPT_PCM_URL)?.takeIf { it.isNotBlank() }
+    val endpointPromptPath = intent?.getStringExtra(EXTRA_DEBUG_ENDPOINT_PROMPT_PCM_PATH)?.takeIf { it.isNotBlank() }
+    val endpointPromptUrl = intent?.getStringExtra(EXTRA_DEBUG_ENDPOINT_PROMPT_PCM_URL)?.takeIf { it.isNotBlank() }
     val playbackPath = intent?.getStringExtra(EXTRA_DEBUG_PLAYBACK_PCM_PATH)?.takeIf { it.isNotBlank() }
     val playbackUrl = intent?.getStringExtra(EXTRA_DEBUG_PLAYBACK_PCM_URL)?.takeIf { it.isNotBlank() }
     val opusPlaybackPath = intent?.getStringExtra(EXTRA_DEBUG_PLAYBACK_OPUS_PATH)?.takeIf { it.isNotBlank() }
     val opusPlaybackUrl = intent?.getStringExtra(EXTRA_DEBUG_PLAYBACK_OPUS_URL)?.takeIf { it.isNotBlank() }
-    if (promptPath == null && promptUrl == null && playbackPath == null && playbackUrl == null && opusPlaybackPath == null && opusPlaybackUrl == null) return
+    if (
+      promptPath == null &&
+      promptUrl == null &&
+      endpointPromptPath == null &&
+      endpointPromptUrl == null &&
+      playbackPath == null &&
+      playbackUrl == null &&
+      opusPlaybackPath == null &&
+      opusPlaybackUrl == null
+    ) {
+      return
+    }
     lifecycleScope.launch {
       val audioBytes =
         withContext(Dispatchers.IO) {
@@ -105,6 +120,8 @@ class WatchMainActivity : ComponentActivity() {
               opusPlaybackPath != null -> File(opusPlaybackPath).readBytes()
               playbackUrl != null -> readDebugHttpUrl(playbackUrl)
               playbackPath != null -> File(playbackPath).readBytes()
+              endpointPromptUrl != null -> readDebugHttpUrl(endpointPromptUrl)
+              endpointPromptPath != null -> File(endpointPromptPath).readBytes()
               promptUrl != null -> readDebugHttpUrl(promptUrl)
               promptPath != null -> File(promptPath).readBytes()
               else -> byteArrayOf()
@@ -112,10 +129,13 @@ class WatchMainActivity : ComponentActivity() {
           }.onFailure { Log.w(DEBUG_TURN_TAG, "debug prompt read failed: ${it.message}") }
             .getOrDefault(byteArrayOf())
         }
+      Log.d(DEBUG_TURN_TAG, "debug prompt read bytes=${audioBytes.size} endpoint=${endpointPromptPath != null || endpointPromptUrl != null}")
       if (opusPlaybackPath != null || opusPlaybackUrl != null) {
         viewModel.runDebugCompressedPlayback(audioBytes, ".opus", intent.getStringExtra(EXTRA_DEBUG_RUN_ID))
       } else if (playbackPath != null || playbackUrl != null) {
         viewModel.runDebugPcmPlayback(audioBytes, intent.getStringExtra(EXTRA_DEBUG_RUN_ID))
+      } else if (endpointPromptPath != null || endpointPromptUrl != null) {
+        viewModel.runDebugEndpointPcmTurn(audioBytes)
       } else {
         viewModel.runDebugPcmTurn(audioBytes)
       }

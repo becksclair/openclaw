@@ -10,7 +10,7 @@ internal class StreamingAudioResponseReceiver(
   private val scope: CoroutineScope,
   private val activeTurnId: () -> String?,
   private val completeActiveTurn: (String?) -> Unit,
-  private val emitStreamEvent: (PhoneRelayClient.AudioStreamEvent) -> Unit,
+  private val emitStreamEvent: (PhoneRelayAudioStreamEvent) -> Unit,
   private val emitError: suspend (String) -> Unit,
 ) {
   companion object {
@@ -26,7 +26,7 @@ internal class StreamingAudioResponseReceiver(
         if (turnId == null) {
           Log.w(TAG, "dropping stream chunk without an active turn")
         } else {
-          emitStreamEvent(PhoneRelayClient.AudioStreamEvent.Chunk(turnId = turnId, audioBytes = chunk))
+          emitStreamEvent(PhoneRelayAudioStreamEvent.Chunk(turnId = turnId, audioBytes = chunk))
         }
       },
       onComplete = { chunkCount ->
@@ -36,7 +36,7 @@ internal class StreamingAudioResponseReceiver(
         } else {
           completeActiveTurn(turnId)
           cancelCompletionTimeout()
-          emitStreamEvent(PhoneRelayClient.AudioStreamEvent.Done(turnId = turnId, chunkCount = chunkCount))
+          emitStreamEvent(PhoneRelayAudioStreamEvent.Done(turnId = turnId, chunkCount = chunkCount))
         }
       },
       onIncomplete = ::failIncompleteStream,

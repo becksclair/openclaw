@@ -40,8 +40,8 @@ android {
     applicationId = "ai.openclaw.app"
     minSdk = 30
     targetSdk = 36
-    versionCode = 2026050600
-    versionName = "2026.5.6"
+    versionCode = 2026060501
+    versionName = "2026.6.5"
   }
 
   buildTypes {
@@ -103,6 +103,7 @@ ktlint {
 
 dependencies {
   implementation(project(":audio"))
+  implementation(project(":common"))
 
   val composeBom = platform(libs.androidx.compose.bom)
   implementation(composeBom)
@@ -122,4 +123,6 @@ dependencies {
 
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
+  testImplementation(libs.robolectric)
+  testImplementation(libs.androidx.test.ext.junit)
 }

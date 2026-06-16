@@ -638,5 +638,4 @@ class SecurePrefs(
     }
     return normalized
   }
-
 }
