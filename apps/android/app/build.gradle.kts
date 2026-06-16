@@ -192,6 +192,7 @@ ktlint {
 
 dependencies {
   implementation(project(":audio"))
+  implementation(project(":common"))
 
   val composeBom = platform(libs.androidx.compose.bom)
   implementation(composeBom)
