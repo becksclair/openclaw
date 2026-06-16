@@ -118,6 +118,7 @@ import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
+  isReplyPayloadTtsSupplement,
   markReplyPayloadAsTtsSupplement,
   type ReplyPayload,
 } from "../reply-payload.js";
@@ -2352,16 +2353,19 @@ export async function dispatchReplyFromConfig(
         markInboundDedupeReplayUnsafe();
         finalReplyDeliveryStarted = true;
       }
-      const ttsPayload = await maybeApplyTtsToReplyPayload({
-        payload,
-        cfg,
-        channel: deliveryChannel,
-        kind: "final",
-        inboundAudio,
-        ttsAuto: sessionTtsAuto,
-        agentId: sessionAgentId,
-        accountId: replyRoute.accountId,
-      });
+      const ttsPayload =
+        sourceReplyTranscriptMirror && isReplyPayloadTtsSupplement(payload)
+          ? payload
+          : await maybeApplyTtsToReplyPayload({
+              payload,
+              cfg,
+              channel: deliveryChannel,
+              kind: "final",
+              inboundAudio,
+              ttsAuto: sessionTtsAuto,
+              agentId: sessionAgentId,
+              accountId: replyRoute.accountId,
+            });
       throwIfFinalDeliveryAborted();
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
       throwIfFinalDeliveryAborted();

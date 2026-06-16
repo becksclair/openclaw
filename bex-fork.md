@@ -21,7 +21,7 @@ Replay classification:
 | Gateway runtime metadata hotpath          | Partial-overlap carry | Critical   | Target has substantial plugin metadata work, but replay still carries current-snapshot reuse for registry/manifest hot paths, lifecycle-cleared package-state probes, provider auth alias cache fixes, and runtime config invalidation details.                                                                                                         |
 | ACP backend alias routing                 | Runtime carry         | High       | Target resolves selected ACP agents but still does not pass the selected config agent's `runtime.acp.backend` into ACP session creation.                                                                                                                                                                                                                |
 | ACP backend-managed runtime options       | Runtime carry         | High       | Target runtime capabilities expose config option keys, but not backend-managed keys. Replay keeps `managedRuntimeOptionKeys` so backend-owned controls are not redundantly written by core.                                                                                                                                                             |
-| Native Codex message-tool TTS delivery    | Partial-overlap carry | High       | Target has adjacent media delivery support, but not generated TTS local-media trust or lightweight bundled channel TTS capability artifacts for transcode-aware voice-note delivery.                                                                                                                                                                    |
+| Native Codex message-tool TTS delivery    | Partial-overlap carry | High       | Target has adjacent media delivery support, but not generated TTS local-media trust, duplicate-safe internal-ui source-reply TTS projection, or lightweight bundled channel TTS capability artifacts for transcode-aware voice-note delivery.                                                                                                           |
 | Gateway message-tool history projection   | Runtime carry         | High       | Target still drops current-session `message` tool sends from client-visible history unless a silent completion or delivery mirror later flushes them. Replay carries successful-send mirroring at next user turn, normal assistant reply, and history tail while preserving raw `toolResult` rows for debug/projection callers.                         |
 | Gateway main session display title        | Runtime carry         | Medium     | Target lets direct-channel `origin.label` become the primary `displayName` for canonical main sessions, so Telegram-routed main rows can appear as `telegram:<id>` in Android and other session lists instead of staying visibly main. Replay keeps origin metadata searchable but not the main row title.                                              |
 | Control UI read aloud through Talk        | Partial-overlap carry | Medium     | Target has Gateway Talk/TTS, but not the browser read-aloud control path, Markdown stripping, or `talk.speak` client integration.                                                                                                                                                                                                                       |
@@ -82,7 +82,7 @@ Replay classification:
 - `realtime-android-discord-audio` - absorbed upstream: v2026.5.22 already has Android Gateway relay Talk and Discord realtime voice by default; do not replay wholesale unless focused proof finds a regression.
 - `wear-os-talk-relay` - active seam: keep the Wear OS push-to-talk companion app and phone-side Wearable Data Layer relay on the durable STT -> `chat.send` -> final TTS audio path, including the configured Wear target session, `deliver: true` chat routing, trusted final-audio reuse, turn ids, phone-node pinning, chunked audio response assembly, app bundle packaging, and narrow review-work proof gates.
 - `02915314ae` - absorbed upstream: v2026.5.22 already preserves TTS intent for transcribed inbound audio through the shared dispatch path; no source carry unless proof fails.
-- `native-codex-message-tool-tts` - partial-overlap carry: keep native Codex `message_tool_only` visible replies TTS-capable, preserve trusted local voice tool media through source-reply suppression, and keep Telegram/Discord voice-note delivery on the proper transcode-aware path instead of leaking raw WAV attachments.
+- `native-codex-message-tool-tts` - partial-overlap carry: keep native Codex `message_tool_only` visible replies TTS-capable, preserve trusted local voice tool media through source-reply suppression, avoid re-synthesizing already-spoken internal-ui source-reply mirrors, suppress duplicate normal final text, and keep Telegram/Discord voice-note delivery on the proper transcode-aware path instead of leaking raw WAV attachments.
 - `6c4503c385` - pending/drop candidate: agent-scoped TTS conversion config was not visibly missing on v2026.5.22; keep pending for live triage instead of replaying without a failing proof.
 - `google-tts-volume-gain` - active seam: keep Google Gemini TTS applying provider-local PCM `volumeGain` before WAV wrapping, voice-note Opus transcode, and telephony PCM delivery.
 - `da4c5c7c34` - partial-overlap carry: keep exec safe-bin realpath trust for approved safe binaries reached through symlinks or wrapper paths.
@@ -528,18 +528,22 @@ Rebase notes:
 
 ### Native Codex message-tool TTS delivery
 
-Carry behavior: native Codex sessions that expose visible replies through `sourceVisibleReplies: "message_tool"` / `message_tool_only` must still deliver TTS correctly. Visible `message(action=send)` sends must apply final-reply TTS before gateway/plugin dispatch, trusted local voice tool media must survive source-reply suppression without leaking private final text, and synthetic auto-TTS final/audio-only replies must preserve the local-media trust signal when block streaming consumes the visible final text. Telegram/Discord voice-note delivery must stay transcode-aware so provider WAV output becomes native voice delivery instead of a plain file attachment. Channel TTS voice capabilities must be available through lightweight bundled public artifacts so the hot speech path does not materialize full channel plugins while selecting synthesis target, pre-transcode behavior, or `audioAsVoice`.
+Carry behavior: native Codex sessions that expose visible replies through `sourceVisibleReplies: "message_tool"` / `message_tool_only` must still deliver TTS correctly. Visible `message(action=send)` sends must apply final-reply TTS before gateway/plugin dispatch, trusted local voice tool media must survive source-reply suppression without leaking private final text, and synthetic auto-TTS final/audio-only replies must preserve the local-media trust signal when block streaming consumes the visible final text. Internal-ui source-reply mirrors that already carry TTS media must be projected once without re-running final TTS; duplicate normal final text returned by the model remains suppressed by `message_tool_only`. Telegram/Discord voice-note delivery must stay transcode-aware so provider WAV output becomes native voice delivery instead of a plain file attachment. Channel TTS voice capabilities must be available through lightweight bundled public artifacts so the hot speech path does not materialize full channel plugins while selecting synthesis target, pre-transcode behavior, or `audioAsVoice`.
 
 Primary seam files:
 
 - `src/infra/outbound/message-action-runner.ts`
+- `src/infra/outbound/message-action-tts.ts`
 - `src/infra/outbound/message-action-runner.plugin-dispatch.test.ts`
 - `extensions/codex/src/app-server/dynamic-tools.ts`
 - `extensions/codex/src/app-server/event-projector.ts`
-- `src/agents/pi-embedded-runner/run.ts`
-- `src/agents/pi-embedded-runner/run/attempt.ts`
-- `src/agents/pi-embedded-runner/run/tool-media-payloads.ts`
-- `src/agents/pi-embedded-subscribe.ts`
+- `src/agents/embedded-agent-runner/run.ts`
+- `src/agents/embedded-agent-runner/run/attempt.ts`
+- `src/agents/embedded-agent-runner/run/message-tool-terminal.ts`
+- `src/agents/embedded-agent-runner/run/payloads.ts`
+- `src/agents/embedded-agent-runner/run/tool-media-payloads.ts`
+- `src/agents/embedded-agent-subscribe.ts`
+- `src/agents/embedded-agent-subscribe.handlers.tools.ts`
 - `src/auto-reply/reply/dispatch-acp.ts`
 - `src/auto-reply/reply/dispatch-acp-delivery.ts`
 - `src/auto-reply/reply/dispatch-from-config.ts`
@@ -562,8 +566,8 @@ Primary seam files:
 - `extensions/matrix/tts-capabilities-api.ts`
 - `extensions/whatsapp/src/tts-capabilities.ts`
 - `extensions/whatsapp/tts-capabilities-api.ts`
-- `extensions/speech-core/src/tts.ts`
-- `extensions/speech-core/src/tts.test.ts`
+- `packages/speech-core/src/tts.ts`
+- `packages/speech-core/src/tts.test.ts`
 - `src/channels/plugins/tts-capabilities.ts`
 - `src/channels/plugins/tts-capabilities.test.ts`
 - `src/plugins/bundled-plugin-metadata.test.ts`
@@ -574,7 +578,10 @@ Primary seam tests:
 - `src/infra/outbound/message-action-runner.plugin-dispatch.test.ts`
 - `extensions/codex/src/app-server/dynamic-tools.test.ts`
 - `extensions/codex/src/app-server/event-projector.test.ts`
-- `src/agents/pi-embedded-runner/run/tool-media-payloads.test.ts`
+- `src/agents/embedded-agent-runner/run/message-tool-terminal.test.ts`
+- `src/agents/embedded-agent-runner/run/payloads.test.ts`
+- `src/agents/embedded-agent-runner/run/tool-media-payloads.test.ts`
+- `src/agents/embedded-agent-subscribe.handlers.tools.test.ts`
 - `src/auto-reply/reply/dispatch-acp.test.ts`
 - `src/auto-reply/reply/dispatch-acp-delivery.test.ts`
 - `src/auto-reply/reply/dispatch-from-config.test.ts`
@@ -582,7 +589,7 @@ Primary seam tests:
 - `extensions/telegram/src/action-runtime.test.ts`
 - `extensions/telegram/src/send.test.ts`
 - `extensions/telegram/src/bot/delivery.test.ts`
-- `extensions/speech-core/src/tts.test.ts`
+- `packages/speech-core/src/tts.test.ts`
 - `src/channels/plugins/tts-capabilities.test.ts`
 - `src/plugins/bundled-plugin-metadata.test.ts`
 - `src/cli/program/message/helpers.test.ts`
@@ -594,6 +601,7 @@ Rebase notes:
 - Do not replay the stale upstream message-tool TTS patches blindly. Rebuild the seam against the current outbound runner, current Codex app-server telemetry shape, and current channel voice capabilities.
 - The invariant is earlier than `executeSendAction`: gateway-owned/plugin-routed `send` actions must apply TTS before the gateway branch returns, not only on the core send path.
 - In `message_tool_only`, keep the private final assistant text suppressed. Only trusted local voice media may bypass source-reply suppression, and only as a media-only payload.
+- Internal-ui source-reply mirrors are the live Gateway/TUI projection vehicle, but a mirror that already carries `ttsSupplement.spokenText` plus media is already the TTS result. Dispatch must not call final TTS again for that mirror; it should still normalize media, run final hooks, mirror transcript metadata, and queue/broadcast the single final payload. Text-only mirrors still take the normal one-pass final TTS path.
 - Preserve the trusted-media signal end to end through Codex tool telemetry, embedded attempt results, and final payload merging. Losing `trustedLocalMedia` is a functional regression, not a harmless metadata drop.
 - Synthetic auto-TTS generated after block streaming is part of the same seam. When `messages.tts.mode = "final"` and block/ACP streaming leaves no normal final payload, the rebuilt media-only final reply must mark generated local/file TTS media as `trustedLocalMedia` before Telegram/Discord delivery. Do not mark remote or mixed local/remote media as trusted.
 - Keep voice-note channel capabilities honest. Telegram and Discord both need transcode-aware TTS handling; if the channel can make provider output voice-compatible, advertise `transcodesAudio: true` so speech-core does not fall back to plain audio-file semantics.
@@ -601,6 +609,14 @@ Rebase notes:
 - Keep Telegram voice sends able to repair non-voice-compatible audio locally before `sendVoice`, and re-prove both the direct send path and the bot reply-delivery path.
 - Keep CLI `message send` preloading the scoped channel plugin for gateway-owned sends when plugin routing needs it, but do not depend on that preload for speech-core TTS capability truth. Missing lightweight artifacts can make speech-core miss channel TTS capabilities and synthesize WAV `audio-file` output that never reaches the voice/transcode branch.
 - Re-prove the seam after replay with both focused tests and a live Telegram smoke after build/restart. The important failure signature is a delivered `voice-*.wav` attachment instead of a native voice message.
+
+Closeout proof from the 2026-06-16 duplicate-source-reply pass:
+
+- Focused regression: `node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-from-config.test.ts -t "does not re-synthesize or redeliver internal source replies" --no-watch`.
+- Dispatch surface: `node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-from-config.test.ts --no-watch`.
+- Adjacent source-reply surfaces: `node scripts/run-vitest.mjs src/gateway/server-methods/chat.directive-tags.test.ts --no-watch`, `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/message-tool-terminal.test.ts --no-watch`, and `node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/payloads.test.ts --no-watch`.
+- Review: focused `@reviewer` pass found no actionable findings; residual risk is limited to future producer paths that attach TTS media without `ttsSupplement.spokenText`.
+- Build/deploy: `git diff --check`, `pnpm build`, and explicit `pnpm ui:build` passed; `openclaw gateway restart && openclaw gateway status --deep` restarted `openclaw-gateway.service` and reported `Connectivity probe: ok` on PID `2827297`. Existing config warning: disabled bundled WhatsApp plugin has config present.
 
 ### Agent-scoped TTS conversion config
 
