@@ -4,10 +4,11 @@ import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.chatSendAckHistorySinceSeconds
 import ai.openclaw.app.gateway.parseChatSendAck
+import ai.openclaw.common.speech.SpeechRecognizerHelper
+import ai.openclaw.common.speech.bestRecognitionText
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -160,6 +161,7 @@ class TalkModeManager internal constructor(
   private var mainSessionKey: String = "main"
 
   @Volatile private var pendingRunId: String? = null
+
   // PTT completion uses the send-time session; visible chat can switch while the
   // run is in flight.
   @Volatile private var pendingRunSessionKey: String? = null
@@ -171,6 +173,7 @@ class TalkModeManager internal constructor(
   private val startGeneration = AtomicLong(0L)
 
   @Volatile private var realtimeSessionId: String? = null
+
   @Volatile private var realtimeSessionKey: String? = null
   private var realtimeCaptureJob: Job? = null
   private var realtimeAppendJob: Job? = null
@@ -1508,11 +1511,7 @@ class TalkModeManager internal constructor(
   private fun startListeningInternal(markListening: Boolean) {
     val r = recognizer ?: return
     val intent =
-      Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-        putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
+      SpeechRecognizerHelper.createRecognizerIntent(context.packageName).apply {
         // Use cloud recognition — it handles natural speech and pauses better
         // than on-device which cuts off aggressively after short silences.
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500)
@@ -2407,35 +2406,19 @@ class TalkModeManager internal constructor(
       override fun onError(error: Int) {
         if (stopRequested) return
         _isListening.value = false
-        if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-          _statusText.value = "Microphone permission required"
-          return
-        }
-
-        _statusText.value =
-          when (error) {
-            SpeechRecognizer.ERROR_AUDIO -> "Audio error"
-            SpeechRecognizer.ERROR_CLIENT -> "Client error"
-            SpeechRecognizer.ERROR_NETWORK -> "Network error"
-            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
-            SpeechRecognizer.ERROR_NO_MATCH -> "Listening"
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy"
-            SpeechRecognizer.ERROR_SERVER -> "Server error"
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Listening"
-            else -> "Speech error ($error)"
-          }
+        _statusText.value = SpeechRecognizerHelper.errorMessage(error)
+        // Permission errors are not transient; retrying would loop forever.
+        if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) return
         scheduleRestart(delayMs = 600)
       }
 
       override fun onResults(results: Bundle?) {
-        val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-        list.firstOrNull()?.let { handleTranscript(it, isFinal = true) }
+        results.bestRecognitionText().takeIf { it.isNotEmpty() }?.let { handleTranscript(it, isFinal = true) }
         scheduleRestart()
       }
 
       override fun onPartialResults(partialResults: Bundle?) {
-        val list = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-        list.firstOrNull()?.let { handleTranscript(it, isFinal = false) }
+        partialResults.bestRecognitionText().takeIf { it.isNotEmpty() }?.let { handleTranscript(it, isFinal = false) }
       }
 
       override fun onEvent(
