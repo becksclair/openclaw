@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   createPrefixedOutputWriter,
+  hasStaleOutput,
   isArtifactSetFresh,
   parseMode,
   resolveBoundaryEntryShimRequiredOutputs,
@@ -550,6 +551,28 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(resolveBoundaryEntryShimRequiredOutputs({})).toContain(
       "packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts",
     );
+  it("detects stale package DTS shims that point at missing root declarations", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-stale-dts-"));
+    tempRoots.add(rootDir);
+    const stalePath = path.join(rootDir, "packages/plugin-sdk/dist/src/plugin-sdk/demo.d.ts");
+    fs.mkdirSync(path.dirname(stalePath), { recursive: true });
+    fs.writeFileSync(
+      stalePath,
+      'export * from "../../../../../dist/plugin-sdk/demo.js";\n',
+      "utf8",
+    );
+
+    expect(
+      hasStaleOutput(
+        [
+          {
+            path: "packages/plugin-sdk/dist/src/plugin-sdk/demo.d.ts",
+            staleText: 'export * from "../../../../../dist/plugin-sdk/demo.js";',
+          },
+        ],
+        rootDir,
+      ),
+    ).toBe(true);
   });
 
   it("parses prep mode and rejects unknown values", () => {

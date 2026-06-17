@@ -71,6 +71,12 @@ const PLUGIN_SDK_TYPE_INPUTS = [
   "src/video-generation/types.ts",
   "src/types",
 ];
+const CHANNEL_CONTRACT_TESTING_DTS_INPUTS = [
+  "src/channels/plugins/contracts/inbound-testkit.ts",
+  "src/channels/plugins/contracts/outbound-payload-testkit.ts",
+  "src/channels/plugins/contracts/test-helpers.ts",
+  "src/channels/turn/dispatch-result.ts",
+];
 const ROOT_DTS_INPUTS = ["tsconfig.plugin-sdk.dts.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const ROOT_DTS_STAMP = "dist/plugin-sdk/.boundary-dts.stamp";
 const ACP_CORE_REQUIRED_DTS_OUTPUTS = listPackageDtsOutputsFromExports({
@@ -141,7 +147,11 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/provider-auth.d.ts",
   "dist/plugin-sdk/video-generation.d.ts",
 ];
-const PACKAGE_DTS_INPUTS = ["packages/plugin-sdk/tsconfig.json", ...PLUGIN_SDK_TYPE_INPUTS];
+const PACKAGE_DTS_INPUTS = [
+  "packages/plugin-sdk/tsconfig.json",
+  ...PLUGIN_SDK_TYPE_INPUTS,
+  ...CHANNEL_CONTRACT_TESTING_DTS_INPUTS,
+];
 const PACKAGE_DTS_STAMP = "packages/plugin-sdk/dist/.boundary-dts.stamp";
 const ACP_CORE_REQUIRED_PACKAGE_DTS_OUTPUTS = listPackageDtsOutputsFromExports({
   packageDir: "acp-core",
@@ -203,6 +213,11 @@ const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/packages/terminal-core/src/table.d.ts",
   "packages/plugin-sdk/dist/packages/terminal-core/src/terminal-link.d.ts",
   "packages/plugin-sdk/dist/packages/terminal-core/src/theme.d.ts",
+  "packages/plugin-sdk/dist/src/channels/plugins/contracts/inbound-testkit.d.ts",
+  "packages/plugin-sdk/dist/src/channels/plugins/contracts/outbound-payload-testkit.d.ts",
+  "packages/plugin-sdk/dist/src/channels/plugins/contracts/test-helpers.d.ts",
+  "packages/plugin-sdk/dist/src/channels/turn/dispatch-result.d.ts",
+  "packages/plugin-sdk/dist/src/plugin-sdk/channel-contract-testing.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/error-runtime.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/plugin-entry.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/provider-auth.d.ts",
@@ -260,6 +275,12 @@ export function resolveBoundaryEntryShimRequiredOutputs(env = process.env) {
     ...ENTRY_SHIM_RUNTIME_OUTPUTS,
   ].toSorted((a, b) => a.localeCompare(b));
 }
+const STALE_PACKAGE_DTS_OUTPUTS = [
+  {
+    path: "packages/plugin-sdk/dist/src/plugin-sdk/channel-contract-testing.d.ts",
+    staleText: 'export * from "../../../../../dist/plugin-sdk/channel-contract-testing.js";',
+  },
+];
 
 function isRelevantTypeInput(filePath) {
   const basename = path.basename(filePath);
@@ -352,8 +373,18 @@ function hasMissingOutput(paths) {
   return paths.some((relativePath) => !fs.existsSync(resolve(repoRoot, relativePath)));
 }
 
-function removeIncrementalStateForMissingOutput(params) {
-  if (!hasMissingOutput(params.outputPaths)) {
+export function hasStaleOutput(entries, rootDir = repoRoot) {
+  return entries.some((entry) => {
+    const absolutePath = resolve(rootDir, entry.path);
+    return (
+      fs.existsSync(absolutePath) &&
+      fs.readFileSync(absolutePath, "utf8").trim() === entry.staleText
+    );
+  });
+}
+
+function removeIncrementalStateForMissingOrStaleOutput(params) {
+  if (!hasMissingOutput(params.outputPaths) && !hasStaleOutput(params.staleOutputs ?? [])) {
     return;
   }
   fs.rmSync(resolve(repoRoot, params.tsBuildInfoPath), { force: true });
@@ -668,7 +699,9 @@ async function main(argv = process.argv.slice(2)) {
         inputPaths: PACKAGE_DTS_INPUTS,
         outputPaths: [PACKAGE_DTS_STAMP, ...PACKAGE_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
-      }) && !hasMissingOutput(PACKAGE_DTS_REQUIRED_OUTPUTS);
+      }) &&
+      !hasMissingOutput(PACKAGE_DTS_REQUIRED_OUTPUTS) &&
+      !hasStaleOutput(STALE_PACKAGE_DTS_OUTPUTS);
     const entryShimsFresh = isArtifactSetFresh({
       inputPaths: [
         ...ENTRY_SHIMS_INPUTS,
@@ -709,7 +742,7 @@ async function main(argv = process.argv.slice(2)) {
     const dependentSteps = [];
     if (mode === "all") {
       if (!rootDtsFresh) {
-        removeIncrementalStateForMissingOutput({
+        removeIncrementalStateForMissingOrStaleOutput({
           outputPaths: ROOT_DTS_REQUIRED_OUTPUTS,
           tsBuildInfoPath: "dist/plugin-sdk/.tsbuildinfo",
         });
@@ -725,8 +758,9 @@ async function main(argv = process.argv.slice(2)) {
       }
     }
     if (!packageDtsFresh) {
-      removeIncrementalStateForMissingOutput({
+      removeIncrementalStateForMissingOrStaleOutput({
         outputPaths: PACKAGE_DTS_REQUIRED_OUTPUTS,
+        staleOutputs: STALE_PACKAGE_DTS_OUTPUTS,
         tsBuildInfoPath: "packages/plugin-sdk/dist/.tsbuildinfo",
       });
       prerequisiteSteps.push({
@@ -741,7 +775,7 @@ async function main(argv = process.argv.slice(2)) {
     }
     if (mode === "all") {
       if (!qaChannelDtsFresh) {
-        removeIncrementalStateForMissingOutput({
+        removeIncrementalStateForMissingOrStaleOutput({
           outputPaths: QA_CHANNEL_DTS_REQUIRED_OUTPUTS,
           tsBuildInfoPath: "dist/plugin-sdk/extensions/qa-channel/.tsbuildinfo",
         });
@@ -772,7 +806,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[qa-channel boundary dts] fresh; skipping\n");
       }
       if (!discordDtsFresh) {
-        removeIncrementalStateForMissingOutput({
+        removeIncrementalStateForMissingOrStaleOutput({
           outputPaths: DISCORD_DTS_REQUIRED_OUTPUTS,
           tsBuildInfoPath: "dist/plugin-sdk/extensions/discord/.tsbuildinfo",
         });
@@ -803,7 +837,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[discord boundary dts] fresh; skipping\n");
       }
       if (!slackDtsFresh) {
-        removeIncrementalStateForMissingOutput({
+        removeIncrementalStateForMissingOrStaleOutput({
           outputPaths: SLACK_DTS_REQUIRED_OUTPUTS,
           tsBuildInfoPath: "dist/plugin-sdk/extensions/slack/.tsbuildinfo",
         });
@@ -834,7 +868,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write("[slack boundary dts] fresh; skipping\n");
       }
       if (!whatsappDtsFresh) {
-        removeIncrementalStateForMissingOutput({
+        removeIncrementalStateForMissingOrStaleOutput({
           outputPaths: WHATSAPP_DTS_REQUIRED_OUTPUTS,
           tsBuildInfoPath: "dist/plugin-sdk/extensions/whatsapp/.tsbuildinfo",
         });
