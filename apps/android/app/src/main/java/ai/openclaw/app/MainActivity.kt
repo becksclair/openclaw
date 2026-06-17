@@ -231,6 +231,7 @@ class MainActivity : ComponentActivity() {
   }
 
   private fun handleTrustedAssistantStart(readyViewModel: MainViewModel) {
+    if (pendingAssistantStart) return
     if (!assistantRoleStatus(this).held) {
       Log.d(TAG, "trusted assistant start ignored without held role")
       pendingAssistantStart = false

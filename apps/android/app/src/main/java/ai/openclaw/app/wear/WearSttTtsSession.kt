@@ -116,7 +116,7 @@ internal class WearSttTtsSession(
     private const val TRANSCRIPTION_TIMEOUT_MS = 25_000L
     private const val CHAT_TIMEOUT_MS = 120_000L
     private const val CHAT_HISTORY_FALLBACK_TIMEOUT_MS = 25_000L
-    private const val FINAL_AUDIO_TIMEOUT_MS = 20_000L
+    private const val FINAL_AUDIO_TIMEOUT_MS = 30_000L
     private const val SPEAK_TIMEOUT_MS = 120_000L
     private const val WATCH_OUTPUT_SAMPLE_RATE_HZ = 24_000
   }
@@ -164,6 +164,7 @@ internal class WearSttTtsSession(
           var phase = "starting"
           var sttSessionId: String? = null
           var transcriptionClosed = false
+          var successfullyCompleted = false
           try {
             val transcript =
               if (initialTranscript != null) {
@@ -255,6 +256,7 @@ internal class WearSttTtsSession(
             coroutineContext.ensureActive()
             logTurnLatency("audio-ready", turnStartedAtMs, "format=${audioToPlay.format} bytes=${audioToPlay.audioBytes.size}")
             onAudioResponse(audioToPlay)
+            successfullyCompleted = true
           } catch (_: TimeoutCancellationException) {
             Log.w(TAG, "session timed out while $phase")
             onError("Voice failed: timed out while $phase")
@@ -267,7 +269,7 @@ internal class WearSttTtsSession(
             synchronized(startLock) { startJob = null }
             transcriptionSessionId = null
             val remainingRunIds = pendingRunIdKeys.getAndSet(emptySet())
-            if (cancelled.get() && remainingRunIds.isNotEmpty()) {
+            if (!successfullyCompleted && remainingRunIds.isNotEmpty()) {
               withContext(NonCancellable) {
                 for (runId in remainingRunIds) {
                   runCatching { abortChatRun(sessionKey.ifBlank { "main" }, runId) }

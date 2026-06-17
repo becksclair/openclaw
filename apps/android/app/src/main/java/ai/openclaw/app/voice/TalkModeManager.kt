@@ -160,6 +160,8 @@ class TalkModeManager internal constructor(
   private var interruptOnSpeech: Boolean = false
   private var mainSessionKey: String = "main"
 
+  private val pendingRunLock = Any()
+
   @Volatile private var pendingRunId: String? = null
 
   // PTT completion uses the send-time session; visible chat can switch while the
@@ -465,8 +467,7 @@ class TalkModeManager internal constructor(
 
     // Only speak events for the active session — prevents TTS from other
     // sessions/channels leaking into voice mode (privacy + correctness).
-    val pending = pendingRunId
-    val pendingSession = pendingRunSessionKey
+    val (pending, pendingSession) = synchronized(pendingRunLock) { pendingRunId to pendingRunSessionKey }
     val eventSession = obj["sessionKey"]?.asStringOrNull()
     val activeSession =
       if (pending == runId && pendingSession != null) {
@@ -495,7 +496,7 @@ class TalkModeManager internal constructor(
       }
       return
     }
-    Log.d(tag, "chat event arrived runId=$runId state=$state pendingRunId=$pendingRunId")
+    Log.d(tag, "chat event arrived runId=$runId state=$state pendingRunId=$pending")
     val terminal =
       when (state) {
         "final" -> true
@@ -516,11 +517,13 @@ class TalkModeManager internal constructor(
     }
     cacheRunCompletion(runId, terminal)
 
-    if (runId != pendingRunId) return
+    if (!synchronized(pendingRunLock) { pendingRunId == runId }) return
     pendingFinal?.complete(terminal)
     pendingFinal = null
-    pendingRunId = null
-    pendingRunSessionKey = null
+    synchronized(pendingRunLock) {
+      pendingRunId = null
+      pendingRunSessionKey = null
+    }
   }
 
   internal suspend fun runE2eRealtimeTurn(
@@ -604,8 +607,10 @@ class TalkModeManager internal constructor(
     _statusText.value = "Off"
     stopRealtimeRelay()
     stopSpeaking()
-    pendingRunId = null
-    pendingRunSessionKey = null
+    synchronized(pendingRunLock) {
+      pendingRunId = null
+      pendingRunSessionKey = null
+    }
     pendingFinal?.cancel()
     pendingFinal = null
     synchronized(completedRunsLock) {
@@ -1784,8 +1789,10 @@ class TalkModeManager internal constructor(
       val parsed = parseChatSendAck(json, res)
       val actualRunId = parsed.runId ?: runId
       if (actualRunId != runId) {
-        pendingRunId = actualRunId
-        pendingRunSessionKey = targetSessionKey
+        synchronized(pendingRunLock) {
+          pendingRunId = actualRunId
+          pendingRunSessionKey = targetSessionKey
+        }
       }
       if (parsed.isTerminal) {
         clearPendingRun(actualRunId)
@@ -1800,7 +1807,7 @@ class TalkModeManager internal constructor(
   internal suspend fun waitForChatFinal(runId: String): Boolean {
     consumeRunCompletion(runId)?.let { return it }
     val deferred =
-      if (pendingRunId == runId) {
+      if (synchronized(pendingRunLock) { pendingRunId == runId }) {
         pendingFinal ?: armPendingRun(runId)
       } else {
         armPendingRun(runId)
@@ -1815,7 +1822,7 @@ class TalkModeManager internal constructor(
         false
       }
 
-    if (!result && pendingRunId == runId) {
+    if (!result && synchronized(pendingRunLock) { pendingRunId == runId }) {
       clearPendingRun(runId)
     }
     return result
@@ -1827,17 +1834,21 @@ class TalkModeManager internal constructor(
   ): CompletableDeferred<Boolean> {
     pendingFinal?.cancel()
     val deferred = CompletableDeferred<Boolean>()
-    pendingRunId = runId
-    pendingRunSessionKey = sessionKey
+    synchronized(pendingRunLock) {
+      pendingRunId = runId
+      pendingRunSessionKey = sessionKey
+    }
     pendingFinal = deferred
     return deferred
   }
 
   private fun clearPendingRun(runId: String) {
-    if (pendingRunId == runId) {
+    if (synchronized(pendingRunLock) { pendingRunId == runId }) {
       pendingFinal = null
-      pendingRunId = null
-      pendingRunSessionKey = null
+      synchronized(pendingRunLock) {
+        pendingRunId = null
+        pendingRunSessionKey = null
+      }
     }
   }
 

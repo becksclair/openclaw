@@ -30,16 +30,19 @@ class WearAudioRelay internal constructor(
   private val gateway: WearGateway,
   private val wearTargetSessionKeyProvider: () -> String,
   private val transport: WearRelayTransport,
+  private val canHandleMessages: () -> Boolean = { true },
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) {
   constructor(
     context: Context,
     gatewaySession: GatewaySession,
     wearTargetSessionKeyProvider: () -> String,
+    canHandleMessages: () -> Boolean = { true },
   ) : this(
     gateway = GatewaySessionWearGateway(gatewaySession),
     wearTargetSessionKeyProvider = wearTargetSessionKeyProvider,
     transport = GoogleWearRelayTransport(context),
+    canHandleMessages = canHandleMessages,
     scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
   )
 
@@ -101,6 +104,10 @@ class WearAudioRelay internal constructor(
     sourceNodeId: String? = null,
   ) {
     val watchMessage = parseWatchMessagePath(path) ?: return
+    if (!canHandleMessages()) {
+      Log.d(TAG, "watch message ignored until gateway is connected")
+      return
+    }
     Log.d(TAG, "watch message received: path=$path bytes=${data.size} sourceNodeId=$sourceNodeId")
     when (watchMessage.path) {
       WearRelayProtocol.PATH_START -> startRecording(sourceNodeId, watchMessage.turnId, parseWearRelayStartPayload(data))
@@ -122,6 +129,10 @@ class WearAudioRelay internal constructor(
         return
       }
       if (activeWatchTurnId != null && !isActiveWatchTurn(turnId)) {
+        return
+      }
+      if (activeWatchTurnId != null && !isActiveWatchNode(sourceNodeId)) {
+        Log.w(TAG, "ignoring start from non-active watch node")
         return
       }
       if (activeWatchTurnId != null && isActiveWatchNode(sourceNodeId) && isActiveWatchTurn(turnId)) {
