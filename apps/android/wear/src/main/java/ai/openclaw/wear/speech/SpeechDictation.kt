@@ -2,13 +2,19 @@ package ai.openclaw.wear.speech
 
 import ai.openclaw.common.speech.SpeechRecognizerHelper
 import ai.openclaw.common.speech.bestRecognitionText
+import ai.openclaw.wear.assistant.resolveRecognitionServiceComponent
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+
+private const val WEAR_COMPLETE_SILENCE_LENGTH_MS = 3_200
+private const val WEAR_POSSIBLY_COMPLETE_SILENCE_LENGTH_MS = 2_400
 
 internal sealed interface SpeechDictationEvent {
   data object Listening : SpeechDictationEvent
@@ -48,25 +54,28 @@ internal class AndroidSpeechDictation(
   private val mainHandler = Handler(Looper.getMainLooper())
   private var recognizer: SpeechRecognizer? = null
 
-  override fun isAvailable(): Boolean = SpeechRecognizer.isRecognitionAvailable(context)
+  override fun isAvailable(): Boolean = cachedRecognizerComponent() != null
 
   override fun start(onEvent: (SpeechDictationEvent) -> Unit): Boolean {
-    if (!isAvailable()) return false
+    val component = cachedRecognizerComponent() ?: return false
     if (Looper.myLooper() == Looper.getMainLooper()) {
-      return startOnMain(onEvent)
+      return startOnMain(component, onEvent)
     }
     mainHandler.post {
-      if (!startOnMain(onEvent)) {
+      if (!startOnMain(component, onEvent)) {
         onEvent(SpeechDictationEvent.Error("Speech recognition unavailable"))
       }
     }
     return true
   }
 
-  private fun startOnMain(onEvent: (SpeechDictationEvent) -> Unit): Boolean =
+  private fun startOnMain(
+    component: android.content.ComponentName,
+    onEvent: (SpeechDictationEvent) -> Unit,
+  ): Boolean =
     runCatching {
       recognizer?.destroy()
-      val nextRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
+      val nextRecognizer = SpeechRecognizer.createSpeechRecognizer(context, component)
       nextRecognizer.setRecognitionListener(DictationRecognitionListener(onEvent))
       recognizer = nextRecognizer
       nextRecognizer.startListening(recognizerIntent())
@@ -104,7 +113,9 @@ internal class AndroidSpeechDictation(
     }
   }
 
-  private fun recognizerIntent(): Intent = SpeechRecognizerHelper.createRecognizerIntent(context.packageName)
+  private fun cachedRecognizerComponent(): ComponentName? = resolveRecognitionServiceComponent(context)
+
+  private fun recognizerIntent(): Intent = createWearRecognizerIntent(context.packageName)
 
   private class DictationRecognitionListener(
     private val onEvent: (SpeechDictationEvent) -> Unit,
@@ -146,3 +157,12 @@ internal class AndroidSpeechDictation(
     ) {}
   }
 }
+
+internal fun createWearRecognizerIntent(callingPackage: String): Intent =
+  SpeechRecognizerHelper.createRecognizerIntent(callingPackage).apply {
+    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, WEAR_COMPLETE_SILENCE_LENGTH_MS)
+    putExtra(
+      RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
+      WEAR_POSSIBLY_COMPLETE_SILENCE_LENGTH_MS,
+    )
+  }

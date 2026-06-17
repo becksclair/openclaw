@@ -211,13 +211,22 @@ internal class PhoneRelayClient(
     }
     val turnId = UUID.randomUUID().toString()
     activeTurn.set(ActiveTurn(turnId = turnId, phoneNodeId = phoneNodeId))
-    sendMessage(WearRelayProtocol.turnPath(path, turnId), payload, phoneNodeId)
+    sendMessage(
+      path = WearRelayProtocol.turnPath(path, turnId),
+      data = payload,
+      targetNodeId = phoneNodeId,
+      requiredActiveTurnId = turnId,
+    )
     return turnId
   }
 
   override fun sendEndRecording(turnId: String?) {
     if (turnId == null || activeTurnId != turnId) return
-    sendMessage(WearRelayProtocol.turnPath(WearRelayProtocol.PATH_END, turnId), byteArrayOf())
+    sendMessage(
+      path = WearRelayProtocol.turnPath(WearRelayProtocol.PATH_END, turnId),
+      data = byteArrayOf(),
+      requiredActiveTurnId = turnId,
+    )
   }
 
   override fun sendCancel() {
@@ -243,7 +252,11 @@ internal class PhoneRelayClient(
   ) {
     if (turnId == null || activeTurnId != turnId) return
     if (chunk.size > WearRelayProtocol.MAX_MESSAGE_BYTES) return
-    sendMessage(WearRelayProtocol.turnPath(WearRelayProtocol.PATH_AUDIO_CHUNK, turnId), chunk)
+    sendMessage(
+      path = WearRelayProtocol.turnPath(WearRelayProtocol.PATH_AUDIO_CHUNK, turnId),
+      data = chunk,
+      requiredActiveTurnId = turnId,
+    )
   }
 
   override fun disconnect() {
@@ -467,8 +480,16 @@ internal class PhoneRelayClient(
     path: String,
     data: ByteArray,
     targetNodeId: String? = activeRelayPhoneNodeId,
+    requiredActiveTurnId: String? = null,
   ) {
-    val message = OutboundMessage(path = path, data = data, targetNodeId = targetNodeId)
+    if (isStaleOutboundMessage(requiredActiveTurnId)) return
+    val message =
+      OutboundMessage(
+        path = path,
+        data = data,
+        targetNodeId = targetNodeId,
+        requiredActiveTurnId = requiredActiveTurnId,
+      )
     val result = outboundMessages.trySend(message)
     if (result.isSuccess) return
     if (result.isClosed) {
@@ -481,6 +502,7 @@ internal class PhoneRelayClient(
     }
     scope.launch {
       try {
+        if (isStaleOutboundMessage(message.requiredActiveTurnId)) return@launch
         outboundMessages.send(message)
       } catch (err: kotlinx.coroutines.channels.ClosedSendChannelException) {
         Log.w(TAG, "outbound channel closed while sending $path: ${err.message}")
@@ -497,6 +519,7 @@ internal class PhoneRelayClient(
   private fun processOutboundMessages() {
     scope.launch(Dispatchers.IO) {
       for (message in outboundMessages) {
+        if (isStaleOutboundMessage(message.requiredActiveTurnId)) continue
         try {
           val targetNodeId = message.targetNodeId
           if (targetNodeId != null) {
@@ -521,6 +544,10 @@ internal class PhoneRelayClient(
         }
       }
     }
+  }
+
+  private fun isStaleOutboundMessage(requiredActiveTurnId: String?): Boolean {
+    return requiredActiveTurnId != null && activeTurnId != requiredActiveTurnId
   }
 
   private fun enqueueAudioStreamEvent(event: PhoneRelayAudioStreamEvent) {
@@ -574,6 +601,7 @@ internal class PhoneRelayClient(
     val path: String,
     val data: ByteArray,
     val targetNodeId: String?,
+    val requiredActiveTurnId: String?,
   )
 
   private data class ActiveTurn(

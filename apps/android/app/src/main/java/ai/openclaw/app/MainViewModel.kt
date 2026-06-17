@@ -424,6 +424,11 @@ class MainViewModel(
     _chatDraft.value = request.prompt
   }
 
+  fun onAssistantInvocation() {
+    _requestedHomeDestination.value = HomeDestination.Voice
+    ensureRuntime().setMicEnabled(true)
+  }
+
   fun clearRequestedHomeDestination() {
     _requestedHomeDestination.value = null
   }

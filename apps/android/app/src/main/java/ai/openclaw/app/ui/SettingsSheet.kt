@@ -5,10 +5,11 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
+import ai.openclaw.app.assistant.assistantRoleStatus
+import ai.openclaw.app.assistant.createAssistantRoleRequestIntent
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.normalizeLocalHourMinute
 import android.Manifest
-import android.app.role.RoleManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -156,8 +157,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
         versionName
       }
     }
-  var assistantRoleAvailable by remember(context) { mutableStateOf(isAssistantRoleAvailable(context)) }
-  var assistantRoleHeld by remember(context) { mutableStateOf(isAssistantRoleHeld(context)) }
+  var assistantRoleAvailable by remember(context) { mutableStateOf(assistantRoleStatus(context).available) }
+  var assistantRoleHeld by remember(context) { mutableStateOf(assistantRoleStatus(context).held) }
   val listItemColors =
     ListItemDefaults.colors(
       containerColor = Color.Transparent,
@@ -339,8 +340,9 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
   val assistantRoleLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-      assistantRoleAvailable = isAssistantRoleAvailable(context)
-      assistantRoleHeld = isAssistantRoleHeld(context)
+      val status = assistantRoleStatus(context)
+      assistantRoleAvailable = status.available
+      assistantRoleHeld = status.held
     }
 
   DisposableEffect(lifecycleOwner, context) {
@@ -383,8 +385,9 @@ fun SettingsSheet(viewModel: MainViewModel) {
             PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) ==
             PackageManager.PERMISSION_GRANTED
-          assistantRoleAvailable = isAssistantRoleAvailable(context)
-          assistantRoleHeld = isAssistantRoleHeld(context)
+          val status = assistantRoleStatus(context)
+          assistantRoleAvailable = status.available
+          assistantRoleHeld = status.held
         }
       }
     lifecycleOwner.lifecycle.addObserver(observer)
@@ -509,9 +512,9 @@ fun SettingsSheet(viewModel: MainViewModel) {
               supportingContent = {
                 Text(
                   if (assistantRoleHeld) {
-                    "OpenClaw is registered as the device assistant."
+                    "OpenClaw starts voice dictation from the assistant gesture."
                   } else {
-                    "Let Android launch OpenClaw from the assistant gesture. Google Assistant App Actions still work separately."
+                    "Let Android start OpenClaw voice dictation from the assistant gesture. Google Assistant App Actions still work separately."
                   },
                   style = mobileCallout,
                 )
@@ -519,11 +522,9 @@ fun SettingsSheet(viewModel: MainViewModel) {
               trailingContent = {
                 Button(
                   onClick = {
-                    assistantRoleLauncher.launch(
-                      context
-                        .getSystemService(RoleManager::class.java)
-                        .createRequestRoleIntent(RoleManager.ROLE_ASSISTANT),
-                    )
+                    createAssistantRoleRequestIntent(context)?.let { intent ->
+                      assistantRoleLauncher.launch(intent)
+                    }
                   },
                   colors = settingsPrimaryButtonColors(),
                   shape = RoundedCornerShape(14.dp),
@@ -1289,7 +1290,3 @@ private fun hasMotionCapabilities(context: Context): Boolean {
   return sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null ||
     sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
 }
-
-private fun isAssistantRoleAvailable(context: Context): Boolean = context.getSystemService(RoleManager::class.java).isRoleAvailable(RoleManager.ROLE_ASSISTANT)
-
-private fun isAssistantRoleHeld(context: Context): Boolean = context.getSystemService(RoleManager::class.java).isRoleHeld(RoleManager.ROLE_ASSISTANT)

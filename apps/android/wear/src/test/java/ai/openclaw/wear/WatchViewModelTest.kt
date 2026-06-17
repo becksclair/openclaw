@@ -67,6 +67,7 @@ class WatchViewModelTest {
       viewModel.onPermissionGranted()
       viewModel.onMicButtonDown()
       assertNotNull(capture.endpointingConfig)
+      assertEquals(2_200, capture.endpointingConfig?.endSilenceMs)
 
       capture.endpointCallback?.invoke(endpoint())
       viewModel.onMicButtonUp()
@@ -95,6 +96,68 @@ class WatchViewModelTest {
       assertEquals(listOf("hello sky"), relay.textTurns)
       assertEquals(1, speech.destroyCount)
       assertEquals(WatchViewModel.WatchState.Processing, viewModel.state.value)
+    }
+
+  @Test
+  fun `assistant invocation final transcript sends text turn and transitions to processing`() =
+    runTest(dispatcher) {
+      val capture = FakeAudioCapture()
+      val relay = FakePhoneRelay()
+      val speech = FakeSpeechDictation(available = true)
+      val viewModel = WatchViewModel(Application(), capture, relay, speech)
+
+      viewModel.onPermissionGranted()
+      viewModel.onAssistantInvocation()
+      speech.emit(SpeechDictationEvent.FinalTranscript("assistant launch"))
+      runCurrent()
+
+      assertFalse(capture.started)
+      assertEquals(listOf("assistant launch"), relay.textTurns)
+      assertEquals(WatchViewModel.WatchState.Processing, viewModel.state.value)
+    }
+
+  @Test
+  fun `assistant invocation waits for phone discovery before dictation`() =
+    runTest(dispatcher) {
+      val capture = FakeAudioCapture()
+      val relay = FakePhoneRelay(connected = false)
+      val speech = FakeSpeechDictation(available = true)
+      val viewModel = WatchViewModel(Application(), capture, relay, speech)
+
+      viewModel.onPermissionGranted()
+      viewModel.onAssistantInvocation()
+      runCurrent()
+
+      assertFalse(capture.started)
+      assertEquals(emptyList<String>(), relay.textTurns)
+      assertEquals("Checking phone...", viewModel.statusText.value)
+      assertEquals(WatchViewModel.WatchState.CheckingPhone, viewModel.state.value)
+
+      relay.setConnected(true)
+      advanceTimeBy(500)
+      runCurrent()
+
+      assertFalse(capture.started)
+      assertEquals(WatchViewModel.WatchState.Recording, viewModel.state.value)
+    }
+
+  @Test
+  fun `assistant invocation without phone times out without starting capture`() =
+    runTest(dispatcher) {
+      val capture = FakeAudioCapture()
+      val relay = FakePhoneRelay(connected = false)
+      val speech = FakeSpeechDictation(available = true)
+      val viewModel = WatchViewModel(Application(), capture, relay, speech)
+
+      viewModel.onPermissionGranted()
+      viewModel.onAssistantInvocation()
+      advanceTimeBy(10_001)
+      runCurrent()
+
+      assertFalse(capture.started)
+      assertEquals(emptyList<String>(), relay.textTurns)
+      assertEquals("Phone not connected", viewModel.statusText.value)
+      assertEquals(WatchViewModel.WatchState.Idle, viewModel.state.value)
     }
 
   @Test
@@ -129,6 +192,25 @@ class WatchViewModelTest {
     }
 
   @Test
+  fun `cancel aborts active dictation without sending text`() =
+    runTest(dispatcher) {
+      val relay = FakePhoneRelay()
+      val speech = FakeSpeechDictation(available = true)
+      val viewModel = WatchViewModel(Application(), FakeAudioCapture(), relay, speech)
+
+      viewModel.onPermissionGranted()
+      viewModel.onMicButtonDown()
+      speech.emit(SpeechDictationEvent.PartialTranscript("hello"))
+      runCurrent()
+      viewModel.onCancelTurn()
+
+      assertEquals(emptyList<String>(), relay.textTurns)
+      assertEquals(1, speech.cancelCount)
+      assertEquals(1, relay.cancelCount)
+      assertEquals(WatchViewModel.WatchState.Idle, viewModel.state.value)
+    }
+
+  @Test
   fun `unavailable dictation falls back to raw pcm capture`() =
     runTest(dispatcher) {
       val capture = FakeAudioCapture()
@@ -142,6 +224,24 @@ class WatchViewModelTest {
       assertTrue(capture.started)
       assertEquals("turn-1", capture.turnId)
       assertEquals(emptyList<String>(), relay.textTurns)
+    }
+
+  @Test
+  fun `cancel aborts raw pcm capture without sending end`() =
+    runTest(dispatcher) {
+      val capture = FakeAudioCapture()
+      val relay = FakePhoneRelay()
+      val speech = FakeSpeechDictation(available = false)
+      val viewModel = WatchViewModel(Application(), capture, relay, speech)
+
+      viewModel.onPermissionGranted()
+      viewModel.onMicButtonDown()
+      viewModel.onCancelTurn()
+
+      assertEquals(emptyList<String?>(), relay.endTurnIds)
+      assertEquals(1, relay.cancelCount)
+      assertEquals(true, capture.discardedOnStop)
+      assertEquals(WatchViewModel.WatchState.Idle, viewModel.state.value)
     }
 
   @Test
@@ -165,7 +265,7 @@ class WatchViewModelTest {
     }
 
   @Test
-  fun `retry cancels dictation and active phone turn`() =
+  fun `cancel aborts submitted phone turn`() =
     runTest(dispatcher) {
       val relay = FakePhoneRelay()
       val speech = FakeSpeechDictation(available = true)
@@ -175,11 +275,32 @@ class WatchViewModelTest {
       viewModel.onMicButtonDown()
       speech.emit(SpeechDictationEvent.FinalTranscript("hello sky"))
       runCurrent()
-      viewModel.onRetry()
+      viewModel.onCancelTurn()
 
       assertEquals(1, speech.cancelCount)
       assertEquals(1, relay.cancelCount)
       assertEquals(WatchViewModel.WatchState.Idle, viewModel.state.value)
+    }
+
+  @Test
+  fun `cancel ignores stale relay status and error events`() =
+    runTest(dispatcher) {
+      val relay = FakePhoneRelay()
+      val speech = FakeSpeechDictation(available = true)
+      val viewModel = WatchViewModel(Application(), FakeAudioCapture(), relay, speech)
+
+      viewModel.onPermissionGranted()
+      viewModel.onMicButtonDown()
+      speech.emit(SpeechDictationEvent.FinalTranscript("hello sky"))
+      runCurrent()
+      viewModel.onCancelTurn()
+      relay.emitStatus("Working...")
+      relay.emitError("Should not surface")
+      runCurrent()
+
+      assertEquals(WatchViewModel.WatchState.Idle, viewModel.state.value)
+      assertEquals("Tap mic to speak", viewModel.statusText.value)
+      assertEquals(1, relay.cancelCount)
     }
 
   @Test
@@ -276,6 +397,7 @@ private class FakeAudioCapture : WearAudioCapture {
   var endpointCallback: ((AudioEndpointEvent.Endpoint) -> Unit)? = null
   var started = false
   var turnId: String? = null
+  var discardedOnStop = false
 
   override fun start(
     turnId: String?,
@@ -295,22 +417,40 @@ private class FakeAudioCapture : WearAudioCapture {
     discardPending: Boolean,
     onStopped: (() -> Unit)?,
   ) {
+    discardedOnStop = discardPending
     onStopped?.invoke()
   }
 }
 
-private class FakePhoneRelay : WearPhoneRelay {
-  override val phoneConnected: StateFlow<Boolean> = MutableStateFlow(true)
-  override val statusUpdates: SharedFlow<String> = MutableSharedFlow()
+private class FakePhoneRelay(
+  connected: Boolean = true,
+) : WearPhoneRelay {
+  private val connectedFlow = MutableStateFlow(connected)
+  override val phoneConnected: StateFlow<Boolean> = connectedFlow
+  private val mutableStatusUpdates = MutableSharedFlow<String>(extraBufferCapacity = 4)
+  override val statusUpdates: SharedFlow<String> = mutableStatusUpdates
   override val audioResponses: SharedFlow<PhoneRelayAudioResponse> = MutableSharedFlow()
   override val audioStreamEvents: SharedFlow<PhoneRelayAudioStreamEvent> = MutableSharedFlow()
-  override val errors: SharedFlow<String> = MutableSharedFlow()
+  private val mutableErrors = MutableSharedFlow<String>(extraBufferCapacity = 4)
+  override val errors: SharedFlow<String> = mutableErrors
 
   val endTurnIds = mutableListOf<String?>()
   val textTurns = mutableListOf<String>()
   var cancelCount = 0
 
-  override fun isPhoneConnected(): Boolean = true
+  override fun isPhoneConnected(): Boolean = connectedFlow.value
+
+  fun setConnected(connected: Boolean) {
+    connectedFlow.value = connected
+  }
+
+  fun emitStatus(status: String) {
+    mutableStatusUpdates.tryEmit(status)
+  }
+
+  fun emitError(error: String) {
+    mutableErrors.tryEmit(error)
+  }
 
   override fun sendStartRecording(): String? = "turn-1"
 

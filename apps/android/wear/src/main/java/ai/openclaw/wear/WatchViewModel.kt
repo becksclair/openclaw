@@ -24,7 +24,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicInteger
 
 class WatchViewModel private constructor(
@@ -50,13 +52,14 @@ class WatchViewModel private constructor(
     private const val TAG = WatchApp.TAG
     private const val DEBUG_TURN_TAG = "OpenClawWearDebugTurn"
     private const val DEBUG_CHUNK_BYTES = AudioPlayer.SAMPLE_RATE * 2 / 5
-    private const val DEBUG_PHONE_WAIT_ATTEMPTS = 20
+    private const val PHONE_CONNECTION_WAIT_TIMEOUT_MS = 10_000L
+    private const val DEBUG_PHONE_CONNECTION_POLL_INTERVAL_MS = 500L
 
     // Gentle boost applied to the final MP3 TTS file before it is played on the watch speaker.
     // Value chosen empirically: loud enough on watch speakers without clipping the 16-bit PCM range.
     private const val FINAL_MP3_AUDIO_GAIN = 1.2
     private const val PROCESSING_TURN_TIMEOUT_MS = 60_000L
-    private val DEFAULT_ENDPOINTING_CONFIG = AudioEndpointingConfig()
+    internal val DEFAULT_ENDPOINTING_CONFIG = AudioEndpointingConfig(endSilenceMs = 2_200)
     private val ALLOWED_DEBUG_STATES = setOf(WatchState.Idle, WatchState.CheckingPhone)
   }
 
@@ -104,6 +107,20 @@ class WatchViewModel private constructor(
   private var isDictating = false
   private var activeTurnId: String? = null
   private var processingWatchdogJob: Job? = null
+  private var assistantStartJob: Job? = null
+
+  private fun cancelAssistantStartJob() {
+    assistantStartJob?.cancel()
+    assistantStartJob = null
+  }
+
+  private fun resetTurnState() {
+    isRecording = false
+    isDictating = false
+    activeTurnId = null
+    cancelAssistantStartJob()
+  }
+
   private val recordingLock = Any()
 
   // Debug turns are launched from the UI thread and can be cancelled from
@@ -111,6 +128,7 @@ class WatchViewModel private constructor(
   // generation from background coroutines while comparing it to a local copy.
   // Atomic guarantees the increment is visible to subsequent reads.
   private val debugGeneration = AtomicInteger(0)
+  private val playbackGeneration = AtomicInteger(0)
 
   init {
     viewModelScope.launch {
@@ -131,6 +149,7 @@ class WatchViewModel private constructor(
 
     viewModelScope.launch {
       relayClient.statusUpdates.collect { status ->
+        if (_state.value == WatchState.Idle || _state.value == WatchState.Error) return@collect
         _statusText.value = status
       }
     }
@@ -156,13 +175,14 @@ class WatchViewModel private constructor(
             // Streaming chunks are always PCM_24K under the current relay; format
             // negotiation has not landed (see PhoneRelayAudioStreamEvent.Chunk kdoc).
             if (_state.value == WatchState.Processing) {
+              val generation = playbackGeneration.incrementAndGet()
               transitionTo(WatchState.Playing, "Playing response...")
               audioPlayer.startStream(
                 onComplete = {
-                  transitionTo(WatchState.Idle, "Tap mic to speak")
+                  completePlayback(generation)
                 },
                 onError = {
-                  failTurn("Audio playback unavailable")
+                  failPlayback(generation)
                 },
                 debugTurnId = event.turnId,
               )
@@ -183,6 +203,7 @@ class WatchViewModel private constructor(
 
     viewModelScope.launch {
       relayClient.errors.collect { error ->
+        if (_state.value == WatchState.Idle || _state.value == WatchState.Error) return@collect
         failTurn(error)
       }
     }
@@ -202,6 +223,30 @@ class WatchViewModel private constructor(
 
   fun onMicButtonDown() {
     if (_state.value != WatchState.Idle) return
+    startUserVoiceTurn()
+  }
+
+  fun onAssistantInvocation() {
+    if (_state.value != WatchState.Idle && _state.value != WatchState.CheckingPhone) return
+    cancelAssistantStartJob()
+    assistantStartJob =
+      viewModelScope
+        .launch {
+          val started = waitForAssistantPhoneConnection()
+          if (started) {
+            startUserVoiceTurn()
+          }
+        }.also { job ->
+          job.invokeOnCompletion {
+            if (assistantStartJob == job) {
+              assistantStartJob = null
+            }
+          }
+        }
+  }
+
+  private fun startUserVoiceTurn() {
+    playbackGeneration.incrementAndGet()
     if (!_hasMicPermission.value) {
       _statusText.value = "Microphone permission required"
       return
@@ -212,6 +257,19 @@ class WatchViewModel private constructor(
     }
     if (startDictationTurn()) return
     startRawAudioTurn()
+  }
+
+  private suspend fun waitForAssistantPhoneConnection(): Boolean {
+    if (relayClient.isPhoneConnected()) return true
+    transitionTo(WatchState.CheckingPhone, "Checking phone...")
+    val connected =
+      withTimeoutOrNull(PHONE_CONNECTION_WAIT_TIMEOUT_MS) {
+        relayClient.phoneConnected.first { it }
+      }
+    if (connected != true) {
+      transitionTo(WatchState.Idle, "Phone not connected")
+    }
+    return connected == true
   }
 
   private fun startDictationTurn(): Boolean {
@@ -267,19 +325,19 @@ class WatchViewModel private constructor(
     }
   }
 
-  fun onRetry() {
-    isRecording = false
-    isDictating = false
-    activeTurnId = null
+  fun onCancelTurn() {
+    resetTurnState()
     debugGeneration.incrementAndGet()
+    playbackGeneration.incrementAndGet()
     speechDictation.cancel()
     audioCapture.stop(discardPending = true)
     audioPlayer.stop()
     relayClient.sendCancel()
-    transitionTo(
-      WatchState.Idle,
-      "Tap mic to speak",
-    )
+    transitionTo(WatchState.Idle, "Tap mic to speak")
+  }
+
+  fun onRetry() {
+    onCancelTurn()
   }
 
   fun runDebugPcmTurn(pcmBytes: ByteArray) {
@@ -307,12 +365,12 @@ class WatchViewModel private constructor(
     val generation = debugGeneration.incrementAndGet()
     Log.d(DEBUG_TURN_TAG, "starting $debugKind bytes=${pcmBytes.size}")
     viewModelScope.launch {
-      var attempts = 0
-      while (!relayClient.isPhoneConnected() && attempts < DEBUG_PHONE_WAIT_ATTEMPTS) {
+      var waitedMs = 0L
+      while (!relayClient.isPhoneConnected() && waitedMs < PHONE_CONNECTION_WAIT_TIMEOUT_MS) {
         if (generation != debugGeneration.get() || _state.value !in ALLOWED_DEBUG_STATES) return@launch
-        attempts++
         transitionTo(WatchState.CheckingPhone, "Checking phone...")
-        delay(500)
+        delay(DEBUG_PHONE_CONNECTION_POLL_INTERVAL_MS)
+        waitedMs += DEBUG_PHONE_CONNECTION_POLL_INTERVAL_MS
       }
       if (generation != debugGeneration.get() || _state.value !in ALLOWED_DEBUG_STATES) return@launch
       if (!relayClient.isPhoneConnected()) {
@@ -375,14 +433,15 @@ class WatchViewModel private constructor(
     if (!Log.isLoggable(DEBUG_TURN_TAG, Log.VERBOSE)) return
     if (pcmBytes.isEmpty() || _state.value != WatchState.Idle) return
     Log.d(DEBUG_TURN_TAG, "starting debug pcm playback bytes=${pcmBytes.size}")
+    val generation = playbackGeneration.incrementAndGet()
     transitionTo(WatchState.Playing, "Playing debug audio...")
     audioPlayer.play(
       pcmBytes,
       onComplete = {
-        transitionTo(WatchState.Idle, "Tap mic to speak")
+        completePlayback(generation)
       },
       onError = {
-        failTurn("Audio playback unavailable")
+        failPlayback(generation)
       },
       debugTurnId = debugRunId?.takeIf { it.isNotBlank() } ?: "direct-playback",
     )
@@ -406,6 +465,7 @@ class WatchViewModel private constructor(
           compressedAudioDecoder.decodeToPcm48kMono(audioBytes, fileExtension)
         } catch (err: Throwable) {
           Log.w(DEBUG_TURN_TAG, "debug compressed decode failed: ${err.message}")
+          if (generation != debugGeneration.get() || _state.value != WatchState.Processing) return@launch
           failTurn("Audio decode unavailable")
           return@launch
         }
@@ -416,13 +476,14 @@ class WatchViewModel private constructor(
         "debug compressed decoded inputBytes=${audioBytes.size} pcmBytes=${decoded.pcm48kMono.size} sourceRate=${decoded.sourceSampleRateHz} sourceChannels=${decoded.sourceChannels} decodeMs=$decodeMs",
       )
       transitionTo(WatchState.Playing, "Playing debug audio...")
+      val playback = playbackGeneration.incrementAndGet()
       audioPlayer.playPcm48k(
         decoded.pcm48kMono,
         onComplete = {
-          transitionTo(WatchState.Idle, "Tap mic to speak")
+          completePlayback(playback)
         },
         onError = {
-          failTurn("Audio playback unavailable")
+          failPlayback(playback)
         },
         debugTurnId = turnId,
       )
@@ -430,14 +491,15 @@ class WatchViewModel private constructor(
   }
 
   private fun playPcmResponse(response: PhoneRelayAudioResponse) {
+    val generation = playbackGeneration.incrementAndGet()
     transitionTo(WatchState.Playing, "Playing response...")
     audioPlayer.play(
       response.audioBytes,
       onComplete = {
-        transitionTo(WatchState.Idle, "Tap mic to speak")
+        completePlayback(generation)
       },
       onError = {
-        failTurn("Audio playback unavailable")
+        failPlayback(generation)
       },
       debugTurnId = response.turnId,
     )
@@ -477,17 +539,28 @@ class WatchViewModel private constructor(
         "response decoded format=${response.format} inputBytes=${response.audioBytes.size} pcmBytes=${decoded.pcm48kMono.size} sourceRate=${decoded.sourceSampleRateHz} sourceChannels=${decoded.sourceChannels} decodeMs=$decodeMs",
       )
       transitionTo(WatchState.Playing, "Playing response...")
+      val playback = playbackGeneration.incrementAndGet()
       audioPlayer.playPcm48k(
         decoded.pcm48kMono,
         onComplete = {
-          transitionTo(WatchState.Idle, "Tap mic to speak")
+          completePlayback(playback)
         },
         onError = {
-          failTurn("Audio playback unavailable")
+          failPlayback(playback)
         },
         debugTurnId = response.turnId,
       )
     }
+  }
+
+  private fun completePlayback(generation: Int) {
+    if (generation != playbackGeneration.get() || _state.value != WatchState.Playing) return
+    transitionTo(WatchState.Idle, "Tap mic to speak")
+  }
+
+  private fun failPlayback(generation: Int) {
+    if (generation != playbackGeneration.get() || _state.value != WatchState.Playing) return
+    failTurn("Audio playback unavailable")
   }
 
   private fun transitionTo(
@@ -522,9 +595,8 @@ class WatchViewModel private constructor(
   }
 
   private fun failTurn(message: String) {
-    isRecording = false
-    isDictating = false
-    activeTurnId = null
+    resetTurnState()
+    playbackGeneration.incrementAndGet()
     speechDictation.cancel()
     audioCapture.stop(discardPending = true)
     audioPlayer.stop()
@@ -542,7 +614,7 @@ class WatchViewModel private constructor(
     speechDictation.destroy()
     audioCapture.stop(discardPending = true)
     audioPlayer.stop()
-    activeTurnId = null
+    resetTurnState()
     processingWatchdogJob?.cancel()
     processingWatchdogJob = null
     relayClient.disconnect()
@@ -579,7 +651,7 @@ class WatchViewModel private constructor(
     }
     if (completion is RecordingCompletion.AutoEndpoint && completion.endpoint.reason == AudioEndpointReason.NoSpeech) {
       relayClient.sendCancel()
-      activeTurnId = null
+      resetTurnState()
       transitionTo(WatchState.Idle, "Tap mic to speak")
       return
     }

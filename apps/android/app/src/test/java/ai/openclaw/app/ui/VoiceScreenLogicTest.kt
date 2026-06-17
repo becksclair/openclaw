@@ -1,6 +1,8 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.VoiceCaptureMode
+import ai.openclaw.app.voice.VoiceConversationEntry
+import ai.openclaw.app.voice.VoiceConversationRole
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -70,6 +72,30 @@ class VoiceScreenLogicTest {
     assertEquals(
       "Realtime transcription provider is not configured.",
       voiceRuntimeAttentionStatus("Transcription unavailable: UNAVAILABLE: Error: No realtime transcription provider registered"),
+    )
+  }
+
+  @Test
+  fun landingVoiceConversationDoesNotShowDictationEntries() {
+    val dictationEntry =
+      VoiceConversationEntry(
+        id = "dictation-user",
+        role = VoiceConversationRole.User,
+        text = "Dictation turn",
+      )
+    val talkEntry =
+      VoiceConversationEntry(
+        id = "talk-user",
+        role = VoiceConversationRole.User,
+        text = "Realtime turn",
+      )
+
+    assertEquals(
+      listOf(talkEntry),
+      landingVoiceConversation(
+        micConversation = listOf(dictationEntry),
+        talkModeConversation = listOf(talkEntry),
+      ),
     )
   }
 }
