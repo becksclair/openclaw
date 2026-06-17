@@ -243,7 +243,9 @@ async function waitForChatFinalAudioRecord(params: {
     if (record || Date.now() >= deadline) {
       return record;
     }
-    await new Promise((resolve) => setTimeout(resolve, CHAT_FINAL_AUDIO_POLL_MS));
+    await new Promise((resolve) => {
+      setTimeout(resolve, CHAT_FINAL_AUDIO_POLL_MS);
+    });
   }
 }
 

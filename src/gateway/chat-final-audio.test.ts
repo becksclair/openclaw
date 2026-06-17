@@ -395,9 +395,7 @@ describe("chat.finalAudio.get", () => {
       }
       const payload = result.payload;
       expect(payload).toMatchObject({ found: true });
-      expect(String(payload.audioBase64 ?? "").length).toBeLessThanOrEqual(
-        MAX_CHAT_FINAL_AUDIO_BASE64_BYTES,
-      );
+      expect(payload.audioBase64.length).toBeLessThanOrEqual(MAX_CHAT_FINAL_AUDIO_BASE64_BYTES);
     });
   });
 });

@@ -1337,8 +1337,7 @@ describe("agent event handler", () => {
   it("keeps final audio available after lifecycle completion", () => {
     const finalAudio = createChatFinalAudioRegistry();
     const cleanupCalls: string[] = [];
-    let harness: ReturnType<typeof createHarness>;
-    harness = createHarness({
+    const harness: ReturnType<typeof createHarness> = createHarness({
       now: 2_500,
       clearChatRunState: (runId) => {
         cleanupCalls.push(runId);

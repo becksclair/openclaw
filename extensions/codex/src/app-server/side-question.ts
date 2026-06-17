@@ -255,7 +255,7 @@ export async function runCodexAppServerSideQuestion(
       env: process.env,
       agentDir: params.agentDir,
     });
-    const { sessionAgentId } = resolveSessionAgentIds({
+    const { sessionAgentId: sideSessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.cfg,
     });
@@ -289,7 +289,7 @@ export async function runCodexAppServerSideQuestion(
       params,
       cwd,
       pluginConfig,
-      sessionAgentId,
+      sessionAgentId: sideSessionAgentId,
       nativeToolSurfaceEnabled,
       nativeProviderWebSearchSupport,
       signal: runAbortController.signal,
@@ -328,16 +328,16 @@ export async function runCodexAppServerSideQuestion(
           threadId: childThreadId,
           turnId,
           nativeHookRelay,
-	          execPolicy,
-	          execReviewerAgentId: sessionAgentId,
-	          internalExecAutoReview: modelScopedAppServer.approvalsReviewer === "user",
-	          autoApprove: shouldAutoApproveCodexAppServerApprovals({
-	            approvalPolicy,
-	            networkProxy: modelScopedAppServer.networkProxy,
-	            sandbox,
-	          }),
-	          signal: runAbortController.signal,
-	        });
+          execPolicy,
+          execReviewerAgentId: sideSessionAgentId,
+          internalExecAutoReview: modelScopedAppServer.approvalsReviewer === "user",
+          autoApprove: shouldAutoApproveCodexAppServerApprovals({
+            approvalPolicy,
+            networkProxy: modelScopedAppServer.networkProxy,
+            sandbox,
+          }),
+          signal: runAbortController.signal,
+        });
       }
       if (request.method !== "item/tool/call") {
         return undefined;
@@ -392,7 +392,7 @@ export async function runCodexAppServerSideQuestion(
       ? registerCodexSideNativeHookRelay({
           options: options.nativeHookRelay,
           events: nativeHookRelayEvents,
-          agentId: sessionAgentId,
+          agentId: sideSessionAgentId,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           config: params.cfg,
