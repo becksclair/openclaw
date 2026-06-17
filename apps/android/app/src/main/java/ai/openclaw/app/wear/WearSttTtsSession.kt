@@ -666,9 +666,9 @@ internal class WearSttTtsSession(
     sinceSeconds: Double,
     timeoutMs: Long,
   ): String? {
-    val deadline = System.currentTimeMillis() + timeoutMs
+    val deadline = SystemClock.elapsedRealtime() + timeoutMs
     var delayMs = 300L
-    while (System.currentTimeMillis() < deadline) {
+    while (SystemClock.elapsedRealtime() < deadline) {
       val text = fetchLatestAssistantText(sinceSeconds)
       if (!text.isNullOrBlank()) return text
       delay(delayMs)

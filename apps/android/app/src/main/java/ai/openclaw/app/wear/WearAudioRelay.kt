@@ -267,7 +267,7 @@ class WearAudioRelay internal constructor(
             activeTargetSessionKey = null
             null
           } else {
-            audioBuffer.toList()
+            audioBuffer.toList().also { audioBuffer.clear() }
           }
         }
     }
@@ -382,8 +382,8 @@ class WearAudioRelay internal constructor(
   }
 
   fun disconnect() {
-    scope.coroutineContext.cancelChildren()
     cancel()
+    scope.coroutineContext.cancelChildren()
     synchronized(listenerRegistrationLock) {
       if (!listenerRegistered) return
       transport.removeListener(watchMessageListener)

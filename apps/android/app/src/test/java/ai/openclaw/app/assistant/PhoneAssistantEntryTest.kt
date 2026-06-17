@@ -104,7 +104,10 @@ class PhoneAssistantEntryTest {
         .flattenToString(),
     )
 
-    assertNull(resolveRecognitionServiceComponent(context))
+    assertEquals(
+      ComponentName("com.google.android.tts", "com.google.android.tts.GoogleTTSRecognitionService"),
+      resolveRecognitionServiceComponent(context),
+    )
   }
 
   @Test
