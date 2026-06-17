@@ -480,6 +480,9 @@ class NodeRuntime(
         )
         updateStatus()
         micCapture.onGatewayConnectionChanged(true)
+        if (wearAudioRelayLazy.isInitialized()) {
+          wearAudioRelay.connect()
+        }
         scope.launch {
           subscribeOperatorSessionEvents()
           refreshExecApprovalsFromGateway()
@@ -524,6 +527,9 @@ class NodeRuntime(
         chat.onDisconnected(message)
         updateStatus()
         micCapture.onGatewayConnectionChanged(false)
+        if (wearAudioRelayLazy.isInitialized()) {
+          wearAudioRelay.disconnect()
+        }
       },
       onConnectFailure = ::handleGatewayConnectFailure,
       onEvent = { event, payloadJson ->
@@ -741,7 +747,7 @@ class NodeRuntime(
   val talkModeConversation: StateFlow<List<VoiceConversationEntry>>
     get() = talkMode.conversation
 
-  private val wearAudioRelayLazy =
+  private val wearAudioRelayLazy: Lazy<ai.openclaw.app.wear.WearAudioRelay> =
     lazy {
       ai.openclaw.app.wear.WearAudioRelay(
         context = appContext,
