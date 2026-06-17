@@ -160,6 +160,26 @@ describe("ensureConfiguredAcpBindingSession", () => {
     expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
   });
 
+  it("reinitializes a ready session when binding config removes a stored target", async () => {
+    const spec = createPersistentSpec({
+      cwd: "C:/dev/work",
+    });
+    const sessionKey = mockReadySession({
+      spec,
+      target: "devbox",
+      cwd: "C:/dev/work",
+    });
+
+    const ensured = await ensureConfiguredAcpBindingSession({
+      cfg: baseCfg,
+      spec,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
+    expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
+  });
+
   it("reinitializes a matching session when the stored ACP session is in error state", async () => {
     const spec = createPersistentSpec({
       cwd: "/home/bob/clawd",
