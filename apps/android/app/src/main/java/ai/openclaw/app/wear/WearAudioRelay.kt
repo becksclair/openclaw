@@ -70,6 +70,7 @@ class WearAudioRelay internal constructor(
 
   private val json = Json { ignoreUnknownKeys = true }
 
+  private val listenerRegistrationLock = Any()
   private val audioBuffer = mutableListOf<ByteArray>()
   private val audioBufferLock = Any()
   private val turnStateLock = Any()
@@ -91,8 +92,21 @@ class WearAudioRelay internal constructor(
 
   @Volatile private var activeTargetSessionKey: String? = null
 
+  @Volatile private var listenerRegistered = false
+
+  internal val isListeningForWatchMessages: Boolean
+    get() = listenerRegistered
+
   init {
-    transport.addListener(watchMessageListener)
+    connect()
+  }
+
+  fun connect() {
+    synchronized(listenerRegistrationLock) {
+      if (listenerRegistered) return
+      transport.addListener(watchMessageListener)
+      listenerRegistered = true
+    }
     Log.d(TAG, "registered foreground watch message listener")
   }
 
@@ -376,8 +390,11 @@ class WearAudioRelay internal constructor(
 
   fun disconnect() {
     cancel()
-    transport.removeListener(watchMessageListener)
-    scope.cancel()
+    synchronized(listenerRegistrationLock) {
+      if (!listenerRegistered) return
+      transport.removeListener(watchMessageListener)
+      listenerRegistered = false
+    }
   }
 
   private fun isCurrentTurn(turnId: Long): Boolean = turnCounter.get() == turnId
