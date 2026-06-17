@@ -262,7 +262,6 @@ export async function runCodexAppServerSideQuestion(
     const { sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.cfg,
-      agentDir: params.agentDir,
     });
     const forcedFullAccess = isCodexAppServerForcedFullAccess();
     const useModelScopedPolicy = !canUseCodexModelBackedApprovalsReviewerForModel({
