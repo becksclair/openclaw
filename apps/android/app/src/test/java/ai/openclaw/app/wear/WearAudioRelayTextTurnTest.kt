@@ -1,6 +1,7 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.common.wear.WearRelayProtocol
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
@@ -20,6 +21,63 @@ import java.util.Base64
 @RunWith(RobolectricTestRunner::class)
 class WearAudioRelayTextTurnTest {
   private val json = Json { ignoreUnknownKeys = true }
+
+  @Test
+  fun audioTurnTranscribesChatsAndReturnsSynthesizedSpeech() =
+    runTest {
+      val gateway = FakeWearRelayGateway()
+      val transport = FakeWearRelayTransport()
+      val relay =
+        WearAudioRelay(
+          gateway = gateway,
+          wearTargetSessionKeyProvider = { "wear-main" },
+          transport = transport,
+          scope = this,
+        )
+
+      relay.handleWatchMessage(
+        WearRelayProtocol.turnPath(WearRelayProtocol.PATH_START, "audio-turn"),
+        """{"acceptedResponseFormats":["mp3","pcm_24000"]}""".toByteArray(),
+        sourceNodeId = "watch-node",
+      )
+      relay.handleWatchMessage(
+        WearRelayProtocol.turnPath(WearRelayProtocol.PATH_AUDIO_CHUNK, "audio-turn"),
+        byteArrayOf(1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0),
+        sourceNodeId = "watch-node",
+      )
+      relay.handleWatchMessage(
+        WearRelayProtocol.turnPath(WearRelayProtocol.PATH_END, "audio-turn"),
+        ByteArray(0),
+        sourceNodeId = "watch-node",
+      )
+
+      waitForGatewayMethod(gateway, "talk.session.close")
+      relay.handleGatewayEvent(
+        "talk.event",
+        """{"type":"transcript","transcriptionSessionId":"stt-1","text":"turn transcript"}""",
+      )
+      waitForGatewayMethod(gateway, "chat.send")
+      relay.handleGatewayEvent(
+        "chat",
+        """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"audio reply"}}""",
+      )
+      waitForSentPath(transport, "/openclaw/watch/audio/audio-turn/format/mp3")
+
+      assertTrue(gateway.methods.contains("talk.session.create"))
+      assertTrue(gateway.methods.contains("talk.session.appendAudio"))
+      assertTrue(gateway.methods.contains("talk.session.close"))
+      assertTrue(gateway.methods.contains("chat.send"))
+      assertTrue(gateway.methods.contains("chat.finalAudio.get"))
+      val chatParams =
+        gateway.requests
+          .single { it.method == "chat.send" }
+          .paramsJson
+          .orEmpty()
+      val chatRoot = json.parseToJsonElement(chatParams).jsonObject
+      assertEquals("wear-main", chatRoot["sessionKey"]?.jsonPrimitive?.content)
+      assertEquals("turn transcript", chatRoot["message"]?.jsonPrimitive?.content)
+      assertEquals("low", chatRoot["thinking"]?.jsonPrimitive?.content)
+    }
 
   @Test
   fun textTurnRoutesTranscriptToChatTtsWithoutTranscriptionSession() =
@@ -171,6 +229,7 @@ private class FakeWearRelayGateway(
   ): String {
     requests += Request(method = method, paramsJson = paramsJson)
     return when (method) {
+      "talk.session.create" -> """{"transcriptionSessionId":"stt-1"}"""
       "chat.send" -> """{"runId":"run-1"}"""
       "talk.speak" ->
         """{"audioBase64":"${Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3, 4))}","outputFormat":"opus"}"""

@@ -236,8 +236,8 @@ class MainActivity : ComponentActivity() {
       return
     }
     Log.d(TAG, "trusted assistant session auto-starting dictation")
+    pendingAssistantStart = true
     lifecycleScope.launch {
-      pendingAssistantStart = true
       val granted =
         runCatching {
           permissionRequester
