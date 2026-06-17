@@ -864,8 +864,8 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
     if (!isCodexThreadNotFoundError(error)) {
       throw error;
     }
-    const binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
-    await recreateBoundThreadForTurn(params, agentLookup, binding);
+    const latestBinding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
+    await recreateBoundThreadForTurn(params, agentLookup, latestBinding);
     return await runBoundTurn(params);
   }
 }

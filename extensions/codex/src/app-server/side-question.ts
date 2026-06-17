@@ -259,7 +259,7 @@ export async function runCodexAppServerSideQuestion(
       env: process.env,
       agentDir: params.agentDir,
     });
-    const { sessionAgentId } = resolveSessionAgentIds({
+    const { sessionAgentId: sideSessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.cfg,
     });
@@ -293,7 +293,7 @@ export async function runCodexAppServerSideQuestion(
       params,
       cwd,
       pluginConfig,
-      sessionAgentId,
+      sessionAgentId: sideSessionAgentId,
       nativeToolSurfaceEnabled,
       nativeProviderWebSearchSupport,
       signal: runAbortController.signal,
@@ -333,7 +333,7 @@ export async function runCodexAppServerSideQuestion(
           turnId,
           nativeHookRelay,
           execPolicy,
-          execReviewerAgentId: sessionAgentId,
+          execReviewerAgentId: sideSessionAgentId,
           internalExecAutoReview: modelScopedAppServer.approvalsReviewer === "user",
           autoApprove: shouldAutoApproveCodexAppServerApprovals({
             approvalPolicy,
@@ -396,7 +396,7 @@ export async function runCodexAppServerSideQuestion(
       ? registerCodexSideNativeHookRelay({
           options: options.nativeHookRelay,
           events: nativeHookRelayEvents,
-          agentId: sessionAgentId,
+          agentId: sideSessionAgentId,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           config: params.cfg,
