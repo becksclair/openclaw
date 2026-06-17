@@ -168,7 +168,15 @@ describe("buildAttemptSystemPrompt", () => {
           model: "openai/gpt-5.5",
           channel: "telegram",
         },
-        tools: [{ name: "message", description: "Send message", parameters: {} }],
+        tools: [
+          {
+            name: "message",
+            label: "Message",
+            description: "Send message",
+            parameters: {},
+            execute: async () => ({ content: [], details: {} }),
+          },
+        ],
         modelAliasLines: [],
         userTimezone: "UTC",
         agentBasePrompt: customBasePrompt,

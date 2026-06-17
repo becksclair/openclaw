@@ -390,7 +390,10 @@ describe("chat.finalAudio.get", () => {
       });
 
       expect(result.ok).toBe(true);
-      const payload = result.ok ? result.payload : {};
+      if (!result.ok || !("audioBase64" in result.payload)) {
+        throw new Error("expected final audio payload");
+      }
+      const payload = result.payload;
       expect(payload).toMatchObject({ found: true });
       expect(String(payload.audioBase64 ?? "").length).toBeLessThanOrEqual(
         MAX_CHAT_FINAL_AUDIO_BASE64_BYTES,
