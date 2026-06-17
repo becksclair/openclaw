@@ -559,9 +559,10 @@ class WearAudioRelay internal constructor(
     path: String,
     data: ByteArray,
   ) {
+    val targetNodeId = activeWatchNodeId
     scope.launch {
       try {
-        sendMessageSuspending(path, data)
+        sendMessageSuspending(path, data, targetNodeId)
       } catch (err: Throwable) {
         Log.w(TAG, "sendMessage failed: ${err.message}")
       }
