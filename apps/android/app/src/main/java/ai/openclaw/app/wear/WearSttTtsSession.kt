@@ -422,7 +422,8 @@ internal class WearSttTtsSession(
     // ChatController. This means pendingRunIdKeys is known before chat.send
     // returns and a fast final event cannot arrive with an unrecognized runId.
     val runId = UUID.randomUUID().toString()
-    pendingRunIdKeys.set(setOf(runId))
+    val initialRunIds = setOf(runId)
+    pendingRunIdKeys.set(initialRunIds)
     Log.d(TAG, "chat.send start sessionKey=${sessionKey.ifBlank { "main" }} chars=${transcript.length}")
     val response =
       gateway.request(
@@ -440,7 +441,7 @@ internal class WearSttTtsSession(
     val parsedRunId = parseRunId(response) ?: runId
     // Gateway may return a canonical run id; accept both during the transition.
     if (parsedRunId != runId) {
-      pendingRunIdKeys.set(setOf(runId, parsedRunId))
+      pendingRunIdKeys.compareAndSet(initialRunIds, setOf(runId, parsedRunId))
     }
     return parsedRunId
   }

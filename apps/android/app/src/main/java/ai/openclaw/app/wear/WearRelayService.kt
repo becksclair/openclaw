@@ -22,14 +22,6 @@ class WearRelayService : WearableListenerService() {
   companion object {
     private const val TAG = "WearRelayService"
     private const val PHONE_NOT_READY_MESSAGE = "Phone app is not connected to OpenClaw. Open the phone app, connect the gateway, then try again."
-    private val WATCH_MESSAGE_PATHS =
-      arrayOf(
-        WearRelayProtocol.PATH_START,
-        WearRelayProtocol.PATH_END,
-        WearRelayProtocol.PATH_CANCEL,
-        WearRelayProtocol.PATH_AUDIO_CHUNK,
-        WearRelayProtocol.PATH_TEXT,
-      )
   }
 
   private val json = Json { ignoreUnknownKeys = true }
@@ -52,17 +44,12 @@ class WearRelayService : WearableListenerService() {
       existingRuntime.wearAudioRelay.handleWatchMessage(messageEvent.path, messageEvent.data, messageEvent.sourceNodeId)
       return
     }
-    val runtime = nodeApp.ensureRuntime()
-    if (!runtime.canHandleWearRelayMessages) {
-      sendPhoneNotReadyError(messageEvent)
-      return
-    }
-    runtime.wearAudioRelay.handleWatchMessage(messageEvent.path, messageEvent.data, messageEvent.sourceNodeId)
+    sendPhoneNotReadyError(messageEvent)
   }
 
   private fun sendPhoneNotReadyError(messageEvent: MessageEvent) {
     val sourceNodeId = messageEvent.sourceNodeId
-    val turnId = parseWatchTurnId(messageEvent.path)
+    val turnId = WearRelayProtocol.parseWatchMessagePath(messageEvent.path)?.turnId
     val payload =
       json
         .encodeToString(WearRelayErrorPayload(message = PHONE_NOT_READY_MESSAGE, turnId = turnId))
@@ -73,16 +60,5 @@ class WearRelayService : WearableListenerService() {
       .addOnFailureListener { err ->
         Log.w(TAG, "failed to send phone-not-ready wear error: ${err.message}")
       }
-  }
-
-  private fun parseWatchTurnId(path: String): String? {
-    for (basePath in WATCH_MESSAGE_PATHS) {
-      if (path == basePath) return null
-      val prefix = "$basePath/"
-      if (path.startsWith(prefix)) {
-        return path.removePrefix(prefix).takeIf { it.isNotEmpty() }
-      }
-    }
-    return null
   }
 }
