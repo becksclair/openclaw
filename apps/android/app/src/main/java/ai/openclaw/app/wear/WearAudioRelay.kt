@@ -15,7 +15,6 @@ import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.serialization.encodeToString
@@ -86,13 +85,14 @@ class WearAudioRelay internal constructor(
     connect()
   }
 
-  fun connect() {
+  fun connect(): Boolean {
     synchronized(listenerRegistrationLock) {
-      if (listenerRegistered) return
+      if (listenerRegistered) return false
       transport.addListener(watchMessageListener)
       listenerRegistered = true
     }
     Log.d(TAG, "registered foreground watch message listener")
+    return true
   }
 
   fun handleWatchMessage(
@@ -383,7 +383,6 @@ class WearAudioRelay internal constructor(
 
   fun disconnect() {
     cancel()
-    scope.coroutineContext.cancelChildren()
     synchronized(listenerRegistrationLock) {
       if (!listenerRegistered) return
       transport.removeListener(watchMessageListener)
