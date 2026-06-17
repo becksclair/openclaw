@@ -748,6 +748,7 @@ class NodeRuntime(
         context = appContext,
         gatewaySession = operatorSession,
         wearTargetSessionKeyProvider = { resolveWearTargetSessionKey() },
+        canHandleMessages = { canHandleWearRelayMessages },
       )
     }
 

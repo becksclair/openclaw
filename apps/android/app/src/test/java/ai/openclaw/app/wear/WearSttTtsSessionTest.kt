@@ -290,6 +290,34 @@ class WearSttTtsSessionTest {
     }
 
   @Test
+  fun startTranscript_abortsPendingChatRunWhenSpeechSynthesisFails() =
+    runTest {
+      val gateway = FakeWearGateway(finalAudioPayloadJson = """{"found":false}""", failTalkSpeak = true)
+      val errors = mutableListOf<String>()
+      val session =
+        WearSttTtsSession(
+          scope = this,
+          gateway = gateway,
+          sessionKey = "main",
+          onAudioResponse = { error("unexpected audio response") },
+          onStatus = {},
+          onError = { errors += it },
+          onComplete = {},
+        )
+
+      session.startTranscript("hello sky")
+      runCurrent()
+      session.handleGatewayEvent(
+        "chat",
+        """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"hi back"}}""",
+      )
+      waitForGatewayMethod(gateway, "chat.abort")
+
+      assertTrue(errors.any { it.contains("synthesis failed") })
+      assertTrue(gateway.methods.contains("chat.abort"))
+    }
+
+  @Test
   fun startAudioStillCreatesTranscriptionSession() =
     runTest {
       val gateway = FakeWearGateway()
@@ -337,6 +365,7 @@ private suspend fun waitForGatewayMethod(
 
 private class FakeWearGateway(
   private val finalAudioPayloadJson: String = """{"found":false}""",
+  private val failTalkSpeak: Boolean = false,
 ) : WearGateway {
   val requests = mutableListOf<Request>()
 
@@ -354,8 +383,10 @@ private class FakeWearGateway(
       "talk.session.appendAudio" -> "{}"
       "talk.session.close" -> "{}"
       "chat.send" -> """{"runId":"run-1"}"""
-      "talk.speak" ->
+      "talk.speak" -> {
+        if (failTalkSpeak) error("synthesis failed")
         """{"audioBase64":"${Base64.getEncoder().encodeToString(byteArrayOf(1, 0, 2, 0))}","outputFormat":"pcm_24000"}"""
+      }
       else -> "{}"
     }
   }

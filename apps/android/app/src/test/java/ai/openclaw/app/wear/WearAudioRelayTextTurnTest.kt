@@ -150,6 +150,31 @@ class WearAudioRelayTextTurnTest {
     }
 
   @Test
+  fun foregroundListenerIgnoresWatchMessageUntilGatewayCanHandleRelay() =
+    runTest {
+      val gateway = FakeWearRelayGateway()
+      val transport = FakeWearRelayTransport()
+      val relay =
+        WearAudioRelay(
+          gateway = gateway,
+          wearTargetSessionKeyProvider = { "wear-main" },
+          transport = transport,
+          canHandleMessages = { false },
+          scope = this,
+        )
+
+      relay.handleWatchMessage(
+        "/openclaw/watch/text/turn-not-ready",
+        """{"text":"hello"}""".toByteArray(),
+        sourceNodeId = "watch-node",
+      )
+      delay(50)
+
+      assertTrue(gateway.requests.isEmpty())
+      assertTrue(transport.sent.isEmpty())
+    }
+
+  @Test
   fun chunkedTextTurnSendsDoneAfterAllIndexedChunks() =
     runTest {
       val gateway =
