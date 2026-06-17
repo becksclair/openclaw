@@ -266,7 +266,14 @@ internal class WearSttTtsSession(
           } finally {
             synchronized(startLock) { startJob = null }
             transcriptionSessionId = null
-            pendingRunIdKeys.set(emptySet())
+            val remainingRunIds = pendingRunIdKeys.getAndSet(emptySet())
+            if (cancelled.get() && remainingRunIds.isNotEmpty()) {
+              withContext(NonCancellable) {
+                for (runId in remainingRunIds) {
+                  runCatching { abortChatRun(sessionKey.ifBlank { "main" }, runId) }
+                }
+              }
+            }
             transcriptSignal = null
             chatFinalSignal = null
             val pendingSttSessionId = sttSessionId
