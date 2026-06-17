@@ -333,18 +333,22 @@ internal class WearSttTtsSession(
 
   fun cancel() {
     val jobToCancel: Job?
+    val transcriptToCancel: CompletableDeferred<String>?
+    val chatFinalToCancel: CompletableDeferred<ChatFinalEvent>?
     synchronized(startLock) {
       if (cancelled.getAndSet(true)) return
       jobToCancel = startJob
       startJob = null
+      transcriptToCancel = transcriptSignal
+      chatFinalToCancel = chatFinalSignal
+      transcriptSignal = null
+      chatFinalSignal = null
     }
     val runIds = pendingRunIdKeys.getAndSet(emptySet())
     val chatSessionKey = sessionKey.ifBlank { "main" }
+    transcriptToCancel?.cancel()
+    chatFinalToCancel?.cancel()
     jobToCancel?.cancel()
-    transcriptSignal?.cancel()
-    chatFinalSignal?.cancel()
-    transcriptSignal = null
-    chatFinalSignal = null
     val sttSessionId = transcriptionSessionId
     transcriptionSessionId = null
     for (runId in runIds) {
