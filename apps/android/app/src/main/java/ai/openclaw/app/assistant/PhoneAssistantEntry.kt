@@ -59,10 +59,25 @@ internal fun resolveRecognitionServiceComponent(context: Context): ComponentName
   if (configured?.packageName == packageName) {
     return rememberedRecognitionService(context)
       ?.takeIf { componentExists(services, it) }
+      ?: fallbackRecognitionService(context, services)
   }
   if (configured != null && componentExists(services, configured)) {
     rememberRecognitionService(context, configured)
     return configured
+  }
+  return null
+}
+
+private fun fallbackRecognitionService(
+  context: Context,
+  services: List<android.content.pm.ResolveInfo>,
+): ComponentName? {
+  for (info in services) {
+    val serviceInfo = info.serviceInfo ?: continue
+    if (serviceInfo.packageName == context.packageName) continue
+    val fallback = ComponentName(serviceInfo.packageName, serviceInfo.name)
+    rememberRecognitionService(context, fallback)
+    return fallback
   }
   return null
 }

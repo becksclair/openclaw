@@ -598,7 +598,7 @@ private fun ChatBubble(
     horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
   ) {
     Surface(
-      modifier = Modifier.fillMaxWidth(CHAT_BUBBLE_WIDTH_FRACTION),
+      modifier = Modifier.fillMaxWidth(if (isUser) 0.64f else 0.56f),
       shape = RoundedCornerShape(7.dp),
       color = if (isUser) ClawTheme.colors.surfacePressed.copy(alpha = 0.86f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
       contentColor = ClawTheme.colors.text,

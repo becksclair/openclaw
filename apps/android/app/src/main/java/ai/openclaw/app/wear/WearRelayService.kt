@@ -32,6 +32,10 @@ class WearRelayService : WearableListenerService() {
     val nodeApp = application as? NodeApp ?: return
     val existingRuntime = nodeApp.peekRuntime()
     if (existingRuntime != null) {
+      if (!existingRuntime.isWearAudioRelayInitialized) {
+        sendPhoneNotReadyError(messageEvent)
+        return
+      }
       if (existingRuntime.wearAudioRelay.isListeningForWatchMessages) {
         Log.d(TAG, "foreground runtime already registered; ignoring service duplicate")
         return
