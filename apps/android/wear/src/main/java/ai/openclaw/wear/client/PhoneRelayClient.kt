@@ -546,9 +546,7 @@ internal class PhoneRelayClient(
     }
   }
 
-  private fun isStaleOutboundMessage(requiredActiveTurnId: String?): Boolean {
-    return requiredActiveTurnId != null && activeTurnId != requiredActiveTurnId
-  }
+  private fun isStaleOutboundMessage(requiredActiveTurnId: String?): Boolean = requiredActiveTurnId != null && activeTurnId != requiredActiveTurnId
 
   private fun enqueueAudioStreamEvent(event: PhoneRelayAudioStreamEvent) {
     // SharedFlow has DROP_OLDEST overflow + a 64-frame buffer; tryEmit() is

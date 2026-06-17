@@ -373,6 +373,7 @@ export function collectMessagingMediaUrlsFromToolResult(result: unknown): string
 /** Extract an internal source-reply payload from a completed message tool result. */
 export function extractMessagingToolSourceReplyPayload(
   result: unknown,
+  params?: { toolName?: string; trustedLocalMediaToolNames?: ReadonlySet<string> },
 ): MessagingToolSourceReplyPayload | undefined {
   const details = readToolResultDetails(result);
   if (!details || details.sourceReplySink !== "internal-ui") {
@@ -388,23 +389,47 @@ export function extractMessagingToolSourceReplyPayload(
   if (text) {
     payload.text = text;
   }
-  const mediaUrl = readStringValue(sourceReply.mediaUrl) ?? readStringValue(details.mediaUrl);
-  if (mediaUrl) {
-    payload.mediaUrl = mediaUrl;
+  const spokenText = readStringValue(sourceReply.spokenText) ?? readStringValue(details.spokenText);
+  if (spokenText) {
+    payload.spokenText = spokenText;
   }
-  const rawMediaUrls = Array.isArray(sourceReply.mediaUrls)
-    ? sourceReply.mediaUrls
-    : Array.isArray(details.mediaUrls)
-      ? details.mediaUrls
-      : [];
-  const mediaUrls = uniqueStrings(
-    rawMediaUrls.filter((value): value is string => typeof value === "string"),
-  );
-  if (mediaUrls.length > 0) {
-    payload.mediaUrls = mediaUrls;
-  }
-  if (sourceReply.audioAsVoice === true || details.audioAsVoice === true) {
-    payload.audioAsVoice = true;
+  const shouldTrustSourceReplyMedia =
+    params === undefined
+      ? true
+      : isToolResultMediaTrusted(params.toolName, result, params.trustedLocalMediaToolNames);
+  if (shouldTrustSourceReplyMedia) {
+    const mediaUrl = readStringValue(sourceReply.mediaUrl) ?? readStringValue(details.mediaUrl);
+    if (mediaUrl) {
+      payload.mediaUrl = mediaUrl;
+    }
+    const rawMediaUrls = Array.isArray(sourceReply.mediaUrls)
+      ? sourceReply.mediaUrls
+      : Array.isArray(details.mediaUrls)
+        ? details.mediaUrls
+        : [];
+    const mediaUrls = uniqueStrings(
+      rawMediaUrls.filter((value): value is string => typeof value === "string"),
+    );
+    if (mediaUrls.length > 0) {
+      payload.mediaUrls = mediaUrls;
+    }
+    if (sourceReply.audioAsVoice === true || details.audioAsVoice === true) {
+      payload.audioAsVoice = true;
+    }
+    if (sourceReply.trustedLocalMedia === true || details.trustedLocalMedia === true) {
+      payload.trustedLocalMedia = true;
+    }
+    const ttsSupplement =
+      readRecord(sourceReply.ttsSupplement) ?? readRecord(details.ttsSupplement);
+    const ttsSupplementSpokenText = readStringValue(ttsSupplement?.spokenText);
+    if (ttsSupplementSpokenText) {
+      payload.ttsSupplement = {
+        spokenText: ttsSupplementSpokenText,
+        ...(ttsSupplement?.visibleTextAlreadyDelivered === true
+          ? { visibleTextAlreadyDelivered: true }
+          : {}),
+      };
+    }
   }
   const presentation = normalizeMessagePresentation(sourceReply.presentation);
   if (presentation) {

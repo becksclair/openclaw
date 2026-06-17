@@ -2585,6 +2585,8 @@ describe("Codex app-server forced full access", () => {
       pluginConfig: {},
       env: { OPENCLAW_CODEX_FORCE_FULL_ACCESS: "0" },
       execMode: "auto",
+      modelProvider: "openai",
+      model: "gpt-5.5",
     });
 
     expectRuntimePolicy(runtime, {

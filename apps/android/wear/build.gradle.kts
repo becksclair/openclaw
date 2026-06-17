@@ -23,7 +23,7 @@ plugins {
 
 android {
   namespace = "ai.openclaw.wear"
-  compileSdk = 36
+  compileSdk = 37
 
   signingConfigs {
     if (hasAndroidReleaseSigning) {

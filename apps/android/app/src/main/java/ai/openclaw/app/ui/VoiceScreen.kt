@@ -118,10 +118,11 @@ fun VoiceScreen(
       pendingAction = null
     }
 
-  val landingConversation = landingVoiceConversation(
-    micConversation = micConversation,
-    talkModeConversation = talkModeConversation,
-  )
+  val landingConversation =
+    landingVoiceConversation(
+      micConversation = micConversation,
+      talkModeConversation = talkModeConversation,
+    )
   val voiceActive = micEnabled || micIsSending || talkModeEnabled
   val gatewayReady = gatewayStatus.isVoiceGatewayReady()
   val voiceAttentionStatus =
