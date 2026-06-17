@@ -4,7 +4,7 @@ This file is Bex's fork carry contract for the `openclaw-fork-replay` skill. It 
 
 The replay unit is behavior, not old commits. Reimplement each seam against current upstream and re-prove the behavior through the runtime, config, plugin, or service surface that actually uses it.
 
-Current replay target: `v2026.6.5`.
+Current replay target: `v2026.6.8`.
 
 Replay classification:
 
@@ -12,9 +12,9 @@ Replay classification:
 - Partial-overlap carries: behavior upstream partly covers, but not enough to drop the fork seam.
 - Support/proof carries: replay policy, tooling, tests, or ledger structure. These are not product behavior and should not be treated as runtime seams during conflict triage.
 
-## v2026.6.5 seam necessity review
+## v2026.6.8 seam necessity review
 
-| Seam                                      | Decision              | Importance | v2026.6.5 evidence                                                                                                                                                                                                                                                                                                                                                                        |
+| Seam                                      | Decision              | Importance | v2026.6.8 evidence                                                                                                                                                                                                                                                                                                                                                                        |
 | ----------------------------------------- | --------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Wear OS voice companion                   | Runtime carry         | Critical   | Target still has no `apps/android/wear` module or shared `apps/android/audio` module. Replay carries the watch app, phone Wearable Data Layer relay, audio assembly/playback, and Wear tests.                                                                                                                                                                                             |
 | ACP remote target-backed bridge           | Runtime carry         | Critical   | Target has adjacent ACP `cwd` and backend support, but still lacks `runtime.acp.target`, persistent binding `target` metadata, and the codex-devbox ACP verifier. The private `extensions/acpx-remote` implementation remains outside this repo.                                                                                                                                          |
@@ -42,11 +42,19 @@ Replay classification:
 | CI replay repair guardrails               | Dropped               | Low        | The old v2026.5.18 CI repair context remains stale on v2026.6.5; no source carry.                                                                                                                                                                                                                                                                                                         |
 | Gateway memory pressure reduction         | Runtime carry         | High       | Replay keeps session-store large-string interning and workspace skill snapshot interning, adapted to the moved `src/skills/loading/workspace.ts` path.                                                                                                                                                                                                                                    |
 
-## v2026.6.5 performance patch review
+## v2026.6.8 performance patch review
 
 - Older gateway startup/provider/model metadata patches remain absorbed or superseded by upstream. Replay carries only the still-observed hot-path and lifecycle-cache seams listed above.
 - Session memory pressure remains an active carry: cached session-store clones and workspace skills snapshots intern repeated large skill prompt strings without changing serialized store shape.
 - Stale CI repair guardrails and agent-scoped TTS conversion config are not carried without a current failing proof.
+
+## v2026.6.8 replay proof
+
+- Replay head: `7423299fce` on `bex/replay-2026.6.8`.
+- Focused TypeScript proof passed: replay protocol/ACP/Codex command, then the full focused seam matrix.
+- Android/Wear proof passed: `:app:compilePlayDebugKotlin`, `:wear:compileDebugKotlin`, `:app:testPlayDebugUnitTest`, and `:wear:testDebugUnitTest`.
+- Formatting proof passed for touched TS files plus `:app:ktlintCheck` and `:wear:ktlintCheck`.
+- Package audit passed with zero stale strings, missing impact paths, private lifecycle paths, or missing command paths.
 
 ## v2026.5.22 seam necessity review
 
