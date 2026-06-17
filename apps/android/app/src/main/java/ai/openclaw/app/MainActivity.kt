@@ -47,7 +47,6 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
   private companion object {
     private const val TAG = "OpenClawAssistant"
-    private const val STATE_PENDING_ASSISTANT_START = "openclaw.pendingAssistantStart"
   }
 
   private val viewModel: MainViewModel by viewModels()
@@ -119,16 +118,6 @@ class MainActivity : ComponentActivity() {
     super.onStart()
     foreground = true
     initializedViewModel?.setForeground(true)
-  }
-
-  override fun onSaveInstanceState(outState: Bundle) {
-    super.onSaveInstanceState(outState)
-    outState.putBoolean(STATE_PENDING_ASSISTANT_START, pendingAssistantStart)
-  }
-
-  override fun onRestoreInstanceState(savedInstanceState: Bundle) {
-    super.onRestoreInstanceState(savedInstanceState)
-    pendingAssistantStart = savedInstanceState.getBoolean(STATE_PENDING_ASSISTANT_START, false)
   }
 
   override fun onStop() {

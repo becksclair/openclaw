@@ -165,7 +165,7 @@ class WearAudioRelay internal constructor(
       watchTurnId = activeWatchTurnId
       targetNodeId = activeWatchNodeId
       responseFormat = activeResponseFormat
-      targetSessionKey = activeTargetSessionKey ?: wearTargetSessionKeyProvider()
+      targetSessionKey = activeTargetSessionKey.orEmpty()
     }
     synchronized(audioBufferLock) { audioBuffer.clear() }
     if (transcript.isEmpty()) {
@@ -255,7 +255,7 @@ class WearAudioRelay internal constructor(
       watchTurnId = activeWatchTurnId
       targetNodeId = activeWatchNodeId
       responseFormat = activeResponseFormat
-      targetSessionKey = activeTargetSessionKey ?: wearTargetSessionKeyProvider()
+      targetSessionKey = activeTargetSessionKey.orEmpty()
       capturedFrames =
         synchronized(audioBufferLock) {
           if (audioBuffer.isEmpty()) {
