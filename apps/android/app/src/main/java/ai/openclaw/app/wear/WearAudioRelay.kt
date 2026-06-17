@@ -480,6 +480,7 @@ class WearAudioRelay internal constructor(
       scope.launch {
         try {
           val startedAtMs = SystemClock.elapsedRealtime()
+          if (!isCurrentTurn(counterTurnId)) return@launch
           sendMessageSuspending(audioResponsePath(turnId, format), audioBytes, targetNodeId)
           sendMessageSuspending(WearRelayProtocol.PATH_STATUS, json.encodeToString(WearRelayStatusPayload(state = "processing", message = "Response received", turnId = turnId)).toByteArray(), targetNodeId)
           Log.d(TAG, "audio response send done turn=$turnId format=$format bytes=${audioBytes.size} elapsedMs=${SystemClock.elapsedRealtime() - startedAtMs}")
