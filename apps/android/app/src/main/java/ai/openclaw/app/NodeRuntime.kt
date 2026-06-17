@@ -753,6 +753,9 @@ class NodeRuntime(
   internal val wearAudioRelay: ai.openclaw.app.wear.WearAudioRelay
     get() = wearAudioRelayLazy.value
 
+  internal val canHandleWearRelayMessages: Boolean
+    get() = operatorConnected
+
   private fun syncMainSessionKey(
     agentId: String?,
     gatewayMainKey: String? = null,
@@ -1837,7 +1840,7 @@ class NodeRuntime(
     connectAttemptSeq.incrementAndGet()
     stopActiveVoiceSession()
     if (wearAudioRelayLazy.isInitialized()) {
-      wearAudioRelay.cancel()
+      wearAudioRelay.disconnect()
     }
     connectedEndpoint = null
     activeGatewayAuth = null

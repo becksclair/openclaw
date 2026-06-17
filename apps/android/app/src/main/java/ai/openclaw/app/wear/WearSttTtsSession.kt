@@ -269,13 +269,13 @@ internal class WearSttTtsSession(
             pendingRunIdKeys.set(emptySet())
             transcriptSignal = null
             chatFinalSignal = null
-            transcriptionClosing.set(false)
             val pendingSttSessionId = sttSessionId
             if (pendingSttSessionId != null && !transcriptionClosed) {
               withContext(NonCancellable) {
                 runCatching { closeTranscriptionSession(pendingSttSessionId) }
               }
             }
+            transcriptionClosing.set(false)
             onComplete(this@WearSttTtsSession)
           }
         }
