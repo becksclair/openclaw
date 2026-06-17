@@ -754,9 +754,6 @@ class NodeRuntime(
   internal val wearAudioRelay: ai.openclaw.app.wear.WearAudioRelay
     get() = wearAudioRelayLazy.value
 
-  internal val isWearAudioRelayInitialized: Boolean
-    get() = wearAudioRelayLazy.isInitialized()
-
   internal val canHandleWearRelayMessages: Boolean
     get() = operatorConnected
 

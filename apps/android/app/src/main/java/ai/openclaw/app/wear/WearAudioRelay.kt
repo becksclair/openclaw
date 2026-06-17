@@ -398,6 +398,7 @@ class WearAudioRelay internal constructor(
       activeSession = null
       activeWatchNodeId = null
       activeWatchTurnId = null
+      activeTargetSessionKey = null
     }
   }
 
