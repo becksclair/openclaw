@@ -76,7 +76,7 @@ class VoiceScreenLogicTest {
   }
 
   @Test
-  fun landingVoiceConversationDoesNotShowDictationEntries() {
+  fun landingVoiceConversationPrefersTalkModeEntries() {
     val dictationEntry =
       VoiceConversationEntry(
         id = "dictation-user",
@@ -95,6 +95,24 @@ class VoiceScreenLogicTest {
       landingVoiceConversation(
         micConversation = listOf(dictationEntry),
         talkModeConversation = listOf(talkEntry),
+      ),
+    )
+  }
+
+  @Test
+  fun landingVoiceConversationKeepsDictationEntriesWhenTalkModeIsEmpty() {
+    val dictationEntry =
+      VoiceConversationEntry(
+        id = "dictation-user",
+        role = VoiceConversationRole.User,
+        text = "Dictation turn",
+      )
+
+    assertEquals(
+      listOf(dictationEntry),
+      landingVoiceConversation(
+        micConversation = listOf(dictationEntry),
+        talkModeConversation = emptyList(),
       ),
     )
   }

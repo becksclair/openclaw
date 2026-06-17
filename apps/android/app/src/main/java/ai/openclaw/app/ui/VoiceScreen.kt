@@ -246,9 +246,9 @@ fun VoiceScreen(
 }
 
 internal fun landingVoiceConversation(
-  @Suppress("UNUSED_PARAMETER") micConversation: List<VoiceConversationEntry>,
+  micConversation: List<VoiceConversationEntry>,
   talkModeConversation: List<VoiceConversationEntry>,
-): List<VoiceConversationEntry> = talkModeConversation
+): List<VoiceConversationEntry> = talkModeConversation.ifEmpty { micConversation }
 
 /** Full-screen dictation capture and send state. */
 @Composable
