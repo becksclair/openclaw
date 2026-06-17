@@ -96,6 +96,7 @@ const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModu
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
+const MESSAGE_TOOL_SEND_TEXT_KEYS = ["message", "SendMessage", "content", "text"] as const;
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
   write: REQUIRED_PARAM_GROUPS.write,
@@ -207,6 +208,16 @@ type ToolStartRecord = {
   args: unknown;
   hasRepliedRef?: { value: boolean };
 };
+
+function resolveMessagingToolSendText(args: Record<string, unknown>): string | undefined {
+  for (const key of MESSAGE_TOOL_SEND_TEXT_KEYS) {
+    const text = readStringValue(args[key]);
+    if (text?.trim()) {
+      return text;
+    }
+  }
+  return undefined;
+}
 
 /** Track tool execution start data for after_tool_call hook. */
 const toolStartData = new Map<string, ToolStartRecord>();
@@ -997,7 +1008,9 @@ export function handleToolExecutionStart(
         }
       }
       if (isMessagingSend) {
-        const text = readMessagingText(argsRecord);
+        // Match message-action normalization aliases so final-reply dedupe sees
+        // successful sends even when the model used `text` instead of `message`.
+        const text = resolveMessagingToolSendText(argsRecord);
         if (text) {
           ctx.state.pendingMessagingTexts.set(toolCallId, text);
           ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);

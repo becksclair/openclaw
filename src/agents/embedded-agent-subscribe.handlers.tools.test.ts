@@ -2602,6 +2602,61 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m2")).toBe(false);
   });
 
+  it("commits message action send aliases as delivery evidence", async () => {
+    const cases = [
+      {
+        name: "canonical message wins over alias",
+        args: { message: "canonical message", text: "text alias" },
+        expected: "canonical message",
+      },
+      {
+        name: "SendMessage alias",
+        args: { SendMessage: "send message alias" },
+        expected: "send message alias",
+      },
+      {
+        name: "text alias",
+        args: { text: "hi from text alias" },
+        expected: "hi from text alias",
+      },
+      {
+        name: "blank canonical falls through to alias",
+        args: { message: "   ", text: "text after blank canonical" },
+        expected: "text after blank canonical",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const { ctx } = createTestContext();
+      const toolCallId = `tool-${testCase.name.replaceAll(" ", "-")}`;
+
+      const startEvt: ToolExecutionStartEvent = {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: { action: "send", to: "channel:123", ...testCase.args },
+      };
+
+      await handleToolExecutionStart(ctx, startEvt);
+
+      const endEvt: ToolExecutionEndEvent = {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { ok: true, messageId: "m-1" },
+      };
+
+      await handleToolExecutionEnd(ctx, endEvt);
+
+      expect(ctx.state.messagingToolSentTexts, testCase.name).toEqual([testCase.expected]);
+      expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+        to: "channel:123",
+        text: testCase.expected,
+      });
+    }
+  });
+
   it("commits mediaUrls from tool result payload", async () => {
     const { ctx } = createTestContext();
 
