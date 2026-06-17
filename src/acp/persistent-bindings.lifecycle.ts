@@ -50,12 +50,10 @@ function sessionMatchesConfiguredBinding(params: {
       return false;
     }
   }
-  const desiredTarget = normalizeText(params.spec.target);
-  if (desiredTarget !== undefined) {
-    const currentTarget = (params.meta.runtimeOptions?.target ?? "").trim();
-    if (desiredTarget !== currentTarget) {
-      return false;
-    }
+  const desiredTarget = normalizeText(params.spec.target) ?? "";
+  const currentTarget = (params.meta.runtimeOptions?.target ?? "").trim();
+  if (desiredTarget !== currentTarget) {
+    return false;
   }
   return true;
 }
