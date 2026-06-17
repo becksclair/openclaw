@@ -123,6 +123,10 @@ fun VoiceScreen(
       micConversation = micConversation,
       talkModeConversation = talkModeConversation,
     )
+  val showLandingThinking =
+    micIsSending &&
+      talkModeConversation.isEmpty() &&
+      landingConversation.none { it.role == VoiceConversationRole.Assistant && it.isStreaming }
   val voiceActive = micEnabled || micIsSending || talkModeEnabled
   val gatewayReady = gatewayStatus.isVoiceGatewayReady()
   val voiceAttentionStatus =
@@ -239,7 +243,7 @@ fun VoiceScreen(
 
     VoiceTranscript(
       entries = landingConversation,
-      showThinking = false,
+      showThinking = showLandingThinking,
       modifier = Modifier.weight(1f),
     )
   }

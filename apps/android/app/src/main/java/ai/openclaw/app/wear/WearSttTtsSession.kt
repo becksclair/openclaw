@@ -390,15 +390,11 @@ internal class WearSttTtsSession(
 
   private suspend fun closeTranscriptionSession(sessionId: String) {
     if (!transcriptionClosing.compareAndSet(false, true)) return
-    try {
-      gateway.request(
-        "talk.session.close",
-        buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }.toString(),
-        timeoutMs = 5_000,
-      )
-    } catch (err: Throwable) {
-      throw err
-    }
+    gateway.request(
+      "talk.session.close",
+      buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }.toString(),
+      timeoutMs = 5_000,
+    )
   }
 
   private suspend fun abortChatRun(
