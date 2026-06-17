@@ -332,13 +332,15 @@ internal class WearSttTtsSession(
   }
 
   fun cancel() {
-    if (cancelled.getAndSet(true)) return
-    val runIds = pendingRunIdKeys.getAndSet(emptySet())
-    val chatSessionKey = sessionKey.ifBlank { "main" }
+    val jobToCancel: Job?
     synchronized(startLock) {
-      startJob?.cancel()
+      if (cancelled.getAndSet(true)) return
+      jobToCancel = startJob
       startJob = null
     }
+    val runIds = pendingRunIdKeys.getAndSet(emptySet())
+    val chatSessionKey = sessionKey.ifBlank { "main" }
+    jobToCancel?.cancel()
     transcriptSignal?.cancel()
     chatFinalSignal?.cancel()
     transcriptSignal = null

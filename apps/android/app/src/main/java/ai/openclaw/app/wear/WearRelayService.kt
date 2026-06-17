@@ -38,6 +38,7 @@ class WearRelayService : WearableListenerService() {
       }
       if (!existingRuntime.wearAudioRelay.connect()) {
         Log.d(TAG, "foreground runtime already registered; ignoring service duplicate")
+        sendPhoneNotReadyError(messageEvent)
         return
       }
       existingRuntime.wearAudioRelay.handleWatchMessage(messageEvent.path, messageEvent.data, messageEvent.sourceNodeId)
