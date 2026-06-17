@@ -15,7 +15,7 @@ import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.serialization.encodeToString
@@ -119,6 +119,9 @@ class WearAudioRelay internal constructor(
     val currentTurnId: String?
     synchronized(turnStateLock) {
       if (isRecording) {
+        return
+      }
+      if (activeWatchTurnId != null && !isActiveWatchTurn(turnId)) {
         return
       }
       if (activeWatchTurnId != null && isActiveWatchNode(sourceNodeId) && isActiveWatchTurn(turnId)) {
@@ -378,6 +381,7 @@ class WearAudioRelay internal constructor(
   }
 
   fun disconnect() {
+    scope.coroutineContext.cancelChildren()
     cancel()
     synchronized(listenerRegistrationLock) {
       if (!listenerRegistered) return

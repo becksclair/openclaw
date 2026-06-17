@@ -397,7 +397,6 @@ internal class WearSttTtsSession(
         timeoutMs = 5_000,
       )
     } catch (err: Throwable) {
-      transcriptionClosing.set(false)
       throw err
     }
   }
