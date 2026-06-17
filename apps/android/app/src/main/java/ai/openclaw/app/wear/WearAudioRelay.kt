@@ -46,26 +46,11 @@ class WearAudioRelay internal constructor(
 
   companion object {
     private const val TAG = "WearAudioRelay"
-    private val WATCH_MESSAGE_PATHS =
-      arrayOf(
-        WearRelayProtocol.PATH_START,
-        WearRelayProtocol.PATH_END,
-        WearRelayProtocol.PATH_CANCEL,
-        WearRelayProtocol.PATH_AUDIO_CHUNK,
-        WearRelayProtocol.PATH_TEXT,
-      )
 
     // ~1 minute of 200ms chunks prevents unbounded buffered audio growth.
     private const val MAX_AUDIO_CHUNKS = 300
 
-    internal fun isWatchMessagePath(path: String): Boolean =
-      path.matchesWatchPath(WearRelayProtocol.PATH_START) ||
-        path.matchesWatchPath(WearRelayProtocol.PATH_END) ||
-        path.matchesWatchPath(WearRelayProtocol.PATH_CANCEL) ||
-        path.matchesWatchPath(WearRelayProtocol.PATH_TEXT) ||
-        path.matchesWatchPath(WearRelayProtocol.PATH_AUDIO_CHUNK)
-
-    private fun String.matchesWatchPath(basePath: String): Boolean = this == basePath || startsWith("$basePath/")
+    internal fun isWatchMessagePath(path: String): Boolean = WearRelayProtocol.parseWatchMessagePath(path) != null
   }
 
   private val json = Json { ignoreUnknownKeys = true }
@@ -224,12 +209,14 @@ class WearAudioRelay internal constructor(
       Log.d(TAG, "starting watch turn from first audio chunk")
       startRecording(sourceNodeId, turnId)
     }
-    synchronized(turnStateLock) {
-      if (!isActiveWatchNode(sourceNodeId) || !isActiveWatchTurn(turnId)) {
-        Log.w(TAG, "ignoring audio chunk from non-active watch node")
-        return
+    val stopTarget =
+      synchronized(turnStateLock) {
+        if (!isActiveWatchNode(sourceNodeId) || !isActiveWatchTurn(turnId)) {
+          Log.w(TAG, "ignoring audio chunk from non-active watch node")
+          return
+        }
+        activeWatchNodeId to activeWatchTurnId
       }
-    }
     var shouldStopRecording = false
     synchronized(audioBufferLock) {
       if (audioBuffer.size >= MAX_AUDIO_CHUNKS) {
@@ -239,7 +226,9 @@ class WearAudioRelay internal constructor(
         audioBuffer.add(chunk)
       }
     }
-    if (shouldStopRecording) stopRecording(turnId = activeWatchTurnId)
+    if (shouldStopRecording) {
+      stopRecording(sourceNodeId = stopTarget.first, turnId = stopTarget.second)
+    }
   }
 
   fun stopRecording(
@@ -418,16 +407,7 @@ class WearAudioRelay internal constructor(
     return turnId == null || turnId == activeTurnId
   }
 
-  private fun parseWatchMessagePath(path: String): WatchMessagePath? {
-    for (basePath in WATCH_MESSAGE_PATHS) {
-      if (path == basePath) return WatchMessagePath(basePath, null)
-      val prefix = "$basePath/"
-      if (path.startsWith(prefix)) {
-        return WatchMessagePath(basePath, path.removePrefix(prefix).takeIf { it.isNotEmpty() })
-      }
-    }
-    return null
-  }
+  private fun parseWatchMessagePath(path: String) = WearRelayProtocol.parseWatchMessagePath(path)
 
   private fun parseWearRelayStartPayload(data: ByteArray): WearRelayStartPayload? {
     if (data.isEmpty()) return null
@@ -604,11 +584,6 @@ class WearAudioRelay internal constructor(
       transport.sendToNode(nodeId, path, data)
     }
   }
-
-  private data class WatchMessagePath(
-    val path: String,
-    val turnId: String?,
-  )
 
   private fun audioResponsePath(
     turnId: String?,

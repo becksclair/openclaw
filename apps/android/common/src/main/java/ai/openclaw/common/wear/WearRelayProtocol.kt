@@ -11,6 +11,15 @@ object WearRelayProtocol {
   const val PATH_TEXT = "/openclaw/watch/text"
   const val PATH_AUDIO_CHUNK = "/openclaw/watch/audio/chunk"
 
+  val WATCH_MESSAGE_PATHS =
+    arrayOf(
+      PATH_START,
+      PATH_END,
+      PATH_CANCEL,
+      PATH_AUDIO_CHUNK,
+      PATH_TEXT,
+    )
+
   // Broadcast/status paths.
   const val PATH_STATUS = "/openclaw/watch/status"
   const val PATH_ERROR = "/openclaw/watch/error"
@@ -31,7 +40,23 @@ object WearRelayProtocol {
     basePath: String,
     turnId: String?,
   ): String = turnId?.let { "$basePath/$it" } ?: basePath
+
+  fun parseWatchMessagePath(path: String): WatchMessagePath? {
+    for (basePath in WATCH_MESSAGE_PATHS) {
+      if (path == basePath) return WatchMessagePath(basePath, null)
+      val prefix = "$basePath/"
+      if (path.startsWith(prefix)) {
+        return WatchMessagePath(basePath, path.removePrefix(prefix).takeIf { it.isNotEmpty() })
+      }
+    }
+    return null
+  }
 }
+
+data class WatchMessagePath(
+  val path: String,
+  val turnId: String?,
+)
 
 @Serializable
 data class WearRelayStartPayload(
