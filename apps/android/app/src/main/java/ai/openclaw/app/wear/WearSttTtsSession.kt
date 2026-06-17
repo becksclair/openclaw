@@ -275,7 +275,6 @@ internal class WearSttTtsSession(
                 runCatching { closeTranscriptionSession(pendingSttSessionId) }
               }
             }
-            transcriptionClosing.set(false)
             onComplete(this@WearSttTtsSession)
           }
         }
@@ -441,7 +440,12 @@ internal class WearSttTtsSession(
     val parsedRunId = parseRunId(response) ?: runId
     // Gateway may return a canonical run id; accept both during the transition.
     if (parsedRunId != runId) {
-      pendingRunIdKeys.compareAndSet(initialRunIds, setOf(runId, parsedRunId))
+      val armed = pendingRunIdKeys.compareAndSet(initialRunIds, setOf(runId, parsedRunId))
+      if (!armed && cancelled.get()) {
+        withContext(NonCancellable) {
+          runCatching { abortChatRun(sessionKey.ifBlank { "main" }, parsedRunId) }
+        }
+      }
     }
     return parsedRunId
   }
