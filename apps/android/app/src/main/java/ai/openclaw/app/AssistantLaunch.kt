@@ -49,13 +49,6 @@ fun parseHomeDestinationIntent(intent: Intent?): HomeDestination? {
 fun parseAssistantLaunchIntent(intent: Intent?): AssistantLaunchRequest? {
   val action = intent?.action ?: return null
   return when (action) {
-    Intent.ACTION_ASSIST ->
-      AssistantLaunchRequest(
-        source = "assist",
-        prompt = null,
-        autoSend = false,
-      )
-
     actionAskOpenClaw -> {
       val prompt = intent.getStringExtra(extraAssistantPrompt)?.trim()?.ifEmpty { null }
       AssistantLaunchRequest(

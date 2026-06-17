@@ -1,5 +1,14 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.ambient.AmbientDetails
+import ai.openclaw.wear.ambient.enterAmbientDetails
+import ai.openclaw.wear.ambient.exitAmbientDetails
+import ai.openclaw.wear.ambient.withAmbientTickUpdate
+import ai.openclaw.wear.assistant.AssistantRoleStatus
+import ai.openclaw.wear.assistant.AssistantTrustedStartBridge
+import ai.openclaw.wear.assistant.assistantRoleStatus
+import ai.openclaw.wear.assistant.createAssistantRoleRequestIntent
+import ai.openclaw.wear.assistant.isAssistantLaunchIntent
 import ai.openclaw.wear.ui.WatchFace
 import android.Manifest
 import android.content.Intent
@@ -16,11 +25,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.wear.ambient.AmbientLifecycleObserver
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URI
@@ -37,21 +52,49 @@ class WatchMainActivity : ComponentActivity() {
     private const val EXTRA_DEBUG_PLAYBACK_OPUS_PATH = "openclaw.debugPlaybackOpusPath"
     private const val EXTRA_DEBUG_PLAYBACK_OPUS_URL = "openclaw.debugPlaybackOpusUrl"
     private const val EXTRA_DEBUG_RUN_ID = "openclaw.debugRunId"
+    private const val STATE_PENDING_ASSISTANT_START = "openclaw.pendingAssistantStart"
+    private const val MIC_PERMISSION_TIMEOUT_MS = 20_000L
   }
 
   private val viewModel: WatchViewModel by viewModels()
+  private val assistantRoleStatusState = mutableStateOf(AssistantRoleStatus(available = false, held = false))
+  private val ambientDetailsState = mutableStateOf(AmbientDetails())
+  private lateinit var ambientObserver: AmbientLifecycleObserver
 
   private val micPermissionLauncher =
     registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-      if (isGranted) {
-        viewModel.onPermissionGranted()
-      } else {
-        viewModel.onPermissionDenied()
-      }
+      onMicPermissionResult(isGranted)
+    }
+
+  private var pendingPermissionContinuation: CompletableDeferred<Boolean>? = null
+  private var pendingAssistantStart = false
+
+  private val assistantRoleLauncher =
+    registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+      refreshAssistantRoleStatus()
     }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    ambientObserver =
+      AmbientLifecycleObserver(
+        this,
+        object : AmbientLifecycleObserver.AmbientLifecycleCallback {
+          override fun onEnterAmbient(ambientDetails: AmbientLifecycleObserver.AmbientDetails) {
+            ambientDetailsState.value = enterAmbientDetails(ambientDetails.burnInProtectionRequired)
+          }
+
+          override fun onExitAmbient() {
+            ambientDetailsState.value = exitAmbientDetails()
+          }
+
+          override fun onUpdateAmbient() {
+            ambientDetailsState.value = ambientDetailsState.value.withAmbientTickUpdate()
+          }
+        },
+      )
+    lifecycle.addObserver(ambientObserver)
+    refreshAssistantRoleStatus()
     if (
       ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
       PackageManager.PERMISSION_GRANTED
@@ -60,21 +103,71 @@ class WatchMainActivity : ComponentActivity() {
     }
     setContent {
       val state by viewModel.state.collectAsState()
+      val assistantRoleStatus by assistantRoleStatusState
+      val ambientDetails by ambientDetailsState
       KeepScreenOn(window, state.keepsScreenAwake)
       OpenClawWearTheme {
         WatchFace(
           viewModel = viewModel,
           onRequestMicPermission = { requestMicPermission() },
+          assistantRoleAvailable = assistantRoleStatus.available,
+          assistantRoleHeld = assistantRoleStatus.held,
+          onRequestAssistantRole = { requestAssistantRole() },
+          ambientDetails = ambientDetails,
         )
       }
     }
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.RESUMED) {
+        AssistantTrustedStartBridge.requests.collect {
+          if (AssistantTrustedStartBridge.consumePendingStart()) {
+            handleTrustedAssistantStart()
+          }
+        }
+      }
+    }
+    handleAssistantIntent(intent)
+    consumeTrustedAssistantStartIfPending()
     handleDebugIntent(intent)
+  }
+
+  override fun onDestroy() {
+    if (::ambientObserver.isInitialized) {
+      lifecycle.removeObserver(ambientObserver)
+    }
+    super.onDestroy()
   }
 
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
+    if (isAssistantLaunchIntent(intent)) {
+      Log.d(WatchApp.TAG, "assistant intent foregrounded existing activity")
+    }
+    consumeTrustedAssistantStartIfPending()
     handleDebugIntent(intent)
+  }
+
+  override fun onResume() {
+    super.onResume()
+    refreshAssistantRoleStatus()
+    consumeTrustedAssistantStartIfPending()
+    if (pendingAssistantStart) {
+      pendingAssistantStart = false
+      handleTrustedAssistantStart()
+    }
+  }
+
+  override fun onSaveInstanceState(outState: Bundle) {
+    super.onSaveInstanceState(outState)
+    outState.putBoolean(STATE_PENDING_ASSISTANT_START, pendingPermissionContinuation != null)
+  }
+
+  override fun onRestoreInstanceState(savedInstanceState: Bundle) {
+    super.onRestoreInstanceState(savedInstanceState)
+    if (savedInstanceState.getBoolean(STATE_PENDING_ASSISTANT_START, false)) {
+      pendingAssistantStart = true
+    }
   }
 
   private fun requestMicPermission() {
@@ -87,6 +180,89 @@ class WatchMainActivity : ComponentActivity() {
         micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
       }
     }
+  }
+
+  private suspend fun requestMicPermissionIfMissing(): Boolean {
+    if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+      PackageManager.PERMISSION_GRANTED
+    ) {
+      viewModel.onPermissionGranted()
+      return true
+    }
+    val deferred =
+      pendingPermissionContinuation
+        ?: CompletableDeferred<Boolean>().also {
+          pendingPermissionContinuation = it
+          micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    return try {
+      val granted =
+        withTimeoutOrNull(MIC_PERMISSION_TIMEOUT_MS) {
+          deferred.await()
+        }
+      if (granted == null && pendingPermissionContinuation === deferred) {
+        deferred.complete(false)
+        return false
+      }
+      granted ?: false
+    } finally {
+      if (pendingPermissionContinuation === deferred && deferred.isCompleted) {
+        pendingPermissionContinuation = null
+      }
+    }
+  }
+
+  private fun onMicPermissionResult(isGranted: Boolean) {
+    if (isGranted) {
+      viewModel.onPermissionGranted()
+    } else {
+      viewModel.onPermissionDenied()
+    }
+    pendingPermissionContinuation?.complete(isGranted)
+  }
+
+  private fun handleAssistantIntent(intent: Intent?) {
+    val status = assistantRoleStatusState.value
+    if (!isAssistantLaunchIntent(intent)) return
+    if (!status.held) {
+      Log.d(WatchApp.TAG, "assistant intent foregrounded activity without held role")
+      return
+    }
+    Log.d(WatchApp.TAG, "assistant intent foregrounded activity")
+  }
+
+  private fun handleTrustedAssistantStart() {
+    val status = assistantRoleStatusState.value
+    if (!status.held) {
+      Log.d(WatchApp.TAG, "trusted assistant start ignored without held role")
+      return
+    }
+    Log.d(WatchApp.TAG, "trusted assistant session auto-starting dictation")
+    lifecycleScope.launch {
+      if (requestMicPermissionIfMissing()) {
+        viewModel.onAssistantInvocation()
+      }
+    }
+  }
+
+  private fun consumeTrustedAssistantStartIfPending() {
+    if (AssistantTrustedStartBridge.consumePendingStart()) {
+      handleTrustedAssistantStart()
+    }
+  }
+
+  private fun requestAssistantRole() {
+    val roleRequest = createAssistantRoleRequestIntent(this) ?: return
+    runCatching {
+      assistantRoleLauncher.launch(roleRequest)
+    }.onFailure { err ->
+      Log.w(WatchApp.TAG, "assistant role request unavailable: ${err.message}")
+      refreshAssistantRoleStatus()
+    }
+  }
+
+  private fun refreshAssistantRoleStatus() {
+    assistantRoleStatusState.value = assistantRoleStatus(this)
   }
 
   private fun handleDebugIntent(intent: Intent?) {

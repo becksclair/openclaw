@@ -13,13 +13,8 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class AssistantLaunchTest {
   @Test
-  fun parsesAssistGestureIntent() {
-    val parsed = parseAssistantLaunchIntent(Intent(Intent.ACTION_ASSIST))
-
-    requireNotNull(parsed)
-    assertEquals("assist", parsed.source)
-    assertNull(parsed.prompt)
-    assertFalse(parsed.autoSend)
+  fun ignoresPublicAssistGestureIntent() {
+    assertNull(parseAssistantLaunchIntent(Intent(Intent.ACTION_ASSIST)))
   }
 
   @Test

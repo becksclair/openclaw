@@ -1,10 +1,15 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.assistant.AssistantTrustedStartBridge
+import ai.openclaw.app.assistant.assistantRoleStatus
+import ai.openclaw.app.assistant.isAssistantLaunchIntent
 import ai.openclaw.app.ui.AndroidScreenshotModeScreen
 import ai.openclaw.app.ui.OpenClawTheme
 import ai.openclaw.app.ui.RootScreen
+import android.Manifest
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -40,6 +45,11 @@ import kotlinx.coroutines.withContext
  * Main Android activity that owns Compose UI attachment and runtime UI wiring.
  */
 class MainActivity : ComponentActivity() {
+  private companion object {
+    private const val TAG = "OpenClawAssistant"
+    private const val STATE_PENDING_ASSISTANT_START = "openclaw.pendingAssistantStart"
+  }
+
   private val viewModel: MainViewModel by viewModels()
   private lateinit var permissionRequester: PermissionRequester
   private var initializedViewModel: MainViewModel? = null
@@ -48,6 +58,7 @@ class MainActivity : ComponentActivity() {
   private var didStartViewModelCollectors = false
   private var foreground = false
   private var pendingIntent: Intent? = null
+  private var pendingAssistantStart = false
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -110,6 +121,16 @@ class MainActivity : ComponentActivity() {
     initializedViewModel?.setForeground(true)
   }
 
+  override fun onSaveInstanceState(outState: Bundle) {
+    super.onSaveInstanceState(outState)
+    outState.putBoolean(STATE_PENDING_ASSISTANT_START, pendingAssistantStart)
+  }
+
+  override fun onRestoreInstanceState(savedInstanceState: Bundle) {
+    super.onRestoreInstanceState(savedInstanceState)
+    pendingAssistantStart = savedInstanceState.getBoolean(STATE_PENDING_ASSISTANT_START, false)
+  }
+
   override fun onStop() {
     foreground = false
     initializedViewModel?.setForeground(false)
@@ -121,6 +142,12 @@ class MainActivity : ComponentActivity() {
     setIntent(intent)
     pendingIntent = intent
     initializedViewModel?.let { handleAssistantIntent(viewModel = it, intent = intent) }
+    consumeTrustedAssistantStartIfPending()
+  }
+
+  override fun onResume() {
+    super.onResume()
+    consumeTrustedAssistantStartIfPending()
   }
 
   /**
@@ -134,6 +161,12 @@ class MainActivity : ComponentActivity() {
     pendingIntent?.let { initialIntent ->
       handleAssistantIntent(viewModel = readyViewModel, intent = initialIntent)
       pendingIntent = null
+    }
+    if (pendingAssistantStart) {
+      pendingAssistantStart = false
+      handleTrustedAssistantStart(readyViewModel)
+    } else {
+      consumeTrustedAssistantStartIfPending()
     }
   }
 
@@ -170,6 +203,16 @@ class MainActivity : ComponentActivity() {
         }
       }
     }
+
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.RESUMED) {
+        AssistantTrustedStartBridge.requests.collect {
+          if (AssistantTrustedStartBridge.consumePendingStart()) {
+            handleTrustedAssistantStart(readyViewModel)
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -183,8 +226,44 @@ class MainActivity : ComponentActivity() {
       viewModel.requestHomeDestination(destination)
       return
     }
+    if (isAssistantLaunchIntent(intent)) {
+      Log.d(TAG, "assistant intent foregrounded activity")
+      return
+    }
     val request = parseAssistantLaunchIntent(intent) ?: return
     viewModel.handleAssistantLaunch(request)
+  }
+
+  private fun consumeTrustedAssistantStartIfPending() {
+    val readyViewModel = initializedViewModel ?: return
+    if (AssistantTrustedStartBridge.consumePendingStart()) {
+      handleTrustedAssistantStart(readyViewModel)
+    }
+  }
+
+  private fun handleTrustedAssistantStart(readyViewModel: MainViewModel) {
+    if (!assistantRoleStatus(this).held) {
+      Log.d(TAG, "trusted assistant start ignored without held role")
+      pendingAssistantStart = false
+      return
+    }
+    Log.d(TAG, "trusted assistant session auto-starting dictation")
+    lifecycleScope.launch {
+      pendingAssistantStart = true
+      val granted =
+        runCatching {
+          permissionRequester
+            .requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))
+            .getOrElse(Manifest.permission.RECORD_AUDIO) { false }
+        }.getOrElse { err ->
+          Log.w(TAG, "assistant permission request failed: ${err.message}")
+          false
+        }
+      pendingAssistantStart = false
+      if (granted) {
+        readyViewModel.onAssistantInvocation()
+      }
+    }
   }
 }
 
