@@ -1724,10 +1724,11 @@ class TalkModeManager internal constructor(
   private suspend fun runRealtimeConsult(argsJson: String?): String {
     val message = buildRealtimeConsultPrompt(argsJson)
     val startedAt = System.currentTimeMillis().toDouble() / 1000.0
-    val runId = sendChat(message, session)
+    val targetSessionKey = normalizeSessionKey(mainSessionKey)
+    val runId = sendChat(message, session, targetSessionKey)
     val ok = waitForChatFinal(runId)
     return consumeRunText(runId)
-      ?: waitForAssistantText(session, startedAt, if (ok) 12_000 else 25_000)
+      ?: waitForAssistantText(session, startedAt, if (ok) 12_000 else 25_000, targetSessionKey)
       ?: "OpenClaw finished with no text."
   }
 

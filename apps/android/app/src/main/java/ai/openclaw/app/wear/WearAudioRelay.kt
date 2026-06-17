@@ -634,6 +634,8 @@ private class GoogleWearRelayTransport(
 ) : WearRelayTransport {
   private val messageClient: MessageClient = Wearable.getMessageClient(context)
   private val nodeClient = Wearable.getNodeClient(context)
+  private val listenerLock = Any()
+  private var relayListener: WearRelayMessageListener? = null
   private var messageListener: MessageClient.OnMessageReceivedListener? = null
 
   override fun addListener(listener: WearRelayMessageListener) {
@@ -641,14 +643,22 @@ private class GoogleWearRelayTransport(
       MessageClient.OnMessageReceivedListener { event ->
         listener.onMessage(event.path, event.data, event.sourceNodeId)
       }
-    messageListener = newListener
-    messageClient.addListener(newListener)
+    synchronized(listenerLock) {
+      messageListener?.let { messageClient.removeListener(it) }
+      relayListener = listener
+      messageListener = newListener
+      messageClient.addListener(newListener)
+    }
   }
 
   override fun removeListener(listener: WearRelayMessageListener) {
-    val currentListener = messageListener ?: return
-    messageListener = null
-    messageClient.removeListener(currentListener)
+    synchronized(listenerLock) {
+      if (relayListener != listener) return
+      val currentListener = messageListener ?: return
+      relayListener = null
+      messageListener = null
+      messageClient.removeListener(currentListener)
+    }
   }
 
   override suspend fun connectedNodeIds(): List<String> = nodeClient.connectedNodes.await().map { it.id }
