@@ -786,10 +786,17 @@ internal class WearSttTtsSession(
   }
 }
 
-internal data class WearAudioResponse(
+internal class WearAudioResponse(
   val audioBytes: ByteArray,
   val format: String,
-)
+) {
+  override fun equals(other: Any?): Boolean =
+    other is WearAudioResponse &&
+      format == other.format &&
+      audioBytes.contentEquals(other.audioBytes)
+
+  override fun hashCode(): Int = 31 * audioBytes.contentHashCode() + format.hashCode()
+}
 
 internal fun isOggOpusGatewayAudio(
   outputFormat: String?,
