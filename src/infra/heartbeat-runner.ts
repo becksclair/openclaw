@@ -962,6 +962,9 @@ function inferHeartbeatWakeSourceFromReason(reason?: string): HeartbeatWakeSourc
   if (trimmed.startsWith("cron:")) {
     return "cron";
   }
+  if (trimmed === "notifications-event") {
+    return "notifications-event";
+  }
   if (trimmed === "wake" || trimmed.startsWith("hook:")) {
     return "hook";
   }
@@ -980,7 +983,11 @@ function resolveHeartbeatWakePayloadFlags(params: {
   return {
     isExecEventWake: source === "exec-event",
     isCronWake: source === "cron",
-    isWakePayload: source === "hook" || source === "acp-spawn" || reason === "wake",
+    isWakePayload:
+      source === "hook" ||
+      source === "acp-spawn" ||
+      source === "notifications-event" ||
+      reason === "wake",
   };
 }
 

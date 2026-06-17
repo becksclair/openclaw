@@ -33,7 +33,11 @@ import {
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import { telegramMessagingForTest } from "./outbound/targets.test-helpers.js";
-import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 let previousRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let testRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
@@ -1713,6 +1717,81 @@ Some global directive after tasks.
     expect(calledCtx.Body).toContain("- Keep this top-level directive too.");
     expect(calledCtx.Body).not.toContain("name: inbox");
     expect(calledCtx.Body).not.toContain("name: calendar");
+    replySpy.mockReset();
+  });
+
+  it("runs notification-event wakes even when HEARTBEAT.md tasks are not due", async () => {
+    const tmpDir = await createCaseDir("openclaw-hb-notification-wake");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "HEARTBEAT.md"),
+      `# HEARTBEAT.md
+
+tasks:
+  - name: notification-policy
+    interval: 1h
+    prompt: Check queued notifications and decide whether Bex needs a message.
+`,
+      "utf-8",
+    );
+
+    const nowMs = 1_000_000;
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          heartbeat: { every: "5m", target: "none" },
+        },
+      },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: nowMs,
+          heartbeatTaskState: { "notification-policy": nowMs },
+        },
+      }),
+    );
+    enqueueSystemEvent(
+      "Notification posted (node=node-n1 key=notif-1 package=com.example.chat): Message - Ping",
+      {
+        sessionKey,
+        contextKey: "notification:notif-1",
+      },
+    );
+
+    const replySpy = vi.fn().mockResolvedValue({ text: "No user notification needed" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      source: "notifications-event",
+      intent: "event",
+      reason: "notifications-event",
+      deps: createHeartbeatDeps(sendWhatsApp, {
+        getReplyFromConfig: replySpy,
+        nowMs,
+      }),
+    });
+
+    expect(res.status).toBe("ran");
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    const calledCtx = replyBody(replySpy);
+    expect(calledCtx.Provider).toBe("heartbeat");
+    expect(calledCtx.Body).toContain("Read HEARTBEAT.md");
+    expect(calledCtx.Body).not.toContain("Check queued notifications");
+    expect(peekSystemEventEntries(sessionKey)).toStrictEqual([]);
     replySpy.mockReset();
   });
 
