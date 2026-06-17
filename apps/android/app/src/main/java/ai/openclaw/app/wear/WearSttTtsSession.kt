@@ -113,7 +113,6 @@ internal class WearSttTtsSession(
     private const val INPUT_SAMPLE_RATE_HZ = 24_000
     private const val TRANSCRIPTION_SAMPLE_RATE_HZ = 8_000
     private const val MAX_APPEND_AUDIO_BYTES = 128 * 1024
-    private const val TRANSCRIPTION_READY_TIMEOUT_MS = 8_000L
     private const val TRANSCRIPTION_TIMEOUT_MS = 25_000L
     private const val CHAT_TIMEOUT_MS = 120_000L
     private const val CHAT_HISTORY_FALLBACK_TIMEOUT_MS = 25_000L
@@ -288,7 +287,6 @@ internal class WearSttTtsSession(
     onSessionState: (sessionId: String?, closed: Boolean) -> Unit,
   ): String {
     if (audioFrames.isEmpty()) {
-      onError("No audio recorded")
       return ""
     }
     var transcriptionClosed = false
