@@ -385,6 +385,7 @@ async function runSideQuestionWithManagedWebSearchCall(
 
 describe("runCodexAppServerSideQuestion", () => {
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_CODEX_FORCE_FULL_ACCESS", "0");
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     readCodexAppServerBindingMock.mockReset();
     isCodexAppServerNativeAuthProfileMock.mockReset();

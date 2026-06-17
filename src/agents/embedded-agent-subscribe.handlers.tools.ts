@@ -567,7 +567,12 @@ function readMessagingText(record: Record<string, unknown>): string | undefined 
 
 function queuePendingToolMedia(
   ctx: ToolHandlerContext,
-  mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
+  mediaReply: {
+    mediaUrls: string[];
+    audioAsVoice?: boolean;
+    trustedLocalMedia?: boolean;
+    spokenText?: string;
+  },
 ) {
   const seen = new Set(ctx.state.pendingToolMediaUrls);
   for (const mediaUrl of mediaReply.mediaUrls) {
@@ -582,6 +587,9 @@ function queuePendingToolMedia(
   }
   if (mediaReply.trustedLocalMedia) {
     ctx.state.pendingToolTrustedLocalMedia = true;
+  }
+  if (mediaReply.spokenText) {
+    ctx.state.pendingToolSpokenText = mediaReply.spokenText;
   }
 }
 
@@ -788,6 +796,7 @@ async function emitToolResultOutput(params: {
     mediaUrls,
     ...(mediaReply.audioAsVoice ? { audioAsVoice: true } : {}),
     ...(mediaReply.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
+    ...(mediaReply.spokenText ? { spokenText: mediaReply.spokenText } : {}),
   });
 }
 
