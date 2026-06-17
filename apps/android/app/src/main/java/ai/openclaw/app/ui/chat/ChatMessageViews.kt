@@ -45,8 +45,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
 
-private const val CHAT_BUBBLE_WIDTH_FRACTION = 0.94f
-
 private data class ChatBubbleStyle(
   val alignEnd: Boolean,
   val containerColor: Color,

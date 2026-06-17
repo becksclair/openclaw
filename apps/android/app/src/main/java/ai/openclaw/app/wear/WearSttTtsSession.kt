@@ -374,6 +374,7 @@ internal class WearSttTtsSession(
   ) {
     var offset = 0
     while (offset < audioBytes.size) {
+      coroutineContext.ensureActive()
       val end = minOf(offset + MAX_APPEND_AUDIO_BYTES, audioBytes.size)
       val chunk = audioBytes.copyOfRange(offset, end)
       gateway.request(

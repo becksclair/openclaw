@@ -262,6 +262,7 @@ class WearAudioRelay internal constructor(
             if (isCurrentTurn(counterTurnId)) {
               sendError("No audio recorded", watchTurnId)
             }
+            activeWatchNodeId = null
             activeWatchTurnId = null
             activeTargetSessionKey = null
             null
