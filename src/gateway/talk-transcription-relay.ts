@@ -642,6 +642,29 @@ function takeBufferedTranscriptionAudio(session: TranscriptionRelaySession): Buf
   return mulawAudio;
 }
 
+function resolveBufferedTranscriptionProvider(
+  session: TranscriptionRelaySession,
+): string | undefined {
+  if (session.kind !== "buffered") {
+    throw new Error("Transcription Talk session is not buffered");
+  }
+  const provider = session.provider?.trim();
+  if (provider) {
+    return provider;
+  }
+  if (!session.model?.trim()) {
+    return undefined;
+  }
+  const audioModels = session.context.getRuntimeConfig().tools?.media?.audio?.models ?? [];
+  for (const modelConfig of audioModels) {
+    const configuredProvider = modelConfig.provider?.trim();
+    if (configuredProvider) {
+      return configuredProvider;
+    }
+  }
+  return undefined;
+}
+
 async function transcribeBufferedAudio(
   session: TranscriptionRelaySession,
   mulawAudio: Buffer,
@@ -656,8 +679,9 @@ async function transcribeBufferedAudio(
   if (isFinalizeAborted(session)) {
     throw new TranscriptionCancelledError();
   }
+  const bufferedProvider = resolveBufferedTranscriptionProvider(session);
   const cfg = buildMediaAudioRuntimeConfig(session.context.getRuntimeConfig(), {
-    provider: session.provider,
+    provider: bufferedProvider,
     model: session.model,
   });
   return await transcribeAudioBuffer({
@@ -666,10 +690,10 @@ async function transcribeBufferedAudio(
     mime: "audio/wav",
     cfg,
     timeoutMs: TRANSCRIPTION_FINALIZE_TIMEOUT_MS,
-    ...(session.provider
+    ...(bufferedProvider
       ? {
           activeModel: {
-            provider: session.provider,
+            provider: bufferedProvider,
             ...(session.model ? { model: session.model } : {}),
           },
         }

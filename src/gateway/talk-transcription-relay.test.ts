@@ -91,9 +91,12 @@ function expectTalkEventFields(
   return expectRecordFields(payload.talkEvent, "talk event", expected);
 }
 
-function createContext(events: BroadcastEvent[]) {
+function createContext(
+  events: BroadcastEvent[],
+  runtimeConfig: Record<string, unknown> = { tools: { media: { audio: { enabled: true } } } },
+) {
   return {
-    getRuntimeConfig: () => ({ tools: { media: { audio: { enabled: true } } } }),
+    getRuntimeConfig: () => runtimeConfig,
     broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
       events.push({ event, payload, connIds: [...connIds] });
     },
@@ -309,6 +312,56 @@ describe("talk transcription gateway relay", () => {
     expectTalkEventFields(closePayload, {
       type: "session.closed",
       final: true,
+    });
+  });
+
+  it("uses the configured buffered transcription provider for model-only requests", async () => {
+    const events: BroadcastEvent[] = [];
+    const context = createContext(events, {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            models: [{ provider: "openai-codex", model: "gpt-4o-transcribe" }],
+          },
+        },
+      },
+    });
+
+    const session = createTalkTranscriptionRelaySession({
+      context,
+      connId: "conn-1",
+      transcriptionMode: "buffered",
+      model: "gpt-5.5",
+    });
+    await Promise.resolve();
+
+    sendTalkTranscriptionRelayAudio({
+      transcriptionSessionId: session.transcriptionSessionId,
+      connId: "conn-1",
+      audioBase64: Buffer.from([0xff, 0xff, 0xff, 0xff]).toString("base64"),
+    });
+    stopTalkTranscriptionRelaySession({
+      transcriptionSessionId: session.transcriptionSessionId,
+      connId: "conn-1",
+    });
+
+    await vi.waitFor(() => expect(mocks.transcribeAudioBuffer).toHaveBeenCalledOnce());
+    const transcribeCalls = mocks.transcribeAudioBuffer.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
+    expectRecordFields(transcribeCalls[0]?.[0], "transcribe params", {
+      cfg: {
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              models: [{ provider: "openai-codex", model: "gpt-5.5" }],
+            },
+          },
+        },
+      },
+      activeModel: { provider: "openai-codex", model: "gpt-5.5" },
     });
   });
 
