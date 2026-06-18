@@ -51,6 +51,7 @@ class WearAudioRelay internal constructor(
 
     // ~1 minute of 200ms chunks prevents unbounded buffered audio growth.
     private const val MAX_AUDIO_CHUNKS = 300
+    private const val RECENT_TEXT_TURN_IDS_LIMIT = 32
 
     internal fun isWatchMessagePath(path: String): Boolean = WearRelayProtocol.parseWatchMessagePath(path) != null
   }
@@ -61,6 +62,8 @@ class WearAudioRelay internal constructor(
   private val audioBuffer = mutableListOf<ByteArray>()
   private val audioBufferLock = Any()
   private val turnStateLock = Any()
+  private val recentTextTurnIds = ArrayDeque<String>()
+  private val recentTextTurnIdSet = mutableSetOf<String>()
   private val turnCounter = AtomicLong(0)
   private val watchMessageListener =
     WearRelayMessageListener { path, data, sourceNodeId ->
@@ -164,6 +167,16 @@ class WearAudioRelay internal constructor(
     val responseFormat: String
     val targetSessionKey: String
     synchronized(turnStateLock) {
+      if (activeWatchTurnId != null && !isActiveWatchTurn(turnId)) {
+        return
+      }
+      if (activeWatchTurnId != null && !isActiveWatchNode(sourceNodeId)) {
+        Log.w(TAG, "ignoring text turn from non-active watch node")
+        return
+      }
+      if (isRecentTextTurnId(turnId)) {
+        return
+      }
       turnCounter.incrementAndGet()
       activeSession?.cancel()
       activeSession = null
@@ -177,6 +190,7 @@ class WearAudioRelay internal constructor(
       targetNodeId = activeWatchNodeId
       responseFormat = activeResponseFormat
       targetSessionKey = activeTargetSessionKey.orEmpty()
+      rememberTextTurnId(turnId)
     }
     synchronized(audioBufferLock) { audioBuffer.clear() }
     if (transcript.isEmpty()) {
@@ -421,6 +435,17 @@ class WearAudioRelay internal constructor(
   private fun isActiveWatchTurn(turnId: String?): Boolean {
     val activeTurnId = activeWatchTurnId ?: return true
     return turnId == null || turnId == activeTurnId
+  }
+
+  private fun isRecentTextTurnId(turnId: String?): Boolean = turnId != null && recentTextTurnIdSet.contains(turnId)
+
+  private fun rememberTextTurnId(turnId: String?) {
+    if (turnId == null || !recentTextTurnIdSet.add(turnId)) return
+    recentTextTurnIds.addLast(turnId)
+    while (recentTextTurnIds.size > RECENT_TEXT_TURN_IDS_LIMIT) {
+      val removed = recentTextTurnIds.removeFirst()
+      recentTextTurnIdSet.remove(removed)
+    }
   }
 
   private fun parseWatchMessagePath(path: String) = WearRelayProtocol.parseWatchMessagePath(path)
