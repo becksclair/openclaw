@@ -5,9 +5,11 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
+import kotlin.coroutines.coroutineContext
 
 object AndroidCompressedAudioDecoder {
   data class DecodedPcm(
@@ -62,6 +64,7 @@ object AndroidCompressedAudioDecoder {
       var outputChannels = inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
 
       while (!outputDone) {
+        coroutineContext.ensureActive()
         if (!inputDone) {
           val inputIndex = codec.dequeueInputBuffer(10_000)
           if (inputIndex >= 0) {
@@ -102,6 +105,7 @@ object AndroidCompressedAudioDecoder {
                 outputBuffer.limit(info.offset + info.size)
                 val chunk = ByteArray(info.size)
                 outputBuffer.get(chunk)
+                coroutineContext.ensureActive()
                 decoded.write(chunk)
               }
               outputDone = (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0

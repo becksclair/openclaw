@@ -9,6 +9,7 @@ import android.app.role.RoleManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.provider.Settings
 import android.speech.RecognitionService
 
@@ -59,25 +60,11 @@ internal fun resolveRecognitionServiceComponent(context: Context): ComponentName
   if (configured?.packageName == packageName) {
     return rememberedRecognitionService(context)
       ?.takeIf { componentExists(services, it) }
-      ?: fallbackRecognitionService(context, services)
+      ?: solePlatformRecognitionService(context, services)
   }
   if (configured != null && componentExists(services, configured)) {
     rememberRecognitionService(context, configured)
     return configured
-  }
-  return null
-}
-
-private fun fallbackRecognitionService(
-  context: Context,
-  services: List<android.content.pm.ResolveInfo>,
-): ComponentName? {
-  for (info in services) {
-    val serviceInfo = info.serviceInfo ?: continue
-    if (serviceInfo.packageName == context.packageName) continue
-    val fallback = ComponentName(serviceInfo.packageName, serviceInfo.name)
-    rememberRecognitionService(context, fallback)
-    return fallback
   }
   return null
 }
@@ -92,6 +79,25 @@ private fun rememberConfiguredRecognitionService(context: Context) {
       ?.takeIf { componentExists(services, it) }
       ?: return
   rememberRecognitionService(context, configured)
+}
+
+private fun solePlatformRecognitionService(
+  context: Context,
+  services: List<android.content.pm.ResolveInfo>,
+): ComponentName? {
+  val candidates =
+    services.mapNotNull { info ->
+      val serviceInfo = info.serviceInfo ?: return@mapNotNull null
+      if (serviceInfo.packageName == context.packageName) return@mapNotNull null
+      if (!serviceInfo.isPlatformService()) return@mapNotNull null
+      ComponentName(serviceInfo.packageName, serviceInfo.name)
+    }
+  return candidates.singleOrNull()?.also { rememberRecognitionService(context, it) }
+}
+
+private fun android.content.pm.ServiceInfo.isPlatformService(): Boolean {
+  val flags = applicationInfo?.flags ?: return false
+  return flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
 }
 
 private fun recognitionServices(context: Context) = context.packageManager.queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), 0)

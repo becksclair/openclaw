@@ -123,6 +123,59 @@ class WearAudioRelayTextTurnTest {
     }
 
   @Test
+  fun duplicateTextTurnDoesNotRestartChatRun() =
+    runTest {
+      val gateway = FakeWearRelayGateway()
+      val transport = FakeWearRelayTransport()
+      val relay =
+        WearAudioRelay(
+          gateway = gateway,
+          wearTargetSessionKeyProvider = { "wear-main" },
+          transport = transport,
+          scope = this,
+        )
+      val path = "/openclaw/watch/text/turn-1"
+      val payload = """{"text":"hello sky","acceptedResponseFormats":["mp3","pcm_24000"]}""".toByteArray()
+
+      relay.handleWatchMessage(path, payload, sourceNodeId = "watch-node")
+      waitForGatewayMethod(gateway, "chat.send")
+      relay.handleWatchMessage(path, payload, sourceNodeId = "watch-node")
+      delay(50)
+
+      assertEquals(1, gateway.requests.count { it.method == "chat.send" })
+      assertFalse(gateway.methods.contains("chat.abort"))
+    }
+
+  @Test
+  fun completedTextTurnRedeliveryDoesNotRestartChatRun() =
+    runTest {
+      val gateway = FakeWearRelayGateway()
+      val transport = FakeWearRelayTransport()
+      val relay =
+        WearAudioRelay(
+          gateway = gateway,
+          wearTargetSessionKeyProvider = { "wear-main" },
+          transport = transport,
+          scope = this,
+        )
+      val path = "/openclaw/watch/text/turn-complete"
+      val payload = """{"text":"hello sky","acceptedResponseFormats":["mp3","pcm_24000"]}""".toByteArray()
+
+      relay.handleWatchMessage(path, payload, sourceNodeId = "watch-node")
+      waitForGatewayMethod(gateway, "chat.send")
+      relay.handleGatewayEvent(
+        "chat",
+        """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"hi back"}}""",
+      )
+      waitForSentPath(transport, "/openclaw/watch/audio/turn-complete/format/mp3")
+      relay.handleWatchMessage(path, payload, sourceNodeId = "watch-node")
+      delay(50)
+
+      assertEquals(1, gateway.requests.count { it.method == "chat.send" })
+      assertFalse(gateway.methods.contains("chat.abort"))
+    }
+
+  @Test
   fun blankTextTurnReturnsErrorWithoutChatRun() =
     runTest {
       val gateway = FakeWearRelayGateway()
@@ -215,6 +268,48 @@ class WearAudioRelayTextTurnTest {
       assertEquals("turn-big", doneRoot["turnId"]?.jsonPrimitive?.content)
       assertEquals("mp3", doneRoot["format"]?.jsonPrimitive?.content)
     }
+
+  @Test
+  fun largeCompressedTalkSpeakUsesChunkedAudioDelivery() =
+    runTest {
+      val gateway =
+        FakeWearRelayGateway(
+          finalAudioBytes = null,
+          speakAudioBytes = ByteArray(385 * 1024) { 1 },
+        )
+      val transport = FakeWearRelayTransport()
+      val relay =
+        WearAudioRelay(
+          gateway = gateway,
+          wearTargetSessionKeyProvider = { "wear-main" },
+          transport = transport,
+          scope = this,
+        )
+
+      relay.handleWatchMessage(
+        "/openclaw/watch/text/turn-large-speak",
+        """{"text":"tell me a long story","acceptedResponseFormats":["mp3","pcm_24000"]}""".toByteArray(),
+        sourceNodeId = "watch-node",
+      )
+      waitForGatewayMethod(gateway, "chat.send")
+      relay.handleGatewayEvent(
+        "chat",
+        """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"long story"}}""",
+      )
+      waitForSentPath(transport, "/openclaw/watch/audio/turn-large-speak/done")
+
+      assertTrue(gateway.methods.contains("talk.speak"))
+      val paths = transport.sent.map { it.path }
+      assertTrue(paths.contains("/openclaw/watch/audio/turn-large-speak/0"))
+      assertTrue(paths.contains("/openclaw/watch/audio/turn-large-speak/1"))
+      val doneRoot =
+        json
+          .parseToJsonElement(transport.sent.single { it.path == "/openclaw/watch/audio/turn-large-speak/done" }.data.decodeToString())
+          .jsonObject
+      assertEquals("5", doneRoot["chunkCount"]?.jsonPrimitive?.content)
+      assertEquals("turn-large-speak", doneRoot["turnId"]?.jsonPrimitive?.content)
+      assertEquals("mp3", doneRoot["format"]?.jsonPrimitive?.content)
+    }
 }
 
 private suspend fun waitForGatewayMethod(
@@ -240,7 +335,8 @@ private suspend fun waitForSentPath(
 }
 
 private class FakeWearRelayGateway(
-  private val finalAudioBytes: ByteArray = byteArrayOf(1, 2, 3, 4),
+  private val finalAudioBytes: ByteArray? = byteArrayOf(1, 2, 3, 4),
+  private val speakAudioBytes: ByteArray = byteArrayOf(1, 2, 3, 4),
 ) : WearGateway {
   val requests = mutableListOf<Request>()
 
@@ -257,7 +353,7 @@ private class FakeWearRelayGateway(
       "talk.session.create" -> """{"transcriptionSessionId":"stt-1"}"""
       "chat.send" -> """{"runId":"run-1"}"""
       "talk.speak" ->
-        """{"audioBase64":"${Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3, 4))}","outputFormat":"opus"}"""
+        """{"audioBase64":"${Base64.getEncoder().encodeToString(speakAudioBytes)}","outputFormat":"mp3","mimeType":"audio/mpeg","fileExtension":".mp3"}"""
       else -> "{}"
     }
   }
@@ -268,6 +364,13 @@ private class FakeWearRelayGateway(
     timeoutMs: Long,
   ): GatewaySession.RpcResult {
     requests += Request(method = method, paramsJson = paramsJson)
+    if (finalAudioBytes == null) {
+      return GatewaySession.RpcResult(
+        ok = true,
+        payloadJson = """{"found":false,"unavailableReason":"missing"}""",
+        error = null,
+      )
+    }
     return GatewaySession.RpcResult(
       ok = true,
       payloadJson =

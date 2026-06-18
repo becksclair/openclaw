@@ -3,6 +3,7 @@ package ai.openclaw.app.assistant
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.ResolveInfo
 import android.content.pm.ServiceInfo
 import android.provider.Settings
@@ -94,9 +95,23 @@ class PhoneAssistantEntryTest {
   }
 
   @Test
-  fun resolverSkipsConfiguredOpenClawRecognizerStub() {
+  fun resolverSkipsConfiguredOpenClawRecognizerStubWithoutRememberedDelegate() {
     addRecognitionService(context.packageName, "ai.openclaw.app.assistant.OpenClawRecognitionService")
     addRecognitionService("com.google.android.tts", "com.google.android.tts.GoogleTTSRecognitionService")
+    Settings.Secure.putString(
+      context.contentResolver,
+      "voice_recognition_service",
+      ComponentName(context.packageName, "ai.openclaw.app.assistant.OpenClawRecognitionService")
+        .flattenToString(),
+    )
+
+    assertNull(resolveRecognitionServiceComponent(context))
+  }
+
+  @Test
+  fun resolverUsesSolePlatformRecognizerWhenConfiguredRecognizerBecomesOpenClawStub() {
+    addRecognitionService(context.packageName, "ai.openclaw.app.assistant.OpenClawRecognitionService")
+    addRecognitionService("com.google.android.tts", "com.google.android.tts.GoogleTTSRecognitionService", platform = true)
     Settings.Secure.putString(
       context.contentResolver,
       "voice_recognition_service",
@@ -142,6 +157,7 @@ class PhoneAssistantEntryTest {
   private fun addRecognitionService(
     packageName: String,
     className: String,
+    platform: Boolean = false,
   ) {
     val resolveInfo =
       ResolveInfo().apply {
@@ -149,6 +165,11 @@ class PhoneAssistantEntryTest {
           ServiceInfo().apply {
             this.packageName = packageName
             name = className
+            applicationInfo =
+              ApplicationInfo().apply {
+                this.packageName = packageName
+                flags = if (platform) ApplicationInfo.FLAG_SYSTEM else 0
+              }
           }
       }
     shadowOf(context.packageManager)

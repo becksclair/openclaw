@@ -20,6 +20,7 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -108,6 +109,7 @@ class WatchViewModel private constructor(
   private var activeTurnId: String? = null
   private var processingWatchdogJob: Job? = null
   private var assistantStartJob: Job? = null
+  private var compressedDecodeJob: Job? = null
 
   private fun cancelAssistantStartJob() {
     assistantStartJob?.cancel()
@@ -119,6 +121,8 @@ class WatchViewModel private constructor(
     isDictating = false
     activeTurnId = null
     cancelAssistantStartJob()
+    compressedDecodeJob?.cancel()
+    compressedDecodeJob = null
   }
 
   private val recordingLock = Any()
@@ -458,36 +462,40 @@ class WatchViewModel private constructor(
     val turnId = debugRunId?.takeIf { it.isNotBlank() } ?: "direct-compressed-playback"
     Log.d(DEBUG_TURN_TAG, "starting debug compressed playback bytes=${audioBytes.size} extension=$fileExtension")
     transitionTo(WatchState.Processing, "Decoding debug audio...")
-    viewModelScope.launch {
-      val startedAtMs = System.currentTimeMillis()
-      val decoded =
-        try {
-          compressedAudioDecoder.decodeToPcm48kMono(audioBytes, fileExtension)
-        } catch (err: Throwable) {
-          Log.w(DEBUG_TURN_TAG, "debug compressed decode failed: ${err.message}")
-          if (generation != debugGeneration.get() || _state.value != WatchState.Processing) return@launch
-          failTurn("Audio decode unavailable")
-          return@launch
-        }
-      if (generation != debugGeneration.get() || _state.value != WatchState.Processing) return@launch
-      val decodeMs = System.currentTimeMillis() - startedAtMs
-      Log.d(
-        DEBUG_TURN_TAG,
-        "debug compressed decoded inputBytes=${audioBytes.size} pcmBytes=${decoded.pcm48kMono.size} sourceRate=${decoded.sourceSampleRateHz} sourceChannels=${decoded.sourceChannels} decodeMs=$decodeMs",
-      )
-      transitionTo(WatchState.Playing, "Playing debug audio...")
-      val playback = playbackGeneration.incrementAndGet()
-      audioPlayer.playPcm48k(
-        decoded.pcm48kMono,
-        onComplete = {
-          completePlayback(playback)
-        },
-        onError = {
-          failPlayback(playback)
-        },
-        debugTurnId = turnId,
-      )
-    }
+    compressedDecodeJob?.cancel()
+    val decodeJob =
+      viewModelScope.launch {
+        val startedAtMs = System.currentTimeMillis()
+        val decoded =
+          try {
+            compressedAudioDecoder.decodeToPcm48kMono(audioBytes, fileExtension)
+          } catch (err: Throwable) {
+            if (err is CancellationException) throw err
+            Log.w(DEBUG_TURN_TAG, "debug compressed decode failed: ${err.message}")
+            if (generation != debugGeneration.get() || _state.value != WatchState.Processing) return@launch
+            failTurn("Audio decode unavailable")
+            return@launch
+          }
+        if (generation != debugGeneration.get() || _state.value != WatchState.Processing) return@launch
+        val decodeMs = System.currentTimeMillis() - startedAtMs
+        Log.d(
+          DEBUG_TURN_TAG,
+          "debug compressed decoded inputBytes=${audioBytes.size} pcmBytes=${decoded.pcm48kMono.size} sourceRate=${decoded.sourceSampleRateHz} sourceChannels=${decoded.sourceChannels} decodeMs=$decodeMs",
+        )
+        transitionTo(WatchState.Playing, "Playing debug audio...")
+        val playback = playbackGeneration.incrementAndGet()
+        audioPlayer.playPcm48k(
+          decoded.pcm48kMono,
+          onComplete = {
+            completePlayback(playback)
+          },
+          onError = {
+            failPlayback(playback)
+          },
+          debugTurnId = turnId,
+        )
+      }
+    trackCompressedDecodeJob(decodeJob)
   }
 
   private fun playPcmResponse(response: PhoneRelayAudioResponse) {
@@ -510,46 +518,59 @@ class WatchViewModel private constructor(
     // Response has arrived; the no-response watchdog must not fire during decode.
     processingWatchdogJob?.cancel()
     processingWatchdogJob = null
-    viewModelScope.launch {
-      val startedAtMs = System.currentTimeMillis()
-      val extension =
-        when (response.format) {
-          WearRelayProtocol.RESPONSE_FORMAT_MP3 -> ".mp3"
-          else -> ".opus"
-        }
-      val volumeGain =
-        when (response.format) {
-          WearRelayProtocol.RESPONSE_FORMAT_MP3 -> FINAL_MP3_AUDIO_GAIN
-          else -> 1.0
-        }
-      val decoded =
-        try {
-          compressedAudioDecoder.decodeToPcm48kMono(response.audioBytes, extension, volumeGain)
-        } catch (err: Throwable) {
-          Log.w(DEBUG_TURN_TAG, "response decode failed: ${err.message}")
-          if (!isActiveTurnResponse(response.turnId) || _state.value != WatchState.Processing) return@launch
-          failTurn("Audio decode unavailable")
-          return@launch
-        }
-      if (!isActiveTurnResponse(response.turnId) || _state.value != WatchState.Processing) return@launch
-      activeTurnId = null
-      val decodeMs = System.currentTimeMillis() - startedAtMs
-      Log.d(
-        DEBUG_TURN_TAG,
-        "response decoded format=${response.format} inputBytes=${response.audioBytes.size} pcmBytes=${decoded.pcm48kMono.size} sourceRate=${decoded.sourceSampleRateHz} sourceChannels=${decoded.sourceChannels} decodeMs=$decodeMs",
-      )
-      transitionTo(WatchState.Playing, "Playing response...")
-      val playback = playbackGeneration.incrementAndGet()
-      audioPlayer.playPcm48k(
-        decoded.pcm48kMono,
-        onComplete = {
-          completePlayback(playback)
-        },
-        onError = {
-          failPlayback(playback)
-        },
-        debugTurnId = response.turnId,
-      )
+    compressedDecodeJob?.cancel()
+    val decodeJob =
+      viewModelScope.launch {
+        val startedAtMs = System.currentTimeMillis()
+        val extension =
+          when (response.format) {
+            WearRelayProtocol.RESPONSE_FORMAT_MP3 -> ".mp3"
+            else -> ".opus"
+          }
+        val volumeGain =
+          when (response.format) {
+            WearRelayProtocol.RESPONSE_FORMAT_MP3 -> FINAL_MP3_AUDIO_GAIN
+            else -> 1.0
+          }
+        val decoded =
+          try {
+            compressedAudioDecoder.decodeToPcm48kMono(response.audioBytes, extension, volumeGain)
+          } catch (err: Throwable) {
+            if (err is CancellationException) throw err
+            Log.w(DEBUG_TURN_TAG, "response decode failed: ${err.message}")
+            if (!isActiveTurnResponse(response.turnId) || _state.value != WatchState.Processing) return@launch
+            failTurn("Audio decode unavailable")
+            return@launch
+          }
+        if (!isActiveTurnResponse(response.turnId) || _state.value != WatchState.Processing) return@launch
+        activeTurnId = null
+        val decodeMs = System.currentTimeMillis() - startedAtMs
+        Log.d(
+          DEBUG_TURN_TAG,
+          "response decoded format=${response.format} inputBytes=${response.audioBytes.size} pcmBytes=${decoded.pcm48kMono.size} sourceRate=${decoded.sourceSampleRateHz} sourceChannels=${decoded.sourceChannels} decodeMs=$decodeMs",
+        )
+        transitionTo(WatchState.Playing, "Playing response...")
+        val playback = playbackGeneration.incrementAndGet()
+        audioPlayer.playPcm48k(
+          decoded.pcm48kMono,
+          onComplete = {
+            completePlayback(playback)
+          },
+          onError = {
+            failPlayback(playback)
+          },
+          debugTurnId = response.turnId,
+        )
+      }
+    trackCompressedDecodeJob(decodeJob)
+  }
+
+  private fun trackCompressedDecodeJob(decodeJob: Job) {
+    compressedDecodeJob = decodeJob
+    decodeJob.invokeOnCompletion {
+      if (compressedDecodeJob == decodeJob) {
+        compressedDecodeJob = null
+      }
     }
   }
 
