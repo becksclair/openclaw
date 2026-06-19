@@ -11,7 +11,7 @@ pnpm install
 [[actions]]
 name = "Build"
 icon = "tool"
-command = "pnpm build && pnpm ui:build"
+command = "pnpm clean:dist && pnpm build"
 
 [[actions]]
 name = "Restart Gateway"
