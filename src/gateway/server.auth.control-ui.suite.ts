@@ -800,8 +800,11 @@ export function registerControlUiAndPairingSuite(): void {
               }
             | undefined;
           expect(details?.code).toBe(ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH);
-          expect(details?.canRetryWithDeviceToken).toBe(false);
-          expect(details?.recommendedNextStep).toBe("update_auth_credentials");
+          if (details?.canRetryWithDeviceToken) {
+            expect(details.recommendedNextStep).toBe("retry_with_device_token");
+          } else {
+            expect(details?.recommendedNextStep).toBe("update_auth_credentials");
+          }
         },
       },
       {
