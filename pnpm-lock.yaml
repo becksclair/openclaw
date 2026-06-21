@@ -26,6 +26,7 @@ overrides:
   minimatch: 10.2.5
   path-to-regexp: 8.4.0
   qs: 6.15.2
+  undici: 8.5.0
   node-domexception: npm:@nolyfill/domexception@1.0.28
   typebox: 1.1.39
   tar: 7.5.16
@@ -3178,7 +3179,7 @@ packages:
     resolution: {integrity: sha512-sftHnW69NHQqLjCxBTvQ8f/eQl+peZ5pHCBQtuTWBbeuYRHZ0/GXVTmw/O/YKsShMbqPWhJB0UYtPPdvCUSS8w==}
     engines: {node: '>=22.19.0'}
     peerDependencies:
-      undici: '>=8.3.0 <9'
+      undici: 8.5.0
 
   '@opentelemetry/api-logs@0.219.0':
     resolution: {integrity: sha512-FFx7YnaYJlIjqWW/AG/yAZ0L/NEY724PipXXXQLdtZPbLwBGbUMTGL1i/esI56TWfTUXxhLfpgrnWJCG8aUJyg==}

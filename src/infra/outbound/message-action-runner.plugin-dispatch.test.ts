@@ -96,7 +96,9 @@ async function waitForAssertion(assertion: () => void) {
       return;
     } catch (err) {
       lastError = err;
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     }
   }
   throw lastError;

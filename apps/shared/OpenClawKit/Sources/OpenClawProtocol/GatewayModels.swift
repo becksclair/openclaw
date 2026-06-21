@@ -3419,6 +3419,7 @@ public struct TalkCatalogResult: Codable, Sendable {
 
 public struct TalkClientCreateParams: Codable, Sendable {
     public let sessionkey: String?
+    public let spawnedby: String?
     public let provider: String?
     public let model: String?
     public let voice: String?
@@ -3432,6 +3433,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
 
     public init(
         sessionkey: String?,
+        spawnedby: String?,
         provider: String?,
         model: String?,
         voice: String?,
@@ -3444,6 +3446,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
         brain: AnyCodable?)
     {
         self.sessionkey = sessionkey
+        self.spawnedby = spawnedby
         self.provider = provider
         self.model = model
         self.voice = voice
@@ -3458,6 +3461,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case spawnedby = "spawnedBy"
         case provider
         case model
         case voice
@@ -3569,6 +3573,7 @@ public struct TalkAgentControlResult: Codable, Sendable {
 
 public struct TalkClientToolCallParams: Codable, Sendable {
     public let sessionkey: String
+    public let spawnedby: String?
     public let callid: String
     public let name: String
     public let args: AnyCodable?
@@ -3576,12 +3581,14 @@ public struct TalkClientToolCallParams: Codable, Sendable {
 
     public init(
         sessionkey: String,
+        spawnedby: String?,
         callid: String,
         name: String,
         args: AnyCodable?,
         relaysessionid: String?)
     {
         self.sessionkey = sessionkey
+        self.spawnedby = spawnedby
         self.callid = callid
         self.name = name
         self.args = args
@@ -3590,6 +3597,7 @@ public struct TalkClientToolCallParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case spawnedby = "spawnedBy"
         case callid = "callId"
         case name
         case args
@@ -7279,8 +7287,35 @@ public struct ChatMessageGetResult: Codable, Sendable {
     }
 }
 
+public struct ChatFinalAudioGetParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let runid: String
+    public let waitms: Int?
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        runid: String,
+        waitms: Int?)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.runid = runid
+        self.waitms = waitms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case runid = "runId"
+        case waitms = "waitMs"
+    }
+}
+
 public struct ChatSendParams: Codable, Sendable {
     public let sessionkey: String
+    public let spawnedby: String?
     public let agentid: String?
     public let sessionid: String?
     public let message: String
@@ -7302,6 +7337,7 @@ public struct ChatSendParams: Codable, Sendable {
 
     public init(
         sessionkey: String,
+        spawnedby: String?,
         agentid: String? = nil,
         sessionid: String?,
         message: String,
@@ -7382,6 +7418,7 @@ public struct ChatSendParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case spawnedby = "spawnedBy"
         case agentid = "agentId"
         case sessionid = "sessionId"
         case message
