@@ -1010,7 +1010,14 @@ jobs:
           install-bun: "false"
 
       - name: Configure Node test resources
-        run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+        env:
+          OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
+        run: |
+          if [[ "$OPENCLAW_VITEST_SHARD_NAME" == "core-unit-ui" ]]; then
+            echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
+          else
+            echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+          fi
 
       - name: Run Node 22 compatibility
         env:
