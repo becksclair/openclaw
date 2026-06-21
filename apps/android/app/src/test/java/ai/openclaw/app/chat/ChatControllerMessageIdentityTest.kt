@@ -255,4 +255,184 @@ class ChatControllerMessageIdentityTest {
 
     assertEquals(listOf("remote-old-user", "local-user"), merged.map { it.id })
   }
+
+  @Test
+  fun pendingRunResolvedInHistorySeesPersistedUserAndAssistantReply() {
+    val optimistic =
+      ChatMessage(
+        id = "local-user",
+        role = "user",
+        content = listOf(ChatMessageContent(type = "text", text = "hello from phone")),
+        timestampMs = 1000L,
+        idempotencyKey = "run-1:user",
+      )
+    val remoteUser = optimistic.copy(id = "remote-user", timestampMs = 1500L)
+    val remoteAssistant =
+      ChatMessage(
+        id = "remote-assistant",
+        role = "assistant",
+        content = listOf(ChatMessageContent(type = "text", text = "I got it.")),
+        timestampMs = 2000L,
+        idempotencyKey = "run-1:assistant",
+      )
+
+    val resolved = pendingRunResolvedInHistory(incoming = listOf(remoteUser, remoteAssistant), optimistic = optimistic)
+
+    assertEquals(true, resolved)
+  }
+
+  @Test
+  fun pendingRunResolvedInHistoryIgnoresAssistantBeforePersistedUser() {
+    val optimistic =
+      ChatMessage(
+        id = "local-user",
+        role = "user",
+        content = listOf(ChatMessageContent(type = "text", text = "hello from phone")),
+        timestampMs = 1000L,
+        idempotencyKey = "run-1:user",
+      )
+    val oldAssistant =
+      ChatMessage(
+        id = "old-assistant",
+        role = "assistant",
+        content = listOf(ChatMessageContent(type = "text", text = "Earlier reply.")),
+        timestampMs = 500L,
+        idempotencyKey = "run-1:assistant",
+      )
+    val remoteUser = optimistic.copy(id = "remote-user", timestampMs = 1500L)
+
+    val resolved = pendingRunResolvedInHistory(incoming = listOf(oldAssistant, remoteUser), optimistic = optimistic)
+
+    assertEquals(false, resolved)
+  }
+
+  @Test
+  fun pendingRunResolvedInHistoryIgnoresDifferentRunAssistantAfterPersistedUser() {
+    val optimistic =
+      ChatMessage(
+        id = "local-user-1",
+        role = "user",
+        content = listOf(ChatMessageContent(type = "text", text = "first pending turn")),
+        timestampMs = 1000L,
+        idempotencyKey = "run-1:user",
+      )
+    val remoteUser1 = optimistic.copy(id = "remote-user-1", timestampMs = 1100L)
+    val remoteUser2 =
+      ChatMessage(
+        id = "remote-user-2",
+        role = "user",
+        content = listOf(ChatMessageContent(type = "text", text = "second pending turn")),
+        timestampMs = 1200L,
+        idempotencyKey = "run-2:user",
+      )
+    val remoteAssistant2 =
+      ChatMessage(
+        id = "remote-assistant-2",
+        role = "assistant",
+        content = listOf(ChatMessageContent(type = "text", text = "reply to the second turn")),
+        timestampMs = 1300L,
+        idempotencyKey = "run-2:assistant",
+      )
+
+    val resolved =
+      pendingRunResolvedInHistory(
+        incoming = listOf(remoteUser1, remoteUser2, remoteAssistant2),
+        optimistic = optimistic,
+      )
+
+    assertEquals(false, resolved)
+  }
+
+  @Test
+  fun pendingRunResolvedInHistoryAcceptsExactFinalMirrorIdempotencyKey() {
+    val optimistic =
+      ChatMessage(
+        id = "local-user",
+        role = "user",
+        content = listOf(ChatMessageContent(type = "text", text = "hello from phone")),
+        timestampMs = 1000L,
+        idempotencyKey = "run-1:user",
+      )
+    val remoteUser = optimistic.copy(id = "remote-user", timestampMs = 1500L)
+    val remoteAssistant =
+      ChatMessage(
+        id = "remote-assistant",
+        role = "assistant",
+        content = listOf(ChatMessageContent(type = "text", text = "I got it.")),
+        timestampMs = 2000L,
+        idempotencyKey = "run-1",
+      )
+
+    val resolved = pendingRunResolvedInHistory(incoming = listOf(remoteUser, remoteAssistant), optimistic = optimistic)
+
+    assertEquals(true, resolved)
+  }
+
+  @Test
+  fun dedupRemapRekeysOptimisticTurnSoCanonicalRunResolves() {
+    // A send deduped into an already in-flight run: the gateway returns a canonical run id and
+    // persists history under that id, while the optimistic turn was created with the client run id.
+    val clientRunId = "client-run"
+    val canonicalRunId = "canonical-run"
+
+    val original =
+      ChatMessage(
+        id = "local-user",
+        role = "user",
+        content = listOf(ChatMessageContent(type = "text", text = "hello from phone")),
+        timestampMs = 1000L,
+        idempotencyKey = optimisticUserIdempotencyKey(clientRunId),
+      )
+
+    // chat.history is keyed by the canonical (deduped-into) run id, not the client run id.
+    val remoteUser =
+      original.copy(
+        id = "remote-user",
+        timestampMs = 1500L,
+        idempotencyKey = optimisticUserIdempotencyKey(canonicalRunId),
+      )
+    val remoteAssistant =
+      ChatMessage(
+        id = "remote-assistant",
+        role = "assistant",
+        content = listOf(ChatMessageContent(type = "text", text = "I got it.")),
+        timestampMs = 2000L,
+        idempotencyKey = "$canonicalRunId:assistant",
+      )
+    val history = listOf(remoteUser, remoteAssistant)
+
+    // Without re-keying, the original optimistic turn never matches the canonical-run history,
+    // so the history poll would spin until the pending-run timeout.
+    assertEquals(false, pendingRunResolvedInHistory(incoming = history, optimistic = original))
+
+    // The remap re-keys the optimistic turn onto the canonical run id, so the poll resolves.
+    val remapped = original.copy(idempotencyKey = optimisticUserIdempotencyKey(canonicalRunId))
+    assertEquals("canonical-run:user", remapped.idempotencyKey)
+    assertEquals(true, pendingRunResolvedInHistory(incoming = history, optimistic = remapped))
+  }
+
+  @Test
+  fun pendingRunResolvedInHistoryAcceptsCliAssistantIdempotencyKey() {
+    val optimistic =
+      ChatMessage(
+        id = "local-user",
+        role = "user",
+        content = listOf(ChatMessageContent(type = "text", text = "hello from phone")),
+        timestampMs = 1000L,
+        idempotencyKey = "run-1:user",
+      )
+    val remoteUser = optimistic.copy(id = "remote-user", timestampMs = 1500L)
+    val remoteAssistant =
+      ChatMessage(
+        id = "remote-assistant",
+        role = "assistant",
+        content = listOf(ChatMessageContent(type = "text", text = "I got it.")),
+        timestampMs = 2000L,
+        idempotencyKey = "cli-assistant:run-1",
+      )
+
+    val resolved = pendingRunResolvedInHistory(incoming = listOf(remoteUser, remoteAssistant), optimistic = optimistic)
+
+    assertEquals(true, resolved)
+  }
 }

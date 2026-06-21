@@ -318,6 +318,37 @@ class WearSttTtsSessionTest {
     }
 
   @Test
+  fun startTranscript_forwardsChatErrorWithoutWaitingForTimeout() =
+    runTest {
+      val gateway = FakeWearGateway()
+      val errors = mutableListOf<String>()
+      val completed = mutableListOf<WearSttTtsSession>()
+      val session =
+        WearSttTtsSession(
+          scope = this,
+          gateway = gateway,
+          sessionKey = "main",
+          onAudioResponse = { error("unexpected audio response") },
+          onStatus = {},
+          onError = { errors += it },
+          onComplete = { completed += it },
+        )
+
+      session.startTranscript("hello sky")
+      runCurrent()
+      session.handleGatewayEvent(
+        "chat",
+        """{"runId":"run-1","state":"error","errorMessage":"All models failed"}""",
+      )
+      runCurrent()
+
+      assertEquals(listOf("Voice failed: All models failed"), errors)
+      assertEquals(listOf(session), completed)
+      assertTrue(gateway.methods.contains("chat.abort"))
+      assertFalse(gateway.methods.contains("talk.speak"))
+    }
+
+  @Test
   fun startAudioStillCreatesTranscriptionSession() =
     runTest {
       val gateway = FakeWearGateway()
@@ -349,6 +380,43 @@ class WearSttTtsSessionTest {
       assertTrue(gateway.methods.contains("talk.session.appendAudio"))
       assertTrue(gateway.methods.contains("talk.session.close"))
       assertTrue(gateway.methods.contains("chat.send"))
+    }
+
+  @Test
+  fun startAudio_forwardsPartialTranscriptAsRawStatus() =
+    runTest {
+      val gateway = FakeWearGateway()
+      val statuses = mutableListOf<String>()
+      val session =
+        WearSttTtsSession(
+          scope = this,
+          gateway = gateway,
+          sessionKey = "main",
+          onAudioResponse = {},
+          onStatus = { statuses += it },
+          onError = { error("unexpected error: $it") },
+          onComplete = {},
+        )
+
+      session.start(listOf(ByteArray(960) { index -> if (index % 2 == 0) 1 else 0 }))
+      waitForGatewayMethod(gateway, "talk.session.appendAudio")
+      session.handleGatewayEvent(
+        "talk.event",
+        """{"sessionId":"stt-1","type":"partial","text":"hello sky"}""",
+      )
+      runCurrent()
+
+      assertEquals(listOf("hello sky"), statuses)
+      session.handleGatewayEvent(
+        "talk.event",
+        """{"sessionId":"stt-1","type":"transcript","text":"hello sky"}""",
+      )
+      waitForGatewayMethod(gateway, "chat.send")
+      session.handleGatewayEvent(
+        "chat",
+        """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"hi back"}}""",
+      )
+      waitForGatewayMethod(gateway, "talk.speak")
     }
 }
 

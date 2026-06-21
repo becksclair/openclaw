@@ -11,6 +11,7 @@ import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
+import ai.openclaw.app.ui.resolveGatewayConnectConfig
 import ai.openclaw.app.voice.VoiceConversationEntry
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
@@ -45,6 +46,8 @@ class MainViewModel(
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
   private val _startOnboardingAtGatewaySetup = MutableStateFlow(false)
   val startOnboardingAtGatewaySetup: StateFlow<Boolean> = _startOnboardingAtGatewaySetup
+  private val _pendingGatewaySetupCode = MutableStateFlow<String?>(null)
+  val pendingGatewaySetupCode: StateFlow<String?> = _pendingGatewaySetupCode
   private val _chatDraft = MutableStateFlow<String?>(null)
   val chatDraft: StateFlow<String?> = _chatDraft
   private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
@@ -359,6 +362,54 @@ class MainViewModel(
   /** Acknowledges the one-shot request that opens onboarding at the gateway setup step. */
   fun clearGatewaySetupStartRequest() {
     _startOnboardingAtGatewaySetup.value = false
+  }
+
+  /** Opens the native gateway setup flow with an optional setup code supplied by an app action. */
+  fun openGatewaySetup(setupCode: String?) {
+    viewModelScope.launch(Dispatchers.Default) {
+      runtimeRef.value?.disconnect()
+      resetGatewaySetupAuth()
+      prefs.setOnboardingCompleted(false)
+      _pendingGatewaySetupCode.value = setupCode
+      _startOnboardingAtGatewaySetup.value = true
+      val config =
+        setupCode?.let {
+          resolveGatewayConnectConfig(
+            useSetupCode = true,
+            setupCode = it,
+            savedManualHost = "",
+            savedManualPort = "",
+            savedManualTls = false,
+            manualHostInput = "",
+            manualPortInput = "",
+            manualTlsInput = false,
+            fallbackBootstrapToken = "",
+            fallbackToken = "",
+            fallbackPassword = "",
+          )
+        } ?: return@launch
+      prefs.setManualEnabled(true)
+      prefs.setManualHost(config.host)
+      prefs.setManualPort(config.port)
+      prefs.setManualTls(config.tls)
+      prefs.setGatewayBootstrapToken(config.bootstrapToken)
+      prefs.setGatewayToken(config.token)
+      prefs.setGatewayPassword(config.password)
+      ensureRuntime()
+        .connect(
+          GatewayEndpoint.manual(host = config.host, port = config.port),
+          NodeRuntime.GatewayConnectAuth(
+            token = config.token.ifEmpty { null },
+            bootstrapToken = config.bootstrapToken.ifEmpty { null },
+            password = config.password.ifEmpty { null },
+          ),
+        )
+    }
+  }
+
+  /** Acknowledges the one-shot setup code after onboarding copies it into local form state. */
+  fun clearPendingGatewaySetupCode() {
+    _pendingGatewaySetupCode.value = null
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {

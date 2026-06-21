@@ -221,7 +221,7 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun connect_prefersStoredDeviceTokenOverBootstrapToken() =
+  fun connect_prefersBootstrapTokenWhenStoredDeviceTokenScopesAreStale() =
     runBlocking {
       val json = testJson()
       val connected = CompletableDeferred<Unit>()
@@ -259,8 +259,8 @@ class GatewaySessionInvokeTest {
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
         val auth = withTimeout(TEST_TIMEOUT_MS) { connectAuth.await() }
-        assertEquals("device-token", auth?.get("token")?.jsonPrimitive?.content)
-        assertNull(auth?.get("bootstrapToken"))
+        assertEquals("bootstrap-token", auth?.get("bootstrapToken")?.jsonPrimitive?.content)
+        assertNull(auth?.get("token"))
       } finally {
         shutdownHarness(harness, server)
       }
@@ -357,8 +357,8 @@ class GatewaySessionInvokeTest {
           scopes =
             listOf(
               "operator.approvals",
-              "operator.pairing",
               "operator.read",
+              "operator.talk.secrets",
               "operator.write",
             ),
         )
@@ -377,6 +377,7 @@ class GatewaySessionInvokeTest {
           listOf(
             "operator.approvals",
             "operator.read",
+            "operator.talk.secrets",
             "operator.write",
           ),
           params.scopes(),
@@ -437,6 +438,7 @@ class GatewaySessionInvokeTest {
           port = server.port,
           token = "shared-auth-token",
           bootstrapToken = null,
+          scopes = emptyList(),
         )
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
@@ -509,7 +511,7 @@ class GatewaySessionInvokeTest {
                 connectResponseFrame(
                   id,
                   authJson =
-                    """{"deviceToken":"bootstrap-node-token","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"bootstrap-operator-token","role":"operator","scopes":["operator.admin","operator.approvals","operator.pairing","operator.read","operator.talk.secrets","operator.write"]}]}""",
+                    """{"deviceToken":"bootstrap-node-token","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"bootstrap-operator-token","role":"operator","scopes":["operator.approvals","operator.read","operator.talk.secrets","operator.write"]}]}""",
                 ),
               )
               webSocket.close(1000, "done")
@@ -538,7 +540,15 @@ class GatewaySessionInvokeTest {
         assertEquals("bootstrap-node-token", nodeEntry?.token)
         assertEquals(emptyList<String>(), nodeEntry?.scopes)
         assertEquals("bootstrap-operator-token", operatorEntry?.token)
-        assertEquals(listOf("operator.approvals", "operator.read", "operator.write"), operatorEntry?.scopes)
+        assertEquals(
+          listOf(
+            "operator.approvals",
+            "operator.read",
+            "operator.talk.secrets",
+            "operator.write",
+          ),
+          operatorEntry?.scopes,
+        )
       } finally {
         shutdownHarness(harness, server)
       }

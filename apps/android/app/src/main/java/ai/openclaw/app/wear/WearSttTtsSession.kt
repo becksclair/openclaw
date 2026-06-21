@@ -614,7 +614,7 @@ internal class WearSttTtsSession(
       "ready" -> handleTranscriptionEventReady()
       "partial" -> {
         val text = obj["text"].asStringOrNull()?.trim().orEmpty()
-        if (text.isNotEmpty()) onStatus("Heard: $text")
+        if (text.isNotEmpty()) onStatus(text)
       }
       "transcript" -> {
         val text = obj["text"].asStringOrNull()?.trim().orEmpty()
