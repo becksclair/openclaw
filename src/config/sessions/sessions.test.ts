@@ -737,9 +737,12 @@ describe("session store writer queue", () => {
     expect(loadSessionStore(storePath)[key]).not.toHaveProperty("ephemeral");
   });
 
-  it("clones session store cache hits from cached serialized JSON", () => {
+  it("clones session store cache hits from cached serialized JSON", async () => {
     const key = "agent:main:serialized-cache";
-    const storePath = "/tmp/openclaw-serialized-cache-test.json";
+    const storePath = path.join(
+      await writerFixtureRootTracker.make("serialized-cache"),
+      "sessions.json",
+    );
     const store = {
       [key]: {
         sessionId: "s-serialized-cache",
@@ -759,7 +762,6 @@ describe("session store writer queue", () => {
       sizeBytes: serialized.length,
       serialized,
       cloneSerialized: serialized,
-      takeOwnership: true,
     });
     store[key].sessionId = "mutated-cache-object";
 

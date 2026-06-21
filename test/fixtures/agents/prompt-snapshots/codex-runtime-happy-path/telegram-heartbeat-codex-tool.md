@@ -232,12 +232,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 12978
   },
   "openClawDeveloperInstructions": {
-    "chars": 1983,
-    "roughTokens": 496
+    "chars": 2422,
+    "roughTokens": 606
   },
   "totalTextOnly": {
-    "chars": 27119,
-    "roughTokens": 6780
+    "chars": 27558,
+    "roughTokens": 6890
   },
   "totalWithDynamicToolsJson": {
     "chars": 79031,
@@ -426,9 +426,15 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ### Developer: OpenClaw Runtime Instructions
 
 ````text
-You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
+OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
 Deferred searchable OpenClaw dynamic tools available: agents_list, cron, gateway, heartbeat_respond, nodes, session_status, sessions_history, sessions_list, sessions_send, sessions_spawn, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+
+## Messaging
+- Reply in current session -> use `message(action=send)` for visible source-channel output; normal final text stays private.
+- Cross-session messaging -> use `sessions_send(sessionKey, message)`
+- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to NO_REPLY).
+- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.
 
 Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.
 
