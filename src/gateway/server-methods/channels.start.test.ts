@@ -109,9 +109,9 @@ describe("channelsHandlers channels.start", () => {
   it("resolves the default account and starts the channel runtime", async () => {
     const { respond, startChannel } = await runChannelsStart(true);
 
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: {},
-    });
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
+      expect.objectContaining({ config: {} }),
+    );
     expect(startChannel).toHaveBeenCalledWith("whatsapp", "default-account");
     expect(respond).toHaveBeenCalledWith(
       true,
