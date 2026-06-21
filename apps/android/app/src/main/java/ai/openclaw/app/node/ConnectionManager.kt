@@ -8,6 +8,7 @@ import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayTlsParams
+import ai.openclaw.app.gateway.OPENCLAW_OPERATOR_SCOPES
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import android.os.Build
@@ -190,12 +191,7 @@ class ConnectionManager(
   fun buildOperatorConnectOptions(): GatewayConnectOptions =
     GatewayConnectOptions(
       role = "operator",
-      scopes =
-        listOf(
-          "operator.approvals",
-          "operator.read",
-          "operator.write",
-        ),
+      scopes = OPENCLAW_OPERATOR_SCOPES,
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),

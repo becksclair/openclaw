@@ -434,6 +434,7 @@ class ConnectionManagerTest {
       listOf(
         "operator.approvals",
         "operator.read",
+        "operator.talk.secrets",
         "operator.write",
       ),
       options.scopes,

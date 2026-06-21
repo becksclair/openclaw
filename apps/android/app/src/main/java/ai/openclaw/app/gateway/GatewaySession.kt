@@ -60,6 +60,37 @@ data class GatewayConnectOptions(
   val userAgent: String? = null,
 )
 
+internal val OPENCLAW_OPERATOR_SCOPES =
+  listOf(
+    "operator.approvals",
+    "operator.read",
+    "operator.talk.secrets",
+    "operator.write",
+  )
+
+private fun gatewayScopesAllow(
+  role: String,
+  requestedScopes: List<String>,
+  allowedScopes: List<String>,
+): Boolean {
+  val requested = requestedScopes.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+  if (requested.isEmpty()) return true
+  val allowed = allowedScopes.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+  if (allowed.isEmpty()) return false
+  if (role.trim() != "operator") {
+    val prefix = "${role.trim()}."
+    return requested.all { it.startsWith(prefix) && allowed.contains(it) }
+  }
+  if (allowed.contains("operator.admin")) return true
+  return requested.all { scope ->
+    when (scope) {
+      "operator.read" -> allowed.contains("operator.read") || allowed.contains("operator.write")
+      "operator.write" -> allowed.contains("operator.write")
+      else -> scope.startsWith("operator.") && allowed.contains(scope)
+    }
+  }
+}
+
 private enum class GatewayConnectAuthSource {
   DEVICE_TOKEN,
   SHARED_TOKEN,
@@ -593,6 +624,7 @@ class GatewaySession(
           endpoint = endpoint,
           tls = tls,
           role = options.role,
+          requestedScopes = options.scopes,
           explicitGatewayToken = token?.trim()?.takeIf { it.isNotEmpty() },
           explicitBootstrapToken = bootstrapToken?.trim()?.takeIf { it.isNotEmpty() },
           explicitPassword = password?.trim()?.takeIf { it.isNotEmpty() },
@@ -615,7 +647,11 @@ class GatewaySession(
           shouldRetryWithStoredDeviceToken(
             error = error,
             explicitGatewayToken = token?.trim()?.takeIf { it.isNotEmpty() },
+            explicitBootstrapToken = bootstrapToken?.trim()?.takeIf { it.isNotEmpty() },
             storedToken = storedToken?.takeIf { it.isNotEmpty() },
+            storedScopes = storedEntry?.scopes.orEmpty(),
+            role = options.role,
+            requestedScopes = options.scopes,
             attemptedDeviceTokenRetry = selectedAuth.attemptedDeviceTokenRetry,
             endpoint = endpoint,
             tls = tls,
@@ -649,11 +685,7 @@ class GatewaySession(
         "node" -> emptyList()
         "operator" -> {
           val allowedOperatorScopes =
-            setOf(
-              "operator.approvals",
-              "operator.read",
-              "operator.write",
-            )
+            OPENCLAW_OPERATOR_SCOPES.toSet()
           scopes.filter { allowedOperatorScopes.contains(it) }.distinct().sorted()
         }
         else -> null
@@ -1155,12 +1187,28 @@ class GatewaySession(
     endpoint: GatewayEndpoint,
     tls: GatewayTlsParams?,
     role: String,
+    requestedScopes: List<String>,
     explicitGatewayToken: String?,
     explicitBootstrapToken: String?,
     explicitPassword: String?,
     storedToken: String?,
     storedScopes: List<String>,
   ): SelectedConnectAuth {
+    val storedTokenCoversRequestedScopes =
+      storedToken != null &&
+        gatewayScopesAllow(
+          role = role,
+          requestedScopes = requestedScopes,
+          allowedScopes = storedScopes,
+        )
+    val shouldKeepNarrowStoredToken =
+      storedToken != null &&
+        !storedTokenCoversRequestedScopes &&
+        explicitGatewayToken == null &&
+        explicitBootstrapToken == null &&
+        explicitPassword == null
+    val storedTokenForDirectAuth =
+      if (storedTokenCoversRequestedScopes || shouldKeepNarrowStoredToken) storedToken else null
     val shouldUseDeviceRetryToken =
       pendingDeviceTokenRetry &&
         explicitGatewayToken != null &&
@@ -1170,9 +1218,9 @@ class GatewaySession(
       explicitGatewayToken
         ?: if (
           explicitPassword == null &&
-          (explicitBootstrapToken == null || storedToken != null)
+          (explicitBootstrapToken == null || storedTokenForDirectAuth != null)
         ) {
-          storedToken
+          storedTokenForDirectAuth
         } else {
           null
         }
@@ -1202,14 +1250,28 @@ class GatewaySession(
   private fun shouldRetryWithStoredDeviceToken(
     error: ErrorShape,
     explicitGatewayToken: String?,
+    explicitBootstrapToken: String?,
     storedToken: String?,
+    storedScopes: List<String>,
+    role: String,
+    requestedScopes: List<String>,
     attemptedDeviceTokenRetry: Boolean,
     endpoint: GatewayEndpoint,
     tls: GatewayTlsParams?,
   ): Boolean {
     if (deviceTokenRetryBudgetUsed) return false
     if (attemptedDeviceTokenRetry) return false
+    if (explicitBootstrapToken != null) return false
     if (explicitGatewayToken == null || storedToken == null) return false
+    if (
+      !gatewayScopesAllow(
+        role = role,
+        requestedScopes = requestedScopes,
+        allowedScopes = storedScopes,
+      )
+    ) {
+      return false
+    }
     if (!isTrustedDeviceRetryEndpoint(endpoint, tls)) return false
     val detailCode = error.details?.code
     val recommendedNextStep = error.details?.recommendedNextStep
