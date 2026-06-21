@@ -14,6 +14,7 @@ import {
   validateSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
@@ -29,6 +30,7 @@ import {
   hydrateAttachmentParamsForAction,
   resolveAttachmentMediaPolicy,
 } from "../../infra/outbound/message-action-params.js";
+import { maybeApplyTtsToMessageActionSendPayload } from "../../infra/outbound/message-action-tts.js";
 import {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
@@ -65,6 +67,104 @@ const inflightByContext = new WeakMap<
   GatewayRequestContext,
   Map<string, Promise<InflightResult>>
 >();
+
+function readFirstMessageActionString(
+  params: Record<string, unknown>,
+  keys: readonly string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = normalizeOptionalString(params[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readMessageActionMediaUrls(params: Record<string, unknown>): string[] | undefined {
+  if (!Array.isArray(params.mediaUrls)) {
+    return undefined;
+  }
+  const values = params.mediaUrls
+    .map((entry) => normalizeOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  return values.length > 0 ? values : undefined;
+}
+
+function readMessageActionBooleanParam(
+  params: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  return keys.some((key) => params[key] === true);
+}
+
+function buildGatewayMessageActionSendPayload(params: Record<string, unknown>): ReplyPayload {
+  const text =
+    readFirstMessageActionString(params, ["message", "content", "text", "SendMessage"]) ??
+    readFirstMessageActionString(params, ["caption"]);
+  const mediaUrl = readFirstMessageActionString(params, [
+    "media",
+    "mediaUrl",
+    "path",
+    "filePath",
+    "fileUrl",
+    "image",
+  ]);
+  const mediaUrls = readMessageActionMediaUrls(params);
+  return {
+    ...(text ? { text } : {}),
+    ...(mediaUrl ? { mediaUrl } : {}),
+    ...(mediaUrls ? { mediaUrls } : {}),
+    ...(readMessageActionBooleanParam(params, ["asVoice", "audioAsVoice"])
+      ? { audioAsVoice: true }
+      : {}),
+  };
+}
+
+function applyGatewayMessageActionSendPayload(
+  params: Record<string, unknown>,
+  payload: ReplyPayload,
+) {
+  const mediaUrls =
+    payload.mediaUrls && payload.mediaUrls.length > 0
+      ? payload.mediaUrls
+      : payload.mediaUrl
+        ? [payload.mediaUrl]
+        : undefined;
+  params.message = payload.text ?? "";
+  params.media = mediaUrls?.[0];
+  params.mediaUrl = mediaUrls?.[0];
+  params.mediaUrls = mediaUrls;
+  params.asVoice = payload.audioAsVoice === true ? true : undefined;
+  params.audioAsVoice = payload.audioAsVoice === true ? true : undefined;
+}
+
+async function maybeApplyGatewayMessageActionSendTts(params: {
+  action: string;
+  actionParams: Record<string, unknown>;
+  cfg: OpenClawConfig;
+  channel: string;
+  accountId?: string;
+  agentId?: string;
+  sessionKey?: string;
+}) {
+  if (params.action !== "send") {
+    return;
+  }
+  const payload = buildGatewayMessageActionSendPayload(params.actionParams);
+  const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
+    payload,
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    dryRun: false,
+  });
+  if (ttsPayload.payload !== payload) {
+    applyGatewayMessageActionSendPayload(params.actionParams, ttsPayload.payload);
+  }
+}
 
 const getInflightMap = (context: GatewayRequestContext) => {
   let inflight = inflightByContext.get(context);
@@ -522,6 +622,15 @@ export const sendHandlers: GatewayRequestHandlers = {
           normalizeOptionalString(request.agentId) ??
           (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
         const accountId = normalizeOptionalString(request.accountId) ?? undefined;
+        await maybeApplyGatewayMessageActionSendTts({
+          action: request.action,
+          actionParams: request.params,
+          cfg,
+          channel,
+          accountId,
+          agentId,
+          sessionKey,
+        });
         if (request.action === "send") {
           await hydrateAttachmentParamsForAction({
             cfg,

@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
   getRuntimeConfigSnapshot: vi.fn(),
   getRuntimeConfigSourceSnapshot: vi.fn(),
+  maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -137,14 +138,18 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
+vi.mock("../../tts/tts.runtime.js", () => ({
+  maybeApplyTtsToPayload: mocks.maybeApplyTtsToPayload,
+}));
+
 async function loadSendHandlersForTest() {
   ({ sendHandlers } = await import("./send.js"));
 }
 
-const makeContext = (): GatewayRequestContext =>
+const makeContext = (config: Record<string, unknown> = {}): GatewayRequestContext =>
   ({
     dedupe: new Map(),
-    getRuntimeConfig: () => ({}),
+    getRuntimeConfig: () => config,
   }) as unknown as GatewayRequestContext;
 
 async function runSend(params: Record<string, unknown>) {
@@ -200,12 +205,13 @@ function createDeferred<T>() {
 async function runMessageActionRequest(
   params: Record<string, unknown>,
   client?: { connect?: { scopes?: string[] } } | null,
+  config?: Record<string, unknown>,
 ) {
   const respond = vi.fn();
   await sendHandlers["message.action"]({
     params: params as never,
     respond,
-    context: makeContext(),
+    context: makeContext(config),
     req: { type: "req", id: "1", method: "message.action" },
     client: (client ?? null) as never,
     isWebchatConnect: () => false,
@@ -313,6 +319,9 @@ describe("gateway send mirroring", () => {
     }));
     mocks.getRuntimeConfigSnapshot.mockReturnValue(null);
     mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);
+    mocks.maybeApplyTtsToPayload.mockImplementation(
+      async (params: { payload: unknown }) => params.payload,
+    );
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
     mocks.resolveOutboundSessionRoute.mockImplementation(
       async ({ agentId, channel }: { agentId?: string; channel?: string }) => ({
@@ -479,11 +488,11 @@ describe("gateway send mirroring", () => {
     expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(autoEnabledRuntimeConfig);
     expect(mocks.applyPluginAutoEnable).toHaveBeenNthCalledWith(1, {
       config: sourceConfig,
-      env: undefined,
+      env: process.env,
     });
     expect(mocks.applyPluginAutoEnable).toHaveBeenNthCalledWith(2, {
       config: autoEnabledRuntimeConfig,
-      env: undefined,
+      env: process.env,
     });
     const response = firstRespondCall(respond);
     expect(response?.[0]).toBe(true);
@@ -616,8 +625,7 @@ describe("gateway send mirroring", () => {
       isWebchatConnect: () => false,
     });
 
-    await Promise.resolve();
-    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1));
 
     actionDeferred.resolve({ details: { action: "handled" } });
     await Promise.all([firstRequest, secondRequest]);
@@ -989,6 +997,7 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
       config: {},
+      env: process.env,
     });
     expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
       cfg: autoEnabledConfig,
@@ -1862,6 +1871,67 @@ describe("gateway send mirroring", () => {
       expect(firstRespondCall(redirected.respond)[0]).toBe(true);
       expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
     }
+  });
+
+  it("does not apply ambient Auto-TTS to ordinary gateway-owned message.action sends", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-text-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "send",
+        params: {
+          to: "chat-123",
+          message: "visible gateway reply",
+        },
+        sessionKey: "agent:main:telegram:direct:chat-123",
+        agentId: "main",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "chat-123",
+        },
+        idempotencyKey: "idem-gateway-message-action-tts",
+      },
+      null,
+      {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+        messages: {
+          tts: {
+            auto: "always",
+          },
+        },
+      },
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          message: "visible gateway reply",
+        }),
+      }),
+    );
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      text: "visible gateway reply",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-gateway-message-action-tts",
+      config: expect.objectContaining({
+        messages: {
+          tts: {
+            auto: "always",
+          },
+        },
+      }),
+    });
   });
 
   it("mirrors accepted source send text aliases", async () => {
