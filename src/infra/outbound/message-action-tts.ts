@@ -1,11 +1,13 @@
 // Message-action TTS helpers lazily apply session/config driven speech output
 // to send payloads without loading TTS providers for ordinary sends.
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { resolveStorePath } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
-import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
+import { hasTtsDirective } from "../../tts/directives.js";
+import { resolveEffectiveTtsAutoMode } from "../../tts/tts-config.js";
 
 let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
 
@@ -38,6 +40,30 @@ export function resolveMessageActionSessionTtsAuto(params: {
   }
 }
 
+type MessageActionTtsPayloadResult = {
+  payload: ReplyPayload;
+  payloads?: ReplyPayload[];
+};
+
+function hasMediaPayload(payload: ReplyPayload): boolean {
+  return Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()));
+}
+
+function buildSupplementalTtsPayload(params: {
+  payload: ReplyPayload;
+  spokenText: string;
+}): ReplyPayload {
+  const { text: _text, ...payloadWithoutText } = params.payload;
+  return {
+    ...payloadWithoutText,
+    spokenText: params.spokenText,
+    ttsSupplement: {
+      spokenText: params.spokenText,
+      visibleTextAlreadyDelivered: true,
+    },
+  };
+}
+
 /** Applies automatic TTS to a message-action send payload when config/session policy allows it. */
 export async function maybeApplyTtsToMessageActionSendPayload(params: {
   payload: ReplyPayload;
@@ -48,35 +74,67 @@ export async function maybeApplyTtsToMessageActionSendPayload(params: {
   sessionKey?: string;
   inboundAudio?: boolean;
   dryRun: boolean;
-}): Promise<ReplyPayload> {
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+}): Promise<MessageActionTtsPayloadResult> {
   if (params.dryRun) {
-    return params.payload;
+    return { payload: params.payload };
   }
   const ttsAuto = resolveMessageActionSessionTtsAuto({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });
-  if (
-    !shouldAttemptTtsPayload({
-      cfg: params.cfg,
-      ttsAuto,
-      agentId: params.agentId,
-      channelId: params.channel,
-      accountId: params.accountId ?? undefined,
-    })
-  ) {
-    return params.payload;
+  const effectiveAutoMode = resolveEffectiveTtsAutoMode({
+    cfg: params.cfg,
+    ttsAuto,
+    agentId: params.agentId,
+    channelId: params.channel,
+    accountId: params.accountId ?? undefined,
+  });
+  const hasExplicitTtsDirective = hasTtsDirective(params.payload.text ?? "");
+  const shouldHonorExplicitDirective =
+    hasExplicitTtsDirective &&
+    (effectiveAutoMode === "always" ||
+      effectiveAutoMode === "tagged" ||
+      (effectiveAutoMode === "inbound" && params.inboundAudio === true));
+  const shouldApplyAmbientSourceReplyTts =
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    (effectiveAutoMode === "always" ||
+      (effectiveAutoMode === "inbound" && params.inboundAudio === true));
+  if (!shouldHonorExplicitDirective && !shouldApplyAmbientSourceReplyTts) {
+    return { payload: params.payload };
   }
   const { maybeApplyTtsToPayload } = await loadMessageActionTtsRuntime();
-  return await maybeApplyTtsToPayload({
+  const ttsPayload = await maybeApplyTtsToPayload({
     payload: params.payload,
     cfg: params.cfg,
     channel: params.channel,
     kind: "final",
     inboundAudio: params.inboundAudio,
-    ttsAuto,
+    ttsAuto: shouldHonorExplicitDirective ? "tagged" : effectiveAutoMode,
     agentId: params.agentId,
     accountId: params.accountId ?? undefined,
   });
+  if (
+    shouldHonorExplicitDirective ||
+    !shouldApplyAmbientSourceReplyTts ||
+    !hasMediaPayload(ttsPayload)
+  ) {
+    return { payload: ttsPayload };
+  }
+  const visibleText = params.payload.text?.trim();
+  const spokenText = ttsPayload.spokenText?.trim() || visibleText;
+  if (!visibleText || !spokenText) {
+    return { payload: ttsPayload };
+  }
+  return {
+    payload: params.payload,
+    payloads: [
+      params.payload,
+      buildSupplementalTtsPayload({
+        payload: ttsPayload,
+        spokenText,
+      }),
+    ],
+  };
 }

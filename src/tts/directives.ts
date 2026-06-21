@@ -180,6 +180,19 @@ function classifyTtsTag(body: string): "hidden-open" | "hidden-close" | "tts" | 
   return "other";
 }
 
+/** Returns true when text contains a TTS directive outside markdown code. */
+export function hasTtsDirective(text: string): boolean {
+  if (!/\[\[\s*\/?\s*tts(?:\s*:|\s*\]\])/iu.test(text)) {
+    return false;
+  }
+  let found = false;
+  replaceOutsideMarkdownCode(text, /\[\[\s*\/?\s*tts(?:\s*:[^\]]*)?\s*\]\]/giu, (match) => {
+    found ||= classifyTtsTag(match.slice(2, -2)) !== "other";
+    return match;
+  });
+  return found;
+}
+
 /** Create an incremental cleaner for hiding [[tts:*]] directive text while streaming. */
 export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCleaner {
   let pending = "";

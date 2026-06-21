@@ -590,7 +590,7 @@ describe("runMessageAction core send routing", () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
-  it("applies TTS to message-tool sends before core outbound delivery", async () => {
+  it("honors explicit TTS directives on message-tool sends before core outbound delivery", async () => {
     const sendMedia = vi.fn().mockResolvedValue({
       channel: "testchat",
       messageId: "voice-1",
@@ -627,7 +627,7 @@ describe("runMessageAction core send routing", () => {
         },
         messages: {
           tts: {
-            auto: "tagged",
+            auto: "always",
           },
         },
       } as OpenClawConfig,
@@ -645,6 +645,7 @@ describe("runMessageAction core send routing", () => {
       expect.objectContaining({
         kind: "final",
         channel: "testchat",
+        ttsAuto: "tagged",
         payload: expect.objectContaining({
           text: "[[tts:text]]hello there[[/tts:text]]",
         }),
@@ -656,7 +657,206 @@ describe("runMessageAction core send routing", () => {
     expect(mediaInput.mediaUrl).toBe("file:///tmp/openclaw-voice.ogg");
   });
 
-  it("forwards inbound audio context to message-tool TTS", async () => {
+  it("does not apply ambient Auto-TTS to explicit message-tool text sends", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "text-ambient",
+      chatId: "c1",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await runMessageAction({
+      cfg: {
+        channels: {
+          testchat: {
+            enabled: true,
+          },
+        },
+        messages: {
+          tts: {
+            auto: "always",
+          },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "testchat",
+        target: "channel:abc",
+        message: "plain explicit text",
+      },
+      sessionKey: "agent:main:testchat:channel:abc",
+      dryRun: false,
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledOnce();
+    const textInput = firstMockArg(sendText, "send text");
+    expect(textInput.text).toBe("plain explicit text");
+  });
+
+  it("applies ambient Auto-TTS to message-tool-only source replies as supplemental media", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "text-source",
+      chatId: "c1",
+    });
+    const sendMedia = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "voice-source",
+      chatId: "c1",
+    });
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
+      text: "source reply text",
+      mediaUrl: "file:///tmp/openclaw-source-voice.ogg",
+      audioAsVoice: true,
+      spokenText: "source reply text",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await runMessageAction({
+      cfg: {
+        channels: {
+          testchat: {
+            enabled: true,
+          },
+        },
+        messages: {
+          tts: {
+            auto: "always",
+          },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "testchat",
+        target: "channel:abc",
+        message: "source reply text",
+      },
+      sessionKey: "agent:main:testchat:channel:abc",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        channel: "testchat",
+        ttsAuto: "always",
+        payload: expect.objectContaining({
+          text: "source reply text",
+        }),
+      }),
+    );
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(firstMockArg(sendText, "send text").text).toBe("source reply text");
+    expect(sendMedia).toHaveBeenCalledOnce();
+    const mediaInput = firstMockArg(sendMedia, "send media");
+    expect(mediaInput.text).toBe("");
+    expect(mediaInput.mediaUrl).toBe("file:///tmp/openclaw-source-voice.ogg");
+    expect(mediaInput.audioAsVoice).toBe(true);
+  });
+
+  it("does not expose explicit TTS directive markup on message-tool-only source replies", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "text-source-directive",
+      chatId: "c1",
+    });
+    const sendMedia = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "voice-source-directive",
+      chatId: "c1",
+    });
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
+      mediaUrl: "file:///tmp/openclaw-source-directive.ogg",
+      audioAsVoice: true,
+      spokenText: "source directive text",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await runMessageAction({
+      cfg: {
+        channels: {
+          testchat: {
+            enabled: true,
+          },
+        },
+        messages: {
+          tts: {
+            auto: "always",
+          },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "testchat",
+        target: "channel:abc",
+        message: "[[tts:text]]source directive text[[/tts:text]]",
+      },
+      sessionKey: "agent:main:testchat:channel:abc",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        channel: "testchat",
+        ttsAuto: "tagged",
+      }),
+    );
+    expect(sendText).not.toHaveBeenCalled();
+    expect(sendMedia).toHaveBeenCalledOnce();
+    const mediaInput = firstMockArg(sendMedia, "send media");
+    expect(mediaInput.text).toBe("");
+    expect(mediaInput.mediaUrl).toBe("file:///tmp/openclaw-source-directive.ogg");
+  });
+
+  it("does not forward inbound audio ambient Auto-TTS to explicit message-tool text sends", async () => {
     const sendText = vi.fn().mockResolvedValue({
       channel: "testchat",
       messageId: "text-1",
@@ -702,16 +902,7 @@ describe("runMessageAction core send routing", () => {
       dryRun: false,
     });
 
-    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "final",
-        channel: "testchat",
-        inboundAudio: true,
-        payload: expect.objectContaining({
-          text: "voice reply",
-        }),
-      }),
-    );
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
     expect(sendText).toHaveBeenCalledOnce();
   });
 });

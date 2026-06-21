@@ -1,7 +1,11 @@
 // TTS directive tests cover parsing and applying speech directives.
 import { describe, expect, it } from "vitest";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { createTtsDirectiveTextStreamCleaner, parseTtsDirectives } from "./directives.js";
+import {
+  createTtsDirectiveTextStreamCleaner,
+  hasTtsDirective,
+  parseTtsDirectives,
+} from "./directives.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -57,6 +61,15 @@ const fullPolicy: SpeechModelOverridePolicy = {
   allowNormalization: true,
   allowSeed: true,
 };
+
+describe("hasTtsDirective", () => {
+  it("detects TTS directives outside markdown code only", () => {
+    expect(hasTtsDirective("Visible [[tts:text]]spoken[[/tts:text]] text")).toBe(true);
+    expect(hasTtsDirective("Say it [[tts]]now[[/tts]]")).toBe(true);
+    expect(hasTtsDirective("`[[tts:text]]not speech[[/tts:text]]`")).toBe(false);
+    expect(hasTtsDirective("```text\n[[tts]]not speech[[/tts]]\n```")).toBe(false);
+  });
+});
 
 describe("parseTtsDirectives provider-aware routing", () => {
   it("does not resolve providers when text has no directives", () => {
