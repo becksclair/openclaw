@@ -459,6 +459,7 @@ type ResolvedActionContext = {
 type SendPayloadParts = {
   message: string;
   payload: ReplyPayload;
+  payloads?: ReplyPayload[];
   mediaUrl?: string;
   mediaUrls?: string[];
   asVoice: boolean;
@@ -471,6 +472,7 @@ type SendPayloadParts = {
 function updateSendPayloadPartsFromReplyPayload(
   parts: SendPayloadParts,
   payload: ReplyPayload,
+  payloads?: ReplyPayload[],
 ): SendPayloadParts {
   const sendable = resolveSendableOutboundReplyParts(payload);
   const mediaUrls = sendable.mediaUrls.length > 0 ? sendable.mediaUrls : undefined;
@@ -478,6 +480,7 @@ function updateSendPayloadPartsFromReplyPayload(
     ...parts,
     message: payload.text ?? "",
     payload,
+    ...(payloads ? { payloads } : {}),
     mediaUrl: mediaUrls?.[0],
     mediaUrls,
     asVoice: payload.audioAsVoice === true,
@@ -1089,9 +1092,14 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     sessionKey: input.sessionKey,
     inboundAudio: input.inboundAudio,
     dryRun,
+    sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
   });
-  if (ttsPayload !== sendPayload.payload) {
-    sendPayload = updateSendPayloadPartsFromReplyPayload(sendPayload, ttsPayload);
+  if (ttsPayload.payload !== sendPayload.payload || ttsPayload.payloads) {
+    sendPayload = updateSendPayloadPartsFromReplyPayload(
+      sendPayload,
+      ttsPayload.payload,
+      ttsPayload.payloads,
+    );
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
   throwIfAborted(abortSignal);
@@ -1171,6 +1179,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     to,
     message: sendPayload.message,
     payload: sendPayload.payload,
+    payloads: sendPayload.payloads,
     mediaUrl: sendPayload.mediaUrl,
     mediaUrls: sendPayload.mediaUrls,
     buffer: readStringParam(params, "buffer", { trim: false }) ?? undefined,
