@@ -88,13 +88,32 @@ class WatchViewModelTest {
       viewModel.onMicButtonDown()
       speech.emit(SpeechDictationEvent.PartialTranscript("hello"))
       runCurrent()
-      assertEquals("Heard: hello", viewModel.statusText.value)
+      assertEquals("hello", viewModel.statusText.value)
       speech.emit(SpeechDictationEvent.FinalTranscript("hello sky"))
       runCurrent()
 
       assertFalse(capture.started)
       assertEquals(listOf("hello sky"), relay.textTurns)
       assertEquals(1, speech.destroyCount)
+      assertEquals(WatchViewModel.WatchState.Processing, viewModel.state.value)
+    }
+
+  @Test
+  fun `empty final transcript after partial sends partial text turn`() =
+    runTest(dispatcher) {
+      val capture = FakeAudioCapture()
+      val relay = FakePhoneRelay()
+      val speech = FakeSpeechDictation(available = true)
+      val viewModel = WatchViewModel(Application(), capture, relay, speech)
+
+      viewModel.onPermissionGranted()
+      viewModel.onMicButtonDown()
+      speech.emit(SpeechDictationEvent.PartialTranscript("hello from the watch"))
+      speech.emit(SpeechDictationEvent.FinalTranscript(""))
+      runCurrent()
+
+      assertFalse(capture.started)
+      assertEquals(listOf("hello from the watch"), relay.textTurns)
       assertEquals(WatchViewModel.WatchState.Processing, viewModel.state.value)
     }
 
@@ -265,6 +284,26 @@ class WatchViewModelTest {
     }
 
   @Test
+  fun `dictation error after partial sends partial text turn`() =
+    runTest(dispatcher) {
+      val capture = FakeAudioCapture()
+      val relay = FakePhoneRelay()
+      val speech = FakeSpeechDictation(available = true)
+      val viewModel = WatchViewModel(Application(), capture, relay, speech)
+
+      viewModel.onPermissionGranted()
+      viewModel.onMicButtonDown()
+      speech.emit(SpeechDictationEvent.PartialTranscript("send this to sky"))
+      speech.emit(SpeechDictationEvent.Error("No speech recognized"))
+      runCurrent()
+
+      assertFalse(capture.started)
+      assertEquals(listOf("send this to sky"), relay.textTurns)
+      assertEquals(1, speech.destroyCount)
+      assertEquals(WatchViewModel.WatchState.Processing, viewModel.state.value)
+    }
+
+  @Test
   fun `cancel aborts submitted phone turn`() =
     runTest(dispatcher) {
       val relay = FakePhoneRelay()
@@ -316,7 +355,7 @@ class WatchViewModelTest {
       runCurrent()
 
       assertEquals(WatchViewModel.WatchState.Processing, viewModel.state.value)
-      advanceTimeBy(60_001)
+      advanceTimeBy(180_001)
       runCurrent()
 
       assertEquals(WatchViewModel.WatchState.Error, viewModel.state.value)

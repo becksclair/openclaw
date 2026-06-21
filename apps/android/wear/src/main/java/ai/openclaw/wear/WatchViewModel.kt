@@ -59,7 +59,7 @@ class WatchViewModel private constructor(
     // Gentle boost applied to the final MP3 TTS file before it is played on the watch speaker.
     // Value chosen empirically: loud enough on watch speakers without clipping the 16-bit PCM range.
     private const val FINAL_MP3_AUDIO_GAIN = 1.2
-    private const val PROCESSING_TURN_TIMEOUT_MS = 60_000L
+    private const val PROCESSING_TURN_TIMEOUT_MS = 180_000L
     internal val DEFAULT_ENDPOINTING_CONFIG = AudioEndpointingConfig(endSilenceMs = 2_200)
     private val ALLOWED_DEBUG_STATES = setOf(WatchState.Idle, WatchState.CheckingPhone)
   }
@@ -106,6 +106,7 @@ class WatchViewModel private constructor(
 
   private var isRecording = false
   private var isDictating = false
+  private var pendingDictationText: String? = null
   private var activeTurnId: String? = null
   private var processingWatchdogJob: Job? = null
   private var assistantStartJob: Job? = null
@@ -119,6 +120,7 @@ class WatchViewModel private constructor(
   private fun resetTurnState() {
     isRecording = false
     isDictating = false
+    pendingDictationText = null
     activeTurnId = null
     cancelAssistantStartJob()
     compressedDecodeJob?.cancel()
@@ -279,9 +281,11 @@ class WatchViewModel private constructor(
   private fun startDictationTurn(): Boolean {
     if (!speechDictation.isAvailable()) return false
     isDictating = true
+    pendingDictationText = null
     val started = speechDictation.start(::handleDictationEvent)
     if (!started) {
       isDictating = false
+      pendingDictationText = null
       return false
     }
     transitionTo(WatchState.Recording, "Listening...")
@@ -694,31 +698,43 @@ class WatchViewModel private constructor(
       is SpeechDictationEvent.PartialTranscript -> {
         val text = event.text.trim()
         if (text.isNotEmpty()) {
-          _statusText.value = "Heard: $text"
+          pendingDictationText = text
+          _statusText.value = text
         }
       }
       is SpeechDictationEvent.FinalTranscript -> {
-        val text = event.text.trim()
+        val text = event.text.trim().ifEmpty { pendingDictationText.orEmpty() }
         isDictating = false
+        pendingDictationText = null
         speechDictation.destroy()
         if (text.isEmpty()) {
           showRecoverableDictationError("No speech recognized")
           return
         }
-        val turnId = relayClient.sendTextTurn(text)
-        if (turnId == null) {
-          transitionTo(WatchState.Idle, "Phone not connected")
-          return
-        }
-        activeTurnId = turnId
-        transitionToProcessing("Processing...")
+        submitDictationText(text)
       }
       is SpeechDictationEvent.Error -> {
+        val text = pendingDictationText.orEmpty()
         isDictating = false
+        pendingDictationText = null
         speechDictation.destroy()
+        if (text.isNotEmpty()) {
+          submitDictationText(text)
+          return
+        }
         showRecoverableDictationError(event.message)
       }
     }
+  }
+
+  private fun submitDictationText(text: String) {
+    val turnId = relayClient.sendTextTurn(text)
+    if (turnId == null) {
+      transitionTo(WatchState.Idle, "Phone not connected")
+      return
+    }
+    activeTurnId = turnId
+    transitionToProcessing("Processing...")
   }
 
   private fun showRecoverableDictationError(message: String) {
