@@ -61,6 +61,7 @@ export async function startTalkRealtimeAgentConsult(params: {
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   requestId: string;
   sessionKey: string;
+  spawnedBy?: string;
   callId: string;
   args: unknown;
   relaySessionId?: string;
@@ -88,6 +89,7 @@ export async function startTalkRealtimeAgentConsult(params: {
     context: params.context,
     params: {
       sessionKey: params.sessionKey,
+      ...(params.spawnedBy ? { spawnedBy: params.spawnedBy } : {}),
       message,
       idempotencyKey,
       ...(normalizedTalk?.consultThinkingLevel

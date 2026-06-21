@@ -35,10 +35,18 @@ type TimeoutContractCase = {
   talk: Record<string, unknown>;
 };
 
+type RealtimeContractCase = {
+  id: string;
+  payloadValid: boolean;
+  expectedRealtime: Record<string, unknown>;
+  talk: Record<string, unknown>;
+};
+
 /** JSON fixture file shape used by this contract test. */
 type TalkConfigContractFixture = {
   selectionCases: SelectionContractCase[];
   timeoutCases: TimeoutContractCase[];
+  realtimeCases: RealtimeContractCase[];
 };
 
 /** External fixture keeps the matrix readable and reusable across config edits. */
@@ -46,6 +54,45 @@ const fixturePath = new URL("../../../test/fixtures/talk-config-contract.json", 
 const fixtures = JSON.parse(fs.readFileSync(fixturePath, "utf-8")) as TalkConfigContractFixture;
 
 describe("talk.config contract fixtures", () => {
+  it("rejects realtime tool policy objects with both allow and alsoAllow", () => {
+    expect(
+      validateTalkConfigResult({
+        config: {
+          talk: {
+            realtime: {
+              tools: {
+                allow: ["read"],
+                alsoAllow: ["exec"],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("normalizes conflicting realtime allow and alsoAllow into a protocol-valid policy", () => {
+    const payload = {
+      config: {
+        talk: buildTalkConfigResponse({
+          realtime: {
+            tools: {
+              allow: ["read"],
+              alsoAllow: ["exec"],
+              deny: ["message"],
+            },
+          },
+        }),
+      },
+    };
+
+    expect(validateTalkConfigResult(payload)).toBe(true);
+    expect(payload.config.talk?.realtime?.tools).toEqual({
+      allow: ["read"],
+      deny: ["message"],
+    });
+  });
+
   for (const fixture of fixtures.selectionCases) {
     it(fixture.id, () => {
       const payload = { config: { talk: buildTalkConfigResponse(fixture.talk) } };
@@ -82,6 +129,14 @@ describe("talk.config contract fixtures", () => {
     it(`timeout:${fixture.id}`, () => {
       const payload = buildTalkConfigResponse(fixture.talk);
       expect(payload?.silenceTimeoutMs ?? fixture.fallback).toBe(fixture.expectedTimeoutMs);
+    });
+  }
+
+  for (const fixture of fixtures.realtimeCases) {
+    it(`realtime:${fixture.id}`, () => {
+      const payload = { config: { talk: buildTalkConfigResponse(fixture.talk) } };
+      expect(validateTalkConfigResult(payload)).toBe(fixture.payloadValid);
+      expect(payload.config.talk?.realtime).toEqual(fixture.expectedRealtime);
     });
   }
 });

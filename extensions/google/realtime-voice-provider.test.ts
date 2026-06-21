@@ -828,6 +828,47 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
   });
 
+  it("submits batched Google Live function responses together", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall: vi.fn(),
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: { sessionId: "session-1" },
+      toolCall: {
+        functionCalls: [
+          { id: "call-1", name: "lookup", args: { query: "one" } },
+          { id: "call-2", name: "read", args: { path: "two" } },
+        ],
+      },
+    });
+
+    bridge.submitToolResults?.([
+      { callId: "call-1", result: { result: "one" } },
+      { callId: "call-2", result: { result: "two" } },
+    ]);
+
+    expect(session.sendToolResponse).toHaveBeenCalledWith({
+      functionResponses: [
+        {
+          id: "call-1",
+          name: "lookup",
+          response: { result: "one" },
+        },
+        {
+          id: "call-2",
+          name: "read",
+          response: { result: "two" },
+        },
+      ],
+    });
+  });
+
   it("keeps Google Live consult calls open after continuing tool responses", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const bridge = provider.createBridge({
@@ -892,6 +933,38 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     bridge.submitToolResult("missing-call", { result: "ok" });
 
     expect(session.sendToolResponse).not.toHaveBeenCalled();
+    const error = requireFirstError(onError);
+    expect(error.message).toBe(
+      "Google Live function response is missing a matching function call for missing-call",
+    );
+  });
+
+  it("sends valid batched tool responses even when a sibling call name was cleared", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: { sessionId: "session-1" },
+      toolCall: {
+        functionCalls: [{ id: "call-1", name: "lookup", args: { query: "one" } }],
+      },
+    });
+
+    bridge.submitToolResults?.([
+      { callId: "call-1", result: { result: "one" } },
+      { callId: "missing-call", result: { result: "two" } },
+    ]);
+
+    expect(session.sendToolResponse).toHaveBeenCalledWith({
+      functionResponses: [{ id: "call-1", name: "lookup", response: { result: "one" } }],
+    });
     const error = requireFirstError(onError);
     expect(error.message).toBe(
       "Google Live function response is missing a matching function call for missing-call",

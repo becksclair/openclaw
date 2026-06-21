@@ -13,6 +13,7 @@ import {
   resolveSupportedVoiceModelRefs,
   type VoiceModelProvider,
 } from "../../../packages/speech-core/voice-models.js";
+import { normalizeTalkToolPolicyConfig } from "../../config/talk.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { listRealtimeTranscriptionProviders } from "../../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
@@ -200,6 +201,7 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
     transport: normalizeOptionalLowercaseString(talkRealtime?.transport),
     brain: normalizeOptionalLowercaseString(talkRealtime?.brain),
     consultRouting: normalizeOptionalLowercaseString(talkRealtime?.consultRouting),
+    tools: normalizeTalkToolPolicyConfig(talkRealtime?.tools),
   };
 }
 

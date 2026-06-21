@@ -715,7 +715,7 @@ async function initSessionStateAttempt(
     cliSessionBindings: baseEntry?.cliSessionBindings,
     claudeCliSessionId: baseEntry?.claudeCliSessionId,
     label: persistedLabel ?? baseEntry?.label,
-    spawnedBy: persistedSpawnedBy ?? baseEntry?.spawnedBy,
+    spawnedBy: persistedSpawnedBy ?? baseEntry?.spawnedBy ?? ctx.SpawnedBy,
     spawnedWorkspaceDir: persistedSpawnedWorkspaceDir ?? baseEntry?.spawnedWorkspaceDir,
     spawnedCwd: persistedSpawnedCwd ?? baseEntry?.spawnedCwd,
     parentSessionKey: persistedParentSessionKey ?? baseEntry?.parentSessionKey,

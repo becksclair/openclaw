@@ -143,5 +143,31 @@
         "silenceTimeoutMs": 1500.5
       }
     }
+  ],
+  "realtimeCases": [
+    {
+      "id": "realtime_tools_voice_profile_contract",
+      "payloadValid": true,
+      "expectedRealtime": {
+        "provider": "openai",
+        "consultRouting": "force-agent-consult",
+        "tools": {
+          "profile": "voice",
+          "alsoAllow": ["bundle-mcp"],
+          "deny": ["message"]
+        }
+      },
+      "talk": {
+        "realtime": {
+          "provider": "openai",
+          "consultRouting": "force-agent-consult",
+          "tools": {
+            "profile": "voice",
+            "alsoAllow": [" bundle-mcp "],
+            "deny": [" message "]
+          }
+        }
+      }
+    }
   ]
 }

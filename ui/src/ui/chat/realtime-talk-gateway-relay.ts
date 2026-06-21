@@ -33,6 +33,7 @@ type GatewayRelayEvent = {
       args?: unknown;
       forced?: boolean;
     }
+  | { type?: "directToolCall" }
   | { type?: "toolResult"; callId?: string }
   | { type?: "error"; message?: string }
   | { type?: "close"; reason?: string }

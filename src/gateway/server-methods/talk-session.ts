@@ -16,12 +16,34 @@ import {
   validateTalkSessionSubmitToolResultParams,
   validateTalkSessionTurnParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
+import { readVoiceAgentBasePrompt } from "../../agents/voice-agent-base-prompt-file.js";
+import {
+  canonicalizeMainSessionAlias,
+  resolveAgentIdFromSessionKey,
+} from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
+import {
+  buildTalkRealtimeContextPacket,
+  type TalkRealtimeContextPacket,
+} from "../../talk/realtime-context.js";
+import {
+  createRealtimeDirectTools,
+  type RealtimeDirectTools,
+} from "../../talk/realtime-direct-tools.js";
+import { buildTalkRealtimeInstructions } from "../../talk/realtime-instructions.js";
 import type { TalkBrain, TalkMode, TalkTransport } from "../../talk/talk-events.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import {
   cancelTalkHandoffTurn,
@@ -57,7 +79,6 @@ import {
 import { formatForLog } from "../ws-log.js";
 import {
   broadcastTalkRoomEvents,
-  buildRealtimeInstructions,
   buildTalkTranscriptionConfig,
   buildRealtimeVoiceLaunchOptions,
   buildTalkRealtimeConfig,
@@ -120,6 +141,119 @@ function canCreateUnscopedManagedRoomSession(
   client: { connect?: { scopes?: string[] } } | null,
 ): boolean {
   return client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
+}
+
+function canCreateScopedRealtimeSession(
+  client: { connect?: { scopes?: string[] } } | null,
+): boolean {
+  return client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
+}
+
+function canCreateOwnerMainRealtimeSession(
+  client: { connect?: { scopes?: string[] } } | null,
+): boolean {
+  const scopes = client?.connect?.scopes ?? [];
+  return scopes.includes(ADMIN_SCOPE) || scopes.includes(TALK_SECRETS_SCOPE);
+}
+
+function realtimeDirectToolsScopeError() {
+  return errorShape(
+    ErrorCodes.INVALID_REQUEST,
+    `talk.session.create realtime direct tools require spawnedBy or gateway scope: ${ADMIN_SCOPE}`,
+  );
+}
+
+function isDefaultMainAgentSession(cfg: OpenClawConfig, sessionKey: string | undefined): boolean {
+  if (!sessionKey) {
+    return false;
+  }
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return false;
+  }
+  return parsed.agentId === resolveDefaultAgentId(cfg) && parsed.rest === "main";
+}
+
+function resolveRealtimeSessionAgentId(cfg: OpenClawConfig, sessionKey: string | undefined) {
+  return parseAgentSessionKey(sessionKey)
+    ? resolveAgentIdFromSessionKey(sessionKey)
+    : resolveDefaultAgentId(cfg);
+}
+
+function isMissingSessionKeyResolveError(params: {
+  requestedSessionKey: string;
+  resolvedSession: { ok: false; error: { code?: string; message?: string } };
+}): boolean {
+  return (
+    params.resolvedSession.error.code === ErrorCodes.INVALID_REQUEST &&
+    params.resolvedSession.error.message === `No session found: ${params.requestedSessionKey}`
+  );
+}
+
+function resolveFreshDefaultRealtimeSessionKey(params: {
+  cfg: OpenClawConfig;
+  requestedSessionKey: string;
+  resolvedSession: { ok: false; error: { code?: string; message?: string } };
+}): string | undefined {
+  if (!isMissingSessionKeyResolveError(params)) {
+    return undefined;
+  }
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const parsed = parseAgentSessionKey(params.requestedSessionKey);
+  if (parsed) {
+    const isKnownAgent =
+      parsed.agentId === defaultAgentId || Boolean(resolveAgentConfig(params.cfg, parsed.agentId));
+    return isKnownAgent ? `agent:${parsed.agentId}:${parsed.rest}` : undefined;
+  }
+  const canonicalMainKey = canonicalizeMainSessionAlias({
+    cfg: params.cfg,
+    agentId: defaultAgentId,
+    sessionKey: params.requestedSessionKey,
+  });
+  if (canonicalMainKey === params.requestedSessionKey) {
+    return undefined;
+  }
+  return canonicalMainKey;
+}
+
+const REALTIME_CONTEXT_STARTUP_TIMEOUT_MS = 1_500;
+
+async function buildTalkRealtimeContextPacketForStartup(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  summaryThresholdTokens: number;
+}): Promise<TalkRealtimeContextPacket | undefined> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const contextPromise = buildTalkRealtimeContextPacket({
+    ...params,
+    signal: controller.signal,
+  }).catch(() => undefined);
+  const timeoutPromise = new Promise<TalkRealtimeContextPacket>((resolve) => {
+    timeout = setTimeout(() => {
+      const contextNote =
+        "Realtime session context was skipped because context assembly exceeded the startup budget.";
+      controller.abort();
+      resolve({
+        text: contextNote,
+        summarySource: "none",
+        degraded: true,
+        contextNote,
+      });
+    }, REALTIME_CONTEXT_STARTUP_TIMEOUT_MS);
+    if (typeof timeout === "object" && typeof timeout.unref === "function") {
+      timeout.unref();
+    }
+  });
+
+  try {
+    return await Promise.race([contextPromise, timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function managedRoomOwnershipError(action: string) {
@@ -273,16 +407,115 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           requested: params,
           defaults: realtimeConfig,
         });
+        const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+        const spawnedBy = normalizeOptionalString(params.spawnedBy);
+        const requiresScopedDirectTools = Boolean(realtimeConfig.tools);
+        const canCreateScopedRealtime = canCreateScopedRealtimeSession(client);
+        const canCreateOwnerMainRealtime = canCreateOwnerMainRealtimeSession(client);
+        if (
+          requiresScopedDirectTools &&
+          !canCreateScopedRealtime &&
+          !canCreateOwnerMainRealtime &&
+          !(requestedSessionKey && spawnedBy)
+        ) {
+          respond(false, undefined, realtimeDirectToolsScopeError());
+          return;
+        }
+        let sessionKey = requestedSessionKey;
+        let resolvedSpawnLineage = false;
+        if (requestedSessionKey) {
+          const resolvedSession = await resolveSessionKeyFromResolveParams({
+            cfg: runtimeConfig,
+            p: {
+              key: requestedSessionKey,
+              ...(spawnedBy ? { spawnedBy } : {}),
+              includeGlobal: true,
+              includeUnknown: true,
+            },
+          });
+          if (resolvedSession.ok) {
+            sessionKey = resolvedSession.key;
+            resolvedSpawnLineage = Boolean(spawnedBy);
+          } else {
+            const freshSessionKey = resolveFreshDefaultRealtimeSessionKey({
+              cfg: runtimeConfig,
+              requestedSessionKey,
+              resolvedSession,
+            });
+            if (!freshSessionKey) {
+              if (requiresScopedDirectTools && !canCreateScopedRealtime) {
+                respond(false, undefined, realtimeDirectToolsScopeError());
+                return;
+              }
+              respond(false, undefined, resolvedSession.error);
+              return;
+            }
+            sessionKey = freshSessionKey;
+          }
+        }
+        const canUseOwnerMainRealtime =
+          canCreateOwnerMainRealtime && isDefaultMainAgentSession(runtimeConfig, sessionKey);
+        const canUseRequestedSessionContext =
+          !requestedSessionKey ||
+          resolvedSpawnLineage ||
+          canCreateScopedRealtime ||
+          canUseOwnerMainRealtime;
+        if (
+          requiresScopedDirectTools &&
+          !canCreateScopedRealtime &&
+          !(requestedSessionKey && resolvedSpawnLineage) &&
+          !canUseOwnerMainRealtime
+        ) {
+          respond(false, undefined, realtimeDirectToolsScopeError());
+          return;
+        }
+        const agentId = resolveRealtimeSessionAgentId(runtimeConfig, sessionKey);
+        const agentDir = resolveAgentDir(runtimeConfig, agentId);
+        const workspaceDir = resolveAgentWorkspaceDir(runtimeConfig, agentId);
+        const [voiceBasePrompt, contextPacket] = await Promise.all([
+          readVoiceAgentBasePrompt({ agentDir }),
+          sessionKey && canUseRequestedSessionContext
+            ? buildTalkRealtimeContextPacketForStartup({
+                cfg: runtimeConfig,
+                agentId,
+                sessionKey,
+                summaryThresholdTokens: 100_000,
+              })
+            : Promise.resolve(undefined),
+        ]);
+        const directTools: RealtimeDirectTools = realtimeConfig.tools
+          ? createRealtimeDirectTools({
+              cfg: runtimeConfig,
+              agentId,
+              sessionKey,
+              ...(spawnedBy && resolvedSpawnLineage ? { spawnedBy } : {}),
+              agentDir,
+              workspaceDir,
+              modelProvider: resolution.provider.id,
+              modelId: launchOptions.model,
+              senderIsOwner: canCreateScopedRealtime || canUseOwnerMainRealtime,
+            })
+          : { tools: [], executors: new Map(), excludedTools: [] };
+        const tools = [
+          REALTIME_VOICE_AGENT_CONSULT_TOOL,
+          REALTIME_VOICE_AGENT_CONTROL_TOOL,
+          ...directTools.tools,
+        ];
         const session = createTalkRealtimeRelaySession({
           context,
           connId,
           cfg: runtimeConfig,
           provider: resolution.provider,
           providerConfig: withRealtimeBrowserOverrides(resolution.providerConfig, launchOptions),
-          instructions: buildRealtimeInstructions(realtimeConfig.instructions),
-          tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL, REALTIME_VOICE_AGENT_CONTROL_TOOL],
+          instructions: buildTalkRealtimeInstructions({
+            voiceBasePrompt,
+            contextPacket,
+            configuredInstructions: realtimeConfig.instructions,
+          }),
+          tools,
+          directToolExecutors: directTools.executors,
           model: launchOptions.model,
-          sessionKey: normalizeOptionalString(params.sessionKey),
+          sessionKey,
           voice: launchOptions.voice,
           forceAgentConsultOnFinalTranscript:
             realtimeConfig.consultRouting === "force-agent-consult",

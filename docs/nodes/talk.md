@@ -20,7 +20,7 @@ Native Talk is a continuous voice conversation loop:
 3. Wait for the response
 4. Speak it via the configured Talk provider (`talk.speak`)
 
-Browser realtime Talk forwards provider tool calls through `talk.client.toolCall`; browser clients do not call `chat.send` directly for realtime consults.
+Browser realtime Talk forwards provider tool calls through `talk.client.toolCall`; browser clients do not call `chat.send` directly for realtime consults. Gateway-owned realtime relay sessions execute opt-in direct tools server-side. Browser/client-owned realtime sessions remain consult/control-only.
 While a realtime consult is active, Talk clients can use `talk.client.steer` or
 `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or
 `followup`. Accepted steering is queued into the active embedded run; rejected
@@ -93,8 +93,12 @@ Supported keys:
       },
       instructions: "Speak warmly and keep answers brief.",
       mode: "realtime",
-      transport: "webrtc",
+      transport: "gateway-relay",
       brain: "agent-consult",
+      tools: {
+        profile: "voice",
+        deny: ["message"],
+      },
     },
   },
 }
@@ -119,10 +123,47 @@ Defaults:
 - `realtime.brain`: `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility behavior; `none` is for transcription or external orchestration.
 - `realtime.consultRouting`: `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` makes Gateway relay route finalized user transcripts through OpenClaw instead.
 - `realtime.instructions`: appends provider-facing system instructions to OpenClaw's built-in realtime prompt. Use it for voice style and tone; OpenClaw keeps the default `openclaw_agent_consult` guidance.
+- `realtime.tools`: optional direct-tool policy for Gateway-owned realtime relay sessions. When unset, realtime Talk exposes only `openclaw_agent_consult` and `openclaw_agent_control`.
+- `realtime.tools.profile`: accepts the normal tool profiles, including `voice`. It is applied inside the already-effective agent/provider/global policy boundary. The `voice` profile starts broad for local-user voice use and can be trimmed with `deny`.
+- `realtime.tools.allow`, `realtime.tools.alsoAllow`, and `realtime.tools.deny`: use the same policy semantics as agent tool config. `deny` wins over profile, allow, alsoAllow, plugin, and MCP grants.
 - `talk.catalog` exposes each provider's valid modes, transports, brain strategies, realtime audio formats, and capability flags so first-party Talk clients can avoid unsupported combinations.
 - Streaming transcription providers are discovered through `talk.catalog.transcription`. The current Gateway relay uses the Voice Call streaming provider config until the dedicated Talk transcription config surface is added.
 - `speechLocale`: optional BCP 47 locale id for on-device Talk speech recognition on iOS/macOS. Leave unset to use the device default.
 - `outputFormat`: defaults to `pcm_44100` on macOS/iOS and `pcm_24000` on Android (set `mp3_*` to force MP3 streaming)
+
+## Gateway Realtime Context
+
+Gateway-owned realtime relay sessions can use an agent-owned voice prompt file at `<agentDir>/voice-agent-base.md`. OpenClaw reads the file exactly when it exists and never generates, migrates, overwrites, or patches it. Runtime session context is appended outside that file.
+
+Realtime context is built from the current OpenClaw session when a session key is available. The context packet includes bounded projected recent history, session metadata, and the latest successful projected `message` tool mirror when present. The model can use that mirror as context, but realtime voice never exposes message-sending tools.
+
+Large sessions switch to summary mode after `100000` fresh session tokens. OpenClaw uses existing compaction summaries first, then falls back to a fast summary helper, then to a last-10-message summary, and finally to a plain degraded-context note with the exact recent tail. Summary failures do not fail realtime session startup.
+
+## Direct Realtime Tools
+
+Direct realtime tools are opt-in and available only for Gateway-owned `gateway-relay` sessions. The relay builds tools from `talk.realtime.tools`, sends the provider compact JSON schemas, executes matching tool calls on the server, and submits compact JSON-safe tool results back to the provider.
+
+Message-sending tools are excluded even when `profile: "full"` or `profile: "voice"` would otherwise allow them. `openclaw_agent_consult` and `openclaw_agent_control` are reserved for the built-in consult/control flow.
+
+Example:
+
+```json5
+{
+  talk: {
+    realtime: {
+      provider: "openai",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      tools: {
+        profile: "voice",
+        deny: ["exec"],
+      },
+    },
+  },
+}
+```
+
+Use `profile: "full"` only when the voice surface should intentionally expose the broad effective local-user tool set. Keep `deny` rules close to the Talk config so voice-specific trims stay visible.
 
 ## macOS UI
 

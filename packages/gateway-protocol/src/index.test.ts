@@ -99,6 +99,7 @@ describe("lazy protocol validators", () => {
     expect(
       validateChatSendParams({
         sessionKey: "global",
+        spawnedBy: "agent:main:parent",
         agentId: "work",
         sessionId: "session-work",
         message: "hello",
@@ -589,6 +590,7 @@ describe("validateTalkClientToolCallParams", () => {
     expect(
       validateTalkClientToolCallParams({
         sessionKey: "agent:main:main",
+        spawnedBy: "agent:main:parent",
         relaySessionId: "relay-1",
         callId: "call-1",
         name: "openclaw_agent_consult",

@@ -177,6 +177,7 @@ import {
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "../session-utils.js";
+import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -2929,6 +2930,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const { sessionKey, messageId, maxChars } = params as {
       sessionKey: string;
+      spawnedBy?: string;
       agentId?: string;
       messageId: string;
       maxChars?: number;
@@ -3211,6 +3213,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       agentId?: string;
       sessionId?: string;
+      spawnedBy?: string;
       message: string;
       thinking?: string;
       fastMode?: FastMode;
@@ -3296,6 +3299,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const rawSessionKey = p.sessionKey;
     const agentIdOverride = normalizeOptionalText(p.agentId);
+    const requestedSpawnedBy = normalizeOptionalText(p.spawnedBy);
     const clientRunId = p.idempotencyKey;
     const requestedAgentId = resolveRequestedChatAgentId({
       cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
@@ -3326,6 +3330,31 @@ export const chatHandlers: GatewayRequestHandlers = {
     if (!selectedAgent.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
       return;
+    }
+    let spawnedBy: string | undefined;
+    if (requestedSpawnedBy) {
+      const resolvedSpawnLineage = await resolveSessionKeyFromResolveParams({
+        cfg,
+        p: {
+          key: rawSessionKey,
+          ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+          spawnedBy: requestedSpawnedBy,
+          includeGlobal: true,
+          includeUnknown: true,
+        },
+      });
+      if (!resolvedSpawnLineage.ok || resolvedSpawnLineage.key !== sessionKey) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "chat.send spawnedBy does not match session lineage",
+          ),
+        );
+        return;
+      }
+      spawnedBy = requestedSpawnedBy;
     }
     const requestedSessionId = normalizeOptionalText(p.sessionId);
     const backingSessionId = entry?.sessionId ?? requestedSessionId;
@@ -3752,6 +3781,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         AccountId: accountId,
         MessageThreadId: messageThreadId,
         ChatType: "direct",
+        ...(spawnedBy ? { SpawnedBy: spawnedBy } : {}),
         ...(commandSource ? { CommandSource: commandSource } : {}),
         CommandAuthorized: !suppressCommandInterpretation,
         CommandTurn: commandSource

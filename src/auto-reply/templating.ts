@@ -123,6 +123,8 @@ export type MsgContext = {
   /** Provider account id (multi-account). */
   AccountId?: string;
   ParentSessionKey?: string;
+  /** Trusted parent/owner session key for scoped subagent visibility and tool policy. */
+  SpawnedBy?: string;
   /**
    * Session key used only for inheriting session-scoped model/provider
    * overrides. Unlike ParentSessionKey, this must not trigger transcript

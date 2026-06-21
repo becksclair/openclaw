@@ -4409,6 +4409,74 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx).toBeUndefined();
   });
 
+  it("rejects forged spawnedBy lineage before dispatch", async () => {
+    const fixtureDir = createTranscriptFixture("openclaw-chat-send-spawned-by-forge-");
+    const storePath = path.join(fixtureDir, "sessions.json");
+    fs.writeFileSync(storePath, JSON.stringify({}), "utf-8");
+    mockState.config = { session: { store: storePath } };
+    mockState.sessionEntry = { canonicalKey: "agent:main:child" };
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "agent:main:child",
+      idempotencyKey: "idem-spawned-by-forge",
+      client: createScopedCliClient(["operator.write"]),
+      requestParams: {
+        spawnedBy: "agent:main:parent",
+      },
+      expectBroadcast: false,
+      waitForCompletion: false,
+    });
+
+    const [ok, _payload, error] = lastRespondCall(respond) ?? [];
+    expect(ok).toBe(false);
+    expect(error?.message).toBe("chat.send spawnedBy does not match session lineage");
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+  });
+
+  it("accepts spawnedBy lineage from an existing visible session row", async () => {
+    const fixtureDir = createTranscriptFixture("openclaw-chat-send-spawned-by-valid-");
+    const storePath = path.join(fixtureDir, "sessions.json");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:child": {
+          sessionId: mockState.sessionId,
+          sessionFile: mockState.transcriptPath,
+          spawnedBy: "agent:main:parent",
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+    mockState.config = { session: { store: storePath } };
+    mockState.sessionEntry = { canonicalKey: "agent:main:child" };
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "agent:main:child",
+      idempotencyKey: "idem-spawned-by-valid",
+      client: createScopedCliClient(["operator.write"]),
+      requestParams: {
+        spawnedBy: "agent:main:parent",
+      },
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    await waitForAssertion(() => {
+      expect(mockState.lastDispatchCtx?.SpawnedBy).toBe("agent:main:parent");
+    });
+  });
+
   it("rejects reserved system provenance fields for non-ACP clients", async () => {
     createTranscriptFixture("openclaw-chat-send-system-provenance-reject-");
     mockState.finalText = "ok";

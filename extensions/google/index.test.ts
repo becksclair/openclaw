@@ -28,9 +28,29 @@ const googleProviderPlugin = {
 };
 
 const refreshGeminiCliOAuthTokenMock = vi.hoisted(() => vi.fn());
+const realtimeVoiceBridgeMock = vi.hoisted(() => ({
+  supportsToolResultContinuation: true,
+  connect: vi.fn(async () => undefined),
+  sendAudio: vi.fn(),
+  setMediaTimestamp: vi.fn(),
+  submitToolResult: vi.fn(),
+  submitToolResults: vi.fn(),
+  acknowledgeMark: vi.fn(),
+  close: vi.fn(),
+  isConnected: vi.fn(() => true),
+}));
 
 vi.mock("./oauth.runtime.js", () => ({
   refreshGeminiCliOAuthToken: refreshGeminiCliOAuthTokenMock,
+}));
+
+vi.mock("./realtime-voice-provider.js", () => ({
+  buildGoogleRealtimeVoiceProvider: vi.fn(() => ({
+    id: "google",
+    label: "Google Live Voice",
+    isConfigured: () => true,
+    createBridge: () => realtimeVoiceBridgeMock,
+  })),
 }));
 
 describe("google provider plugin hooks", () => {
@@ -407,6 +427,45 @@ describe("google provider plugin hooks", () => {
     expect(bridge.sendAudio(Buffer.alloc(160))).toBeUndefined();
     expect(bridge.setMediaTimestamp(20)).toBeUndefined();
     expect(bridge.sendUserMessage?.("hello")).toBeUndefined();
+  });
+
+  it("forwards batched realtime tool results through the lazy Google bridge", async () => {
+    realtimeVoiceBridgeMock.connect.mockClear();
+    realtimeVoiceBridgeMock.submitToolResults.mockClear();
+    let realtimeProvider: RealtimeVoiceProviderPlugin | undefined;
+    googlePlugin.register(
+      createTestPluginApi({
+        registerRealtimeVoiceProvider(provider) {
+          realtimeProvider = provider;
+        },
+      }),
+    );
+
+    const bridge = realtimeProvider?.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio() {},
+      onClearAudio() {},
+    });
+    if (!bridge) {
+      throw new Error("expected Google realtime bridge");
+    }
+
+    await bridge.connect();
+    bridge.submitToolResults?.(
+      [
+        { callId: "call-1", result: { result: "one" } },
+        { callId: "call-2", result: { result: "two" } },
+      ],
+      { suppressResponse: true },
+    );
+
+    expect(realtimeVoiceBridgeMock.submitToolResults).toHaveBeenCalledWith(
+      [
+        { callId: "call-1", result: { result: "one" } },
+        { callId: "call-2", result: { result: "two" } },
+      ],
+      { suppressResponse: true },
+    );
   });
 
   it("refreshes Gemini CLI OAuth through the provider-owned refresh hook", async () => {

@@ -10,6 +10,7 @@ import type {
   RealtimeVoiceProviderConfig,
   RealtimeVoiceRole,
   RealtimeVoiceTool,
+  RealtimeVoiceToolResult,
   RealtimeVoiceToolCallEvent,
   RealtimeVoiceToolResultOptions,
 } from "./provider-types.js";
@@ -42,6 +43,10 @@ export type RealtimeVoiceBridgeSession = {
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void;
   setMediaTimestamp(ts: number): void;
   submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;
+  submitToolResults(
+    results: RealtimeVoiceToolResult[],
+    options?: RealtimeVoiceToolResultOptions,
+  ): void;
   triggerGreeting(instructions?: string): void;
 };
 
@@ -97,6 +102,14 @@ export function createRealtimeVoiceBridgeSession(
     setMediaTimestamp: (ts) => requireBridge().setMediaTimestamp(ts),
     submitToolResult: (callId, result, options) =>
       requireBridge().submitToolResult(callId, result, options),
+    submitToolResults: (results, options) => {
+      const bridge = requireBridge();
+      if (bridge.submitToolResults) {
+        bridge.submitToolResults(results, options);
+        return;
+      }
+      throw new Error("Realtime voice bridge does not support batched tool results");
+    },
     triggerGreeting: (instructions) => requireBridge().triggerGreeting?.(instructions),
   };
   const canSendAudio = () => params.audioSink.isOpen?.() ?? true;

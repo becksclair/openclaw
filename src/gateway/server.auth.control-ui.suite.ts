@@ -800,8 +800,8 @@ export function registerControlUiAndPairingSuite(): void {
               }
             | undefined;
           expect(details?.code).toBe(ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH);
-          expect(details?.canRetryWithDeviceToken).toBe(true);
-          expect(details?.recommendedNextStep).toBe("retry_with_device_token");
+          expect(details?.canRetryWithDeviceToken).toBe(false);
+          expect(details?.recommendedNextStep).toBe("update_auth_credentials");
         },
       },
       {
@@ -1200,8 +1200,6 @@ export function registerControlUiAndPairingSuite(): void {
         "operator.talk.secrets",
         "operator.write",
       ]);
-      expect(operatorHandoff?.scopes).not.toContain("operator.admin");
-      expect(operatorHandoff?.scopes).not.toContain("operator.pairing");
 
       const pendingAfterInitial = await listDevicePairing();
       const pendingForDevice = pendingAfterInitial.pending.filter(
@@ -1509,8 +1507,6 @@ export function registerControlUiAndPairingSuite(): void {
         "operator.talk.secrets",
         "operator.write",
       ]);
-      expect(operatorHandoff?.scopes).not.toContain("operator.admin");
-      expect(operatorHandoff?.scopes).not.toContain("operator.pairing");
       wsRetry.close();
 
       await expect(

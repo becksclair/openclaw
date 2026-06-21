@@ -36,6 +36,7 @@ describe("device bootstrap profile", () => {
           "node.exec",
           "operator.admin",
           "operator.approvals",
+          "operator.pairing",
           "operator.read",
           "operator.talk.secrets",
           "operator.write",
@@ -86,7 +87,13 @@ describe("device bootstrap profile", () => {
     expect(
       isPairingSetupBootstrapProfile({
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.pairing", "operator.read", "operator.write"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
       }),
     ).toBe(false);
     expect(

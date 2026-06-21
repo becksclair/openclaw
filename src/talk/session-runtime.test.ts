@@ -250,6 +250,26 @@ describe("realtime voice bridge session runtime", () => {
     );
   });
 
+  it("does not emulate batched tool results with repeated single submissions", () => {
+    const bridge = makeBridge();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: () => bridge,
+    };
+    const session = createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+    });
+
+    expect(() => session.submitToolResults([{ callId: "call-1", result: { ok: true } }])).toThrow(
+      "Realtime voice bridge does not support batched tool results",
+    );
+    expect(bridge["submitToolResult"]).not.toHaveBeenCalled();
+  });
+
   it("does not expose session callbacks until the provider returns its bridge", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const bridge = makeBridge();

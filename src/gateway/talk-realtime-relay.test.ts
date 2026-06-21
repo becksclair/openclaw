@@ -8,6 +8,7 @@ import {
 } from "../agents/embedded-agent-runner/runs.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { RealtimeVoiceBridgeCreateRequest } from "../talk/provider-types.js";
+import type { RealtimeDirectToolExecutor } from "../talk/realtime-direct-tools.js";
 import {
   cancelTalkRealtimeRelayTurn,
   clearTalkRealtimeRelaySessionsForTest,
@@ -156,6 +157,16 @@ describe("talk realtime gateway relay", () => {
       expect(actual[key]).toEqual(value);
     }
     return actual;
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<T>((innerResolve, innerReject) => {
+      resolve = innerResolve;
+      reject = innerReject;
+    });
+    return { promise, resolve, reject };
   }
 
   function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
@@ -490,6 +501,592 @@ describe("talk realtime gateway relay", () => {
       reason: "completed",
     });
     expectRecordFields(closePayload.talkEvent, { type: "session.closed", final: true });
+  });
+
+  it("executes configured direct realtime tools server-side", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      supportsToolResultSuppression: true,
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+    const executor = vi.fn(async ({ args, signal }: { args: unknown; signal: AbortSignal }) => ({
+      ok: true,
+      status: "ok" as const,
+      tool: "read",
+      result: { args, aborted: signal.aborted },
+    }));
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [
+        {
+          type: "function",
+          name: "read",
+          description: "Read",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+      directToolExecutors: new Map([["read", executor]]),
+    });
+
+    bridgeRequest?.onToolCall?.({
+      itemId: "item-read",
+      callId: "call-read",
+      name: "read",
+      args: { path: "README.md" },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(executor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        callId: "call-read",
+        name: "read",
+        args: { path: "README.md" },
+      }),
+    );
+    expect(bridge.submitToolResult).toHaveBeenCalledWith(
+      "call-read",
+      expect.objectContaining({
+        ok: true,
+        status: "ok",
+        tool: "read",
+      }),
+      undefined,
+    );
+    expectRecordFields(
+      findEventPayload(events, (payload) => payload.type === "directToolCall"),
+      {
+        relaySessionId: session.relaySessionId,
+        type: "directToolCall",
+        name: "read",
+        callId: "call-read",
+      },
+    );
+    expect(
+      events.some((entry) => {
+        const payload = entry.payload as { type?: unknown; name?: unknown };
+        return payload?.type === "toolCall" && payload.name === "read";
+      }),
+    ).toBe(false);
+    expectRecordFields(
+      findEventPayload(events, (payload) => payload.type === "toolResult"),
+      {
+        relaySessionId: session.relaySessionId,
+        type: "toolResult",
+        callId: "call-read",
+      },
+    );
+  });
+
+  it("ignores duplicate in-flight direct realtime tool call ids", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      supportsToolResultSuppression: true,
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const pending = deferred<{ ok: boolean; status: "ok"; tool: string }>();
+    const executor = vi.fn(() => pending.promise);
+    const session = createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds: vi.fn() } as never,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      directToolExecutors: new Map([["read", executor]]),
+    });
+
+    bridgeRequest?.onToolCall?.({
+      itemId: "item-read-1",
+      callId: "call-read",
+      name: "read",
+      args: { path: "one" },
+    });
+    bridgeRequest?.onToolCall?.({
+      itemId: "item-read-2",
+      callId: "call-read",
+      name: "read",
+      args: { path: "two" },
+    });
+    await Promise.resolve();
+
+    expect(executor).toHaveBeenCalledTimes(1);
+    cancelTalkRealtimeRelayTurn({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      reason: "barge-in",
+    });
+    pending.resolve({ ok: true, status: "ok", tool: "read" });
+    await Promise.resolve();
+
+    expect(bridge.submitToolResult).not.toHaveBeenCalled();
+  });
+
+  it("suppresses provider continuation until concurrent direct tools finish", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      supportsToolResultSuppression: true,
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const first = deferred<{ ok: boolean; status: "ok"; tool: string }>();
+    const second = deferred<{ ok: boolean; status: "ok"; tool: string }>();
+    const executor = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds: vi.fn() } as never,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      directToolExecutors: new Map([["read", executor]]),
+    });
+
+    bridgeRequest?.onToolCall?.({
+      itemId: "item-read-1",
+      callId: "call-read-1",
+      name: "read",
+      args: { path: "one" },
+    });
+    bridgeRequest?.onToolCall?.({
+      itemId: "item-read-2",
+      callId: "call-read-2",
+      name: "read",
+      args: { path: "two" },
+    });
+    await Promise.resolve();
+    first.resolve({ ok: true, status: "ok", tool: "read" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(bridge.submitToolResult).toHaveBeenCalledWith(
+      "call-read-1",
+      { ok: true, status: "ok", tool: "read" },
+      { suppressResponse: true },
+    );
+
+    second.resolve({ ok: true, status: "ok", tool: "read" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(bridge.submitToolResult).toHaveBeenCalledWith(
+      "call-read-2",
+      { ok: true, status: "ok", tool: "read" },
+      undefined,
+    );
+  });
+
+  it("batches concurrent direct tool results when the provider cannot suppress continuation", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      submitToolResults: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const first = deferred<{ ok: boolean; status: "ok"; tool: string }>();
+    const second = deferred<{ ok: boolean; status: "ok"; tool: string }>();
+    const executor = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds: vi.fn() } as never,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      directToolExecutors: new Map([["read", executor]]),
+    });
+
+    bridgeRequest?.onToolCall?.({
+      itemId: "item-read-1",
+      callId: "call-read-1",
+      name: "read",
+      args: { path: "one" },
+    });
+    bridgeRequest?.onToolCall?.({
+      itemId: "item-read-2",
+      callId: "call-read-2",
+      name: "read",
+      args: { path: "two" },
+    });
+    await Promise.resolve();
+    first.resolve({ ok: true, status: "ok", tool: "read" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(bridge.submitToolResult).not.toHaveBeenCalled();
+    expect(bridge.submitToolResults).not.toHaveBeenCalled();
+
+    second.resolve({ ok: true, status: "ok", tool: "read" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(bridge.submitToolResult).not.toHaveBeenCalled();
+    expect(bridge.submitToolResults).toHaveBeenCalledWith(
+      [
+        {
+          callId: "call-read-1",
+          result: { ok: true, status: "ok", tool: "read" },
+        },
+        {
+          callId: "call-read-2",
+          result: { ok: true, status: "ok", tool: "read" },
+        },
+      ],
+      undefined,
+    );
+  });
+
+  it("rejects direct realtime tools when the provider cannot suppress or batch results", () => {
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: () => bridge,
+    };
+    const executor = vi.fn(async () => ({ ok: true, status: "ok" as const, tool: "read" }));
+
+    expect(() =>
+      createTalkRealtimeRelaySession({
+        context: { broadcastToConnIds: vi.fn() } as never,
+        connId: "conn-1",
+        provider,
+        providerConfig: {},
+        instructions: "brief",
+        tools: [
+          {
+            type: "function",
+            name: "read",
+            description: "Read",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+        directToolExecutors: new Map([["read", executor]]),
+      }),
+    ).toThrow(
+      "Realtime provider bridge must support tool-result suppression or batched tool results before direct realtime tools can run.",
+    );
+    expect(bridge.close).toHaveBeenCalled();
+    expect(bridge.connect).not.toHaveBeenCalled();
+  });
+
+  it("submits a compact timeout error for hung direct realtime tools", async () => {
+    vi.useFakeTimers();
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      supportsToolResultSuppression: true,
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    let directSignal: AbortSignal | undefined;
+    const executor = vi.fn<RealtimeDirectToolExecutor>(({ signal }) => {
+      directSignal = signal;
+      return new Promise(() => {
+        // Intentionally never resolves; the relay timeout owns completion.
+      });
+    });
+    createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds: vi.fn() } as never,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      directToolExecutors: new Map([["read", executor]]),
+    });
+
+    bridgeRequest?.onToolCall?.({
+      itemId: "item-read",
+      callId: "call-read",
+      name: "read",
+      args: { path: "README.md" },
+    });
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(directSignal?.aborted).toBe(true);
+    expect(bridge.submitToolResult).toHaveBeenCalledWith(
+      "call-read",
+      expect.objectContaining({
+        ok: false,
+        status: "error",
+        tool: "read",
+        error: "Realtime direct tool timed out after 60000ms",
+      }),
+      undefined,
+    );
+  });
+
+  it("does not submit direct tool timeout results after turn cancellation", async () => {
+    vi.useFakeTimers();
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      supportsToolResultSuppression: true,
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const executor = vi.fn<RealtimeDirectToolExecutor>(
+      () =>
+        new Promise(() => {
+          // Intentionally never resolves; cancellation must win over timeout.
+        }),
+    );
+    const session = createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds: vi.fn() } as never,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      directToolExecutors: new Map([["read", executor]]),
+    });
+
+    bridgeRequest?.onToolCall?.({
+      itemId: "item-read",
+      callId: "call-read",
+      name: "read",
+      args: { path: "README.md" },
+    });
+    await Promise.resolve();
+
+    cancelTalkRealtimeRelayTurn({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      reason: "barge-in",
+    });
+    bridgeRequest?.onToolCall?.({
+      itemId: "item-read-duplicate",
+      callId: "call-read",
+      name: "read",
+      args: { path: "README.md" },
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect(bridge.submitToolResult).not.toHaveBeenCalled();
+  });
+
+  it("keeps unknown realtime tool calls on the broadcast fallback", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      supportsToolResultSuppression: true,
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+    const executor = vi.fn(async () => ({ ok: true, status: "ok" as const, tool: "read" }));
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      directToolExecutors: new Map([["read", executor]]),
+    });
+
+    bridgeRequest?.onToolCall?.({
+      itemId: "item-other",
+      callId: "call-other",
+      name: "unknown_tool",
+      args: { ok: true },
+    });
+    await Promise.resolve();
+
+    expect(executor).not.toHaveBeenCalled();
+    expect(bridge.submitToolResult).not.toHaveBeenCalled();
+    expectRecordFields(
+      findEventPayload(events, (payload) => payload.type === "toolCall"),
+      {
+        relaySessionId: session.relaySessionId,
+        type: "toolCall",
+        name: "unknown_tool",
+        callId: "call-other",
+      },
+    );
+  });
+
+  it("aborts in-flight direct realtime tools when the relay closes", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    let directSignal: AbortSignal | undefined;
+    const bridge = {
+      supportsToolResultSuppression: true,
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
+    };
+    const context = { broadcastToConnIds: vi.fn() } as never;
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      directToolExecutors: new Map([
+        [
+          "read",
+          async ({ signal }: { signal: AbortSignal }) => {
+            directSignal = signal;
+            await new Promise<void>(() => {
+              // Keep the tool call pending until relay close aborts it.
+            });
+            return { ok: true, status: "ok" as const, tool: "read" };
+          },
+        ],
+      ]),
+    });
+
+    bridgeRequest?.onToolCall?.({
+      itemId: "item-read",
+      callId: "call-read",
+      name: "read",
+      args: {},
+    });
+    await Promise.resolve();
+
+    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+
+    expect(directSignal?.aborted).toBe(true);
+    expect(bridge.close).toHaveBeenCalled();
   });
 
   it("emits generic issue details when relay connect fails", async () => {
