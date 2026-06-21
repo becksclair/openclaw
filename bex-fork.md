@@ -633,12 +633,14 @@ Rebase notes:
 
 ### Native Codex message-tool TTS delivery
 
-Carry behavior: native Codex sessions that expose visible replies through `sourceVisibleReplies: "message_tool"` / `message_tool_only` must still deliver TTS correctly. Visible `message(action=send)` sends must apply final-reply TTS before gateway/plugin dispatch, trusted local voice tool media must survive source-reply suppression without leaking private final text, and synthetic auto-TTS final/audio-only replies must preserve the local-media trust signal when block streaming consumes the visible final text. Internal-ui source-reply mirrors that already carry TTS media must be projected once without re-running final TTS; duplicate normal final text returned by the model remains suppressed by `message_tool_only`. Telegram/Discord voice-note delivery must stay transcode-aware so provider WAV output becomes native voice delivery instead of a plain file attachment. Channel TTS voice capabilities must be available through lightweight bundled public artifacts so the hot speech path does not materialize full channel plugins while selecting synthesis target, pre-transcode behavior, or `audioAsVoice`.
+Carry behavior: native Codex sessions that expose visible replies through `sourceVisibleReplies: "message_tool"` / `message_tool_only` must still deliver TTS correctly. Visible `message(action=send)` sends must apply final-reply TTS before gateway/plugin dispatch, trusted local voice tool media must survive source-reply suppression without leaking private final text, direct `openclaw agent --deliver` final replies must append generated TTS as a supplemental media payload, and synthetic auto-TTS final/audio-only replies must preserve the local-media trust signal when block streaming consumes the visible final text. Internal-ui source-reply mirrors that already carry TTS media must be projected once without re-running final TTS; duplicate normal final text returned by the model remains suppressed by `message_tool_only`. Telegram/Discord voice-note delivery must stay transcode-aware so provider WAV output becomes native voice delivery instead of a plain file attachment. Channel TTS voice capabilities must be available through lightweight bundled public artifacts so the hot speech path does not materialize full channel plugins while selecting synthesis target, pre-transcode behavior, or `audioAsVoice`.
 
 Primary seam files:
 
 - `src/infra/outbound/message-action-runner.ts`
 - `src/infra/outbound/message-action-tts.ts`
+- `src/agents/command/delivery.ts`
+- `src/agents/command/delivery.test.ts`
 - `src/infra/outbound/message-action-runner.plugin-dispatch.test.ts`
 - `extensions/codex/src/app-server/dynamic-tools.ts`
 - `extensions/codex/src/app-server/event-projector.ts`
@@ -656,8 +658,13 @@ Primary seam files:
 - `src/auto-reply/reply/tts-trusted-media.ts`
 - `src/auto-reply/reply/tts-trusted-media.test.ts`
 - `extensions/telegram/src/action-runtime.ts`
+- `extensions/telegram/src/limits.ts`
+- `extensions/telegram/src/outbound-adapter.ts`
+- `extensions/telegram/src/outbound-adapter.test.ts`
 - `extensions/telegram/src/send.ts`
+- `extensions/telegram/src/send.test.ts`
 - `extensions/telegram/src/bot/delivery.replies.ts`
+- `extensions/telegram/src/telegram-outbound.test.ts`
 - `extensions/telegram/src/voice.ts`
 - `extensions/telegram/src/shared.ts`
 - `extensions/telegram/src/tts-capabilities.ts`
@@ -681,6 +688,8 @@ Primary seam files:
 Primary seam tests:
 
 - `src/infra/outbound/message-action-runner.plugin-dispatch.test.ts`
+- `src/infra/outbound/message-action-runner.core-send.test.ts`
+- `src/agents/command/delivery.test.ts`
 - `extensions/codex/src/app-server/dynamic-tools.test.ts`
 - `extensions/codex/src/app-server/event-projector.test.ts`
 - `src/agents/embedded-agent-runner/run/message-tool-terminal.test.ts`
@@ -693,6 +702,9 @@ Primary seam tests:
 - `src/auto-reply/reply/tts-trusted-media.test.ts`
 - `extensions/telegram/src/action-runtime.test.ts`
 - `extensions/telegram/src/send.test.ts`
+- `extensions/telegram/src/outbound-adapter.test.ts`
+- `extensions/telegram/src/telegram-outbound.test.ts`
+- `extensions/telegram/src/voice.test.ts`
 - `extensions/telegram/src/bot/delivery.test.ts`
 - `packages/speech-core/src/tts.test.ts`
 - `src/channels/plugins/tts-capabilities.test.ts`
@@ -705,6 +717,8 @@ Rebase notes:
 - `v2026.5.16-beta.7` already includes adjacent native Codex message-tool/private-final and transcript-mirror protections. Keep this seam only for the still-missing pieces: trusted local voice media through `message_tool_only`, generated TTS local-media trust, voice-note transcode truth, and lightweight channel TTS capability lookup.
 - Do not replay the stale upstream message-tool TTS patches blindly. Rebuild the seam against the current outbound runner, current Codex app-server telemetry shape, and current channel voice capabilities.
 - The invariant is earlier than `executeSendAction`: gateway-owned/plugin-routed `send` actions must apply TTS before the gateway branch returns, not only on the core send path.
+- The direct `openclaw agent --deliver` path is part of the same invariant. It is not a message-action send, but final text still needs the final-reply TTS pass and a supplemental trusted local media payload before channel delivery.
+- Async/deferred TTS supplements must be delivered after the visible text payload without replacing that text. The runner should keep the user-visible reply immediate and then send the generated audio supplement through the same channel/plugin context.
 - In `message_tool_only`, keep the private final assistant text suppressed. Only trusted local voice media may bypass source-reply suppression, and only as a media-only payload.
 - Internal-ui source-reply mirrors are the live Gateway/TUI projection vehicle, but a mirror that already carries `ttsSupplement.spokenText` plus media is already the TTS result. Dispatch must not call final TTS again for that mirror; it should still normalize media, run final hooks, mirror transcript metadata, and queue/broadcast the single final payload. Text-only mirrors still take the normal one-pass final TTS path.
 - Preserve the trusted-media signal end to end through Codex tool telemetry, embedded attempt results, and final payload merging. Losing `trustedLocalMedia` is a functional regression, not a harmless metadata drop.
@@ -712,8 +726,17 @@ Rebase notes:
 - Keep voice-note channel capabilities honest. Telegram and Discord both need transcode-aware TTS handling; if the channel can make provider output voice-compatible, advertise `transcodesAudio: true` so speech-core does not fall back to plain audio-file semantics.
 - Keep channel TTS voice capability lookup on narrow public artifacts such as `tts-capabilities-api.js`, not `getChannelPlugin`. The speech-core request path may resolve the delivery fact once and reuse it, but must not cross the full bundled channel plugin loader to answer target/pre-transcode/`audioAsVoice` decisions.
 - Keep Telegram voice sends able to repair non-voice-compatible audio locally before `sendVoice`, and re-prove both the direct send path and the bot reply-delivery path.
+- Keep Telegram text chunking centralized on `TELEGRAM_TEXT_CHUNK_LIMIT` and shared between bot replies and outbound payload delivery. Changing one path without the other can reintroduce oversize-message behavior or inconsistent caption splitting.
+- Preserve `audioAsVoice` from both the durable payload and the channel send context into Telegram media delivery. Missing that context can make generated voice TTS arrive as ordinary audio even though the payload was synthesized for voice delivery.
 - Keep CLI `message send` preloading the scoped channel plugin for gateway-owned sends when plugin routing needs it, but do not depend on that preload for speech-core TTS capability truth. Missing lightweight artifacts can make speech-core miss channel TTS capabilities and synthesize WAV `audio-file` output that never reaches the voice/transcode branch.
 - Re-prove the seam after replay with both focused tests and a live Telegram smoke after build/restart. The important failure signature is a delivered `voice-*.wav` attachment instead of a native voice message.
+
+Closeout proof from the 2026-06-21 direct-delivery async TTS pass:
+
+- Focused regression batch: `pnpm test src/agents/command/delivery.test.ts src/infra/outbound/message-action-runner.core-send.test.ts src/infra/outbound/message-action-runner.plugin-dispatch.test.ts extensions/telegram/src/outbound-adapter.test.ts extensions/telegram/src/telegram-outbound.test.ts extensions/telegram/src/send.test.ts extensions/telegram/src/voice.test.ts extensions/telegram/src/bot/delivery.test.ts` passed targeted Vitest shards.
+- Static proof: `node_modules/.bin/oxfmt --check --threads=1` on the touched delivery/TTS/Telegram files passed; `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json` on the core touched files passed; `node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json` on the Telegram touched files passed; `git diff --check` passed.
+- Build/prod proof: `pnpm build` passed, then `systemctl --user restart openclaw-gateway.service` restarted the managed Gateway and `pnpm openclaw channels status --json` reported Telegram running/connected with no `lastError`.
+- Live Telegram smoke: `openclaw agent --agent sky --message "Sky voice final regression sweep: reply with exactly 'Sky final voice OK'." --deliver --reply-channel telegram --reply-to 1637222485 --reply-account default --timeout 180 --json` produced run `3a2bf2d7-0dee-43f3-a35e-90c782525291`, delivered visible text plus `/tmp/openclaw/tts-gcWIQM/voice-1782041688674.opus`, and the Opus file probed as mono 48 kHz audio with 2.457 s duration. User confirmed the Telegram audio arrived.
 
 Closeout proof from the 2026-06-16 duplicate-source-reply pass:
 

@@ -9,6 +9,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
+import { markGeneratedTtsLocalMediaTrusted } from "../../auto-reply/reply/tts-trusted-media.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
@@ -31,6 +32,7 @@ import {
 } from "../../infra/outbound/payloads.js";
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
@@ -40,6 +42,13 @@ import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatch>>;
+
+let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | undefined;
+
+async function loadTtsRuntime() {
+  ttsRuntimePromise ??= import("../../tts/tts.runtime.js");
+  return await ttsRuntimePromise;
+}
 
 function createRestartOnlyAbortSignal(source: AbortSignal | undefined): {
   signal?: AbortSignal;
@@ -210,6 +219,87 @@ function hasNonEmptyStringArray(value: unknown): value is string[] {
 
 function hasNonEmptyArray<T>(value: T[] | undefined): value is T[] {
   return Array.isArray(value) && value.length > 0;
+}
+
+function hasReplyMediaPayload(payload: ReplyPayload): boolean {
+  return Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()));
+}
+
+function buildSupplementalAgentTtsPayload(params: {
+  payload: ReplyPayload;
+  spokenText: string;
+}): ReplyPayload {
+  const { text: _text, ...payloadWithoutText } = params.payload;
+  return {
+    ...payloadWithoutText,
+    spokenText: params.spokenText,
+    ttsSupplement: {
+      spokenText: params.spokenText,
+      visibleTextAlreadyDelivered: true,
+    },
+  };
+}
+
+async function applyAgentDeliveryTts(params: {
+  cfg: OpenClawConfig;
+  payloads: ReplyPayload[];
+  agentId?: string;
+  channel?: string;
+  accountId?: string;
+  inboundAudio: boolean;
+  sessionTtsAuto?: string;
+}): Promise<ReplyPayload[]> {
+  if (params.payloads.length === 0) {
+    return params.payloads;
+  }
+  const ttsStatus = resolveStatusTtsSnapshot({
+    cfg: params.cfg,
+    sessionAuto: params.sessionTtsAuto,
+    agentId: params.agentId,
+    channelId: params.channel,
+    accountId: params.accountId,
+  });
+  if (!ttsStatus) {
+    return params.payloads;
+  }
+  if (ttsStatus.autoMode === "inbound" && !params.inboundAudio) {
+    return params.payloads;
+  }
+
+  const { maybeApplyTtsToPayload } = await loadTtsRuntime();
+  const enriched: ReplyPayload[] = [];
+  for (const payload of params.payloads) {
+    const ttsPayload = markGeneratedTtsLocalMediaTrusted({
+      input: payload,
+      output: await maybeApplyTtsToPayload({
+        payload,
+        cfg: params.cfg,
+        channel: params.channel,
+        kind: "final",
+        inboundAudio: params.inboundAudio,
+        ttsAuto: ttsStatus.autoMode,
+        agentId: params.agentId,
+        accountId: params.accountId,
+      }),
+    });
+    if (!hasReplyMediaPayload(ttsPayload)) {
+      enriched.push(payload);
+      continue;
+    }
+    const visibleText = payload.text?.trim();
+    if (visibleText && !hasReplyMediaPayload(payload)) {
+      enriched.push(payload);
+      enriched.push(
+        buildSupplementalAgentTtsPayload({
+          payload: ttsPayload,
+          spokenText: ttsPayload.spokenText?.trim() || visibleText,
+        }),
+      );
+      continue;
+    }
+    enriched.push(ttsPayload);
+  }
+  return enriched;
 }
 
 function buildDeliveryResult(params: {
@@ -685,7 +775,20 @@ export async function deliverAgentCommandResult(
         })
       : normalizedReplyPayloads;
   params.assertDeliveryCurrent?.();
-  const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
+  const finalDeliveryReplyPayloads =
+    deliver && !deliveryStatus && !isInternalMessageChannel(deliveryChannel)
+      ? await applyAgentDeliveryTts({
+          cfg,
+          payloads: mediaNormalizedReplyPayloads,
+          agentId: deliveryAgentId,
+          channel: deliveryChannel,
+          accountId: resolvedAccountId,
+          inboundAudio: opts.runContext?.currentInboundAudio === true,
+          sessionTtsAuto: sessionEntry?.ttsAuto,
+        })
+      : mediaNormalizedReplyPayloads;
+  params.assertDeliveryCurrent?.();
+  const outboundPayloadPlan = createOutboundPayloadPlan(finalDeliveryReplyPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
   const resultMeta = mergeResultMetaOverrides(result.meta, opts.resultMetaOverrides);
   const emitJsonEnvelope = (status?: AgentCommandDeliveryStatus) => {
@@ -752,7 +855,7 @@ export async function deliverAgentCommandResult(
           channel: deliveryChannel,
           to: deliveryTarget,
           accountId: resolvedAccountId,
-          payloads: deliveryPayloads,
+          payloads: finalDeliveryReplyPayloads,
           session: outboundSession,
           replyToId: resolvedReplyToId ?? null,
           threadId: resolvedThreadTarget ?? null,

@@ -646,6 +646,48 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-voice", chatId: "12345" });
   });
 
+  it("honors durable payload context audioAsVoice for Telegram voice sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-context-voice",
+      chatId: "12345",
+    });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        text: "voice caption",
+        mediaUrl: "file:///tmp/context-note.ogg",
+      },
+      audioAsVoice: true,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "voice caption");
+    expect(options.mediaUrl).toBe("file:///tmp/context-note.ogg");
+    expect(options.asVoice).toBe(true);
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-context-voice", chatId: "12345" });
+  });
+
+  it("forwards audioAsVoice direct media sends to Telegram voice sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-media-voice" });
+
+    const result = await telegramOutbound.sendMedia!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      mediaUrl: "file:///tmp/direct-note.ogg",
+      audioAsVoice: true,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "");
+    expect(options.mediaUrl).toBe("file:///tmp/direct-note.ogg");
+    expect(options.asVoice).toBe(true);
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-media-voice" });
+  });
+
   it("backs declared durable final capabilities with delivery proofs", async () => {
     const proveText = async () => {
       sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-text", chatId: "12345" });

@@ -1734,9 +1734,10 @@ describe("sendMessageTelegram", () => {
     });
 
     expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
-      caption: undefined,
+      caption: "A".repeat(1024),
+      parse_mode: "HTML",
     });
-    expect(sendMessage).toHaveBeenCalledWith(chatId, longText, {
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "A".repeat(76), {
       parse_mode: "HTML",
     });
     expect(res.messageId).toBe("71");
@@ -1787,7 +1788,7 @@ describe("sendMessageTelegram", () => {
 
   it("chunks long default markdown media follow-up text", async () => {
     const chatId = "123";
-    const longText = `**${"A".repeat(5000)}**`;
+    const longText = `**${"A".repeat(9000)}**`;
 
     const sendPhoto = vi.fn().mockResolvedValue({
       message_id: 72,
@@ -2122,10 +2123,8 @@ describe("sendMessageTelegram", () => {
         expectedVideoNote: { reply_to_message_id: 999, allow_sending_without_reply: true },
         expectedMessage: {
           parse_mode: "HTML",
-          reply_parameters: {
-            message_id: 999,
-            allow_sending_without_reply: true,
-          },
+          reply_to_message_id: 999,
+          allow_sending_without_reply: true,
         },
       },
     ];
