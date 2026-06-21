@@ -12,6 +12,12 @@ import {
   roleScopesAllow,
 } from "../shared/operator-scope-compat.js";
 import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
+import type {
+  DeviceAuthToken,
+  DeviceAuthTokenSummary,
+  PairedDevice,
+  PairedDeviceMetadataPatch,
+} from "./device-pairing-types.js";
 import {
   normalizeDeviceId,
   normalizeRole,
@@ -29,6 +35,13 @@ import {
   writeJson,
 } from "./pairing-files.js";
 import { generatePairingToken } from "./pairing-token.js";
+
+export type {
+  DeviceAuthToken,
+  DeviceAuthTokenSummary,
+  PairedDevice,
+  PairedDeviceMetadataPatch,
+} from "./device-pairing-types.js";
 
 export type DevicePairingPendingRequest = {
   requestId: string;
@@ -56,29 +69,6 @@ type DevicePairingApprovalOptions = {
   >;
 };
 
-export type DeviceAuthToken = {
-  token: string;
-  role: string;
-  scopes: string[];
-  issuer?: {
-    kind: "shared-gateway-auth";
-    generation: string;
-  };
-  createdAtMs: number;
-  rotatedAtMs?: number;
-  revokedAtMs?: number;
-  lastUsedAtMs?: number;
-};
-
-export type DeviceAuthTokenSummary = {
-  role: string;
-  scopes: string[];
-  createdAtMs: number;
-  rotatedAtMs?: number;
-  revokedAtMs?: number;
-  lastUsedAtMs?: number;
-};
-
 export type RotateDeviceTokenDenyReason =
   | "unknown-device-or-role"
   | "missing-approved-scope-baseline"
@@ -94,37 +84,6 @@ export type RevokeDeviceTokenDenyReason = "unknown-device-or-role" | "caller-mis
 export type RevokeDeviceTokenResult =
   | { ok: true; entry: DeviceAuthToken }
   | { ok: false; reason: RevokeDeviceTokenDenyReason; scope?: string };
-
-export type PairedDevice = {
-  deviceId: string;
-  publicKey: string;
-  displayName?: string;
-  platform?: string;
-  deviceFamily?: string;
-  clientId?: string;
-  clientMode?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  approvedScopes?: string[];
-  remoteIp?: string;
-  tokens?: Record<string, DeviceAuthToken>;
-  createdAtMs: number;
-  approvedAtMs: number;
-  lastSeenAtMs?: number;
-  lastSeenReason?: string;
-};
-
-export type PairedDeviceMetadataPatch = Pick<
-  PairedDevice,
-  | "displayName"
-  | "platform"
-  | "clientId"
-  | "clientMode"
-  | "remoteIp"
-  | "lastSeenAtMs"
-  | "lastSeenReason"
->;
 
 export type DevicePairingList = {
   pending: DevicePairingPendingRequest[];

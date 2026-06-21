@@ -1,6 +1,6 @@
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import type { DeviceAuthToken, PairedDevice } from "./device-pairing.js";
+import type { DeviceAuthToken, PairedDevice } from "./device-pairing-types.js";
 import { verifyPairingToken } from "./pairing-token.js";
 
 const DEVICE_TOKEN_LAST_USED_WRITE_INTERVAL_MS = 60_000;
