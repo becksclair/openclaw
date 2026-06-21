@@ -28,6 +28,7 @@ import {
   telegramHtmlToPlainTextFallback,
 } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
+import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./limits.js";
 import {
   isRecoverableTelegramNetworkError,
   isSafeToRetrySendError,
@@ -671,9 +672,7 @@ export async function sendMessageTelegram(
     replyQuoteText: opts.quoteText,
     useReplyIdAsQuoteSource: true,
   });
-  const richThreadParams = toTelegramRichMessageContextParams(threadParams);
   const hasThreadParams = Object.keys(threadParams).length > 0;
-  const hasRichThreadParams = Object.keys(richThreadParams).length > 0;
   const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
     cfg,
     account,
@@ -757,7 +756,7 @@ export async function sendMessageTelegram(
   const buildRichTextParams = (isLastChunk: boolean) =>
     hasRichThreadParams || (isLastChunk && replyMarkup)
       ? {
-          ...richThreadParams,
+          ...threadParams,
           ...(isLastChunk && replyMarkup ? { reply_markup: replyMarkup } : {}),
         }
       : undefined;

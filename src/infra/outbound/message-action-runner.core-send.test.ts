@@ -568,7 +568,7 @@ describe("runMessageAction core send routing", () => {
     expect(textInput.text).toBe("plain explicit text");
   });
 
-  it("applies ambient Auto-TTS to message-tool-only source replies as supplemental media", async () => {
+  it("defers ambient Auto-TTS for message-tool-only source replies until after text sends", async () => {
     const sendText = vi.fn().mockResolvedValue({
       channel: "testchat",
       messageId: "text-source",
@@ -579,12 +579,21 @@ describe("runMessageAction core send routing", () => {
       messageId: "voice-source",
       chatId: "c1",
     });
-    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
-      text: "source reply text",
-      mediaUrl: "file:///tmp/openclaw-source-voice.ogg",
-      audioAsVoice: true,
-      spokenText: "source reply text",
+    let resolveTts!: (payload: {
+      text: string;
+      mediaUrl: string;
+      audioAsVoice: true;
+      spokenText: string;
+    }) => void;
+    const ttsReady = new Promise<{
+      text: string;
+      mediaUrl: string;
+      audioAsVoice: true;
+      spokenText: string;
+    }>((resolve) => {
+      resolveTts = resolve;
     });
+    ttsMocks.maybeApplyTtsToPayload.mockImplementationOnce(async () => await ttsReady);
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -626,6 +635,39 @@ describe("runMessageAction core send routing", () => {
       dryRun: false,
     });
 
+    expect(sendText).toHaveBeenCalledOnce();
+    const textInput = firstMockArg(sendText, "send text");
+    expect(textInput.text).toBe("source reply text");
+    expect(sendMedia).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "final",
+          channel: "testchat",
+          ttsAuto: "always",
+          payload: expect.objectContaining({
+            text: "source reply text",
+          }),
+        }),
+      );
+    });
+
+    resolveTts({
+      text: "source reply text",
+      mediaUrl: "file:///tmp/openclaw-source-voice.ogg",
+      audioAsVoice: true,
+      spokenText: "source reply text",
+    });
+    await vi.waitFor(() => {
+      expect(sendMedia).toHaveBeenCalledOnce();
+    });
+    const mediaInput = firstMockArg(sendMedia, "send media");
+    expect(mediaInput).toMatchObject({
+      text: "",
+      mediaUrl: "file:///tmp/openclaw-source-voice.ogg",
+      audioAsVoice: true,
+      replyToId: "text-source",
+    });
     expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "final",
@@ -636,13 +678,6 @@ describe("runMessageAction core send routing", () => {
         }),
       }),
     );
-    expect(sendText).toHaveBeenCalledOnce();
-    expect(firstMockArg(sendText, "send text").text).toBe("source reply text");
-    expect(sendMedia).toHaveBeenCalledOnce();
-    const mediaInput = firstMockArg(sendMedia, "send media");
-    expect(mediaInput.text).toBe("");
-    expect(mediaInput.mediaUrl).toBe("file:///tmp/openclaw-source-voice.ogg");
-    expect(mediaInput.audioAsVoice).toBe(true);
   });
 
   it("does not expose explicit TTS directive markup on message-tool-only source replies", async () => {

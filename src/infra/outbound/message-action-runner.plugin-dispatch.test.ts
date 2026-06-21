@@ -87,6 +87,21 @@ function expectRecordFields(
   }
 }
 
+async function waitForAssertion(assertion: () => void) {
+  const deadline = Date.now() + 1_000;
+  let lastError: unknown;
+  while (Date.now() <= deadline) {
+    try {
+      assertion();
+      return;
+    } catch (err) {
+      lastError = err;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+  throw lastError;
+}
+
 const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
   executeSendAction: vi.fn(),
@@ -821,6 +836,159 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "result payload",
       );
+    });
+
+    it("sends source auto-TTS as a deferred gateway reply after the text send", async () => {
+      const handleActionResult = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat source TTS test plugin.",
+        actions: ["send"],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        handleAction: handleActionResult,
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege
+        .mockResolvedValueOnce({ ok: true, messageId: "text-source" })
+        .mockResolvedValueOnce({ ok: true, messageId: "voice-source" });
+
+      let markTtsStarted!: () => void;
+      let resolveTtsPayload!: (payload: Record<string, unknown>) => void;
+      const ttsStarted = new Promise<void>((resolve) => {
+        markTtsStarted = resolve;
+      });
+      const ttsPayload = new Promise<Record<string, unknown>>((resolve) => {
+        resolveTtsPayload = resolve;
+      });
+      mocks.maybeApplyTtsToPayload.mockImplementationOnce(async () => {
+        markTtsStarted();
+        return await ttsPayload;
+      });
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+          messages: {
+            tts: {
+              auto: "always",
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "gatewaychat",
+          target: "user-123",
+          message: "visible source reply",
+          idempotencyKey: "idem-source-tts",
+        },
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:gatewaychat:direct:user-123",
+        sessionId: "session-123",
+        agentId: "alpha",
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolContext: {
+          currentChannelProvider: "gatewaychat",
+          currentChannelId: "user-123",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+        dryRun: false,
+      });
+
+      expectRecordFields(
+        result,
+        {
+          kind: "send",
+          channel: "gatewaychat",
+          action: "send",
+          handledBy: "plugin",
+        },
+        "result",
+      );
+      await ttsStarted;
+      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledTimes(1);
+      const firstGatewayParams = readRecordField(
+        readMockCallArg(mocks.callGatewayLeastPrivilege, "first gateway call"),
+        "params",
+        "first gateway params",
+      );
+      expectRecordFields(
+        firstGatewayParams,
+        {
+          channel: "gatewaychat",
+          action: "send",
+          sessionKey: "agent:alpha:gatewaychat:direct:user-123",
+          sessionId: "session-123",
+          agentId: "alpha",
+          idempotencyKey: "idem-source-tts",
+        },
+        "first gateway params",
+      );
+
+      resolveTtsPayload({
+        text: "visible source reply",
+        mediaUrl: "file:///tmp/openclaw-gateway-source-tts.ogg",
+        audioAsVoice: true,
+        spokenText: "visible source reply",
+      });
+      await waitForAssertion(() =>
+        expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledTimes(2),
+      );
+
+      const secondGatewayParams = readRecordField(
+        readMockCallArg(mocks.callGatewayLeastPrivilege, "second gateway call", 1),
+        "params",
+        "second gateway params",
+      );
+      expectRecordFields(
+        secondGatewayParams,
+        {
+          channel: "gatewaychat",
+          action: "send",
+          sessionKey: "agent:alpha:gatewaychat:direct:user-123",
+          sessionId: "session-123",
+          agentId: "alpha",
+          idempotencyKey: "idem-source-tts:tts",
+        },
+        "second gateway params",
+      );
+      expectRecordFields(
+        readRecordField(secondGatewayParams, "params", "second action params"),
+        {
+          to: "user-123",
+          message: "",
+          media: "file:///tmp/openclaw-gateway-source-tts.ogg",
+          mediaUrl: "file:///tmp/openclaw-gateway-source-tts.ogg",
+          mediaUrls: ["file:///tmp/openclaw-gateway-source-tts.ogg"],
+          asVoice: true,
+          audioAsVoice: true,
+          bestEffort: true,
+          replyTo: "text-source",
+          replyToId: "text-source",
+        },
+        "second action params",
+      );
+      expect(mocks.executeSendAction).not.toHaveBeenCalled();
+      expect(handleActionResult).not.toHaveBeenCalled();
     });
 
     it("preserves gateway send receipts in broadcast results", async () => {

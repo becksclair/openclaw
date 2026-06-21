@@ -29,6 +29,13 @@ vi.mock("../../auto-reply/reply/reply-media-paths.runtime.js", () => ({
   createReplyMediaPathNormalizer: createReplyMediaPathNormalizerMock,
 }));
 
+const maybeApplyTtsToPayloadMock = vi.hoisted(() =>
+  vi.fn(async (params: { payload: ReplyPayload }) => params.payload),
+);
+vi.mock("../../tts/tts.runtime.js", () => ({
+  maybeApplyTtsToPayload: maybeApplyTtsToPayloadMock,
+}));
+
 type NormalizeParams = Parameters<typeof normalizeAgentCommandReplyPayloads>[0];
 type RunResult = NormalizeParams["result"];
 type DeliverParams = Parameters<typeof deliverAgentCommandResult>[0];
@@ -211,6 +218,10 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       (..._args: unknown[]) =>
         (payload: ReplyPayload) =>
           Promise.resolve(payload),
+    );
+    maybeApplyTtsToPayloadMock.mockReset();
+    maybeApplyTtsToPayloadMock.mockImplementation(
+      async (params: { payload: ReplyPayload }) => params.payload,
     );
   });
 
@@ -468,6 +479,72 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       status: "suppressed",
       succeeded: true,
       reason: "no_visible_result",
+    });
+  });
+
+  it("adds supplemental TTS media for direct final agent deliveries", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+    maybeApplyTtsToPayloadMock.mockResolvedValueOnce({
+      mediaUrl: "/tmp/openclaw/tts-final.opus",
+      audioAsVoice: true,
+      spokenText: "final answer",
+    });
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+        messages: {
+          tts: {
+            auto: "always",
+          },
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "#general",
+        sessionKey: "agent:tester:slack:direct:alice",
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:slack:direct:alice",
+        agentId: "tester",
+      } as never,
+      sessionEntry: undefined,
+      payloads: [{ text: "final answer" }],
+      result: createResult(),
+    });
+
+    expect(maybeApplyTtsToPayloadMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        kind: "final",
+        ttsAuto: "always",
+        agentId: "tester",
+      }),
+    );
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+    const deliverArgs = latestOutboundDeliveryArgs();
+    expect(deliverArgs.payloads).toHaveLength(2);
+    expectTextPayload(requirePayload(deliverArgs.payloads, 0), "final answer");
+    expect(requirePayload(deliverArgs.payloads, 1)).toMatchObject({
+      mediaUrl: "/tmp/openclaw/tts-final.opus",
+      audioAsVoice: true,
+      spokenText: "final answer",
+      trustedLocalMedia: true,
+      ttsSupplement: {
+        spokenText: "final answer",
+        visibleTextAlreadyDelivered: true,
+      },
+    });
+    expect(delivered.payloads).toHaveLength(2);
+    expect(delivered.payloads[1]).toMatchObject({
+      mediaUrl: "/tmp/openclaw/tts-final.opus",
+      audioAsVoice: true,
     });
   });
 

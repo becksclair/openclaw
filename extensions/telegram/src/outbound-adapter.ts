@@ -23,6 +23,7 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { splitTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
+import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./limits.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
@@ -117,6 +118,7 @@ export async function sendTelegramPayloadMessages(params: {
   react: TelegramReactionFn;
   to: string;
   payload: ReplyPayload;
+  audioAsVoice?: boolean;
   baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "quoteText">;
 }): Promise<Awaited<ReturnType<TelegramSendFn>>> {
   const telegramData = params.payload.channelData?.telegram as
@@ -144,10 +146,11 @@ export async function sendTelegramPayloadMessages(params: {
     interactive: params.payload.interactive,
   });
   const replyToMessageId = params.baseOpts.replyToMessageId;
+  const asVoice = params.payload.audioAsVoice === true || params.audioAsVoice === true;
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
-    ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
+    ...(asVoice ? { asVoice: true } : {}),
   };
   if (reactionEmoji) {
     if (typeof replyToMessageId !== "number") {
@@ -295,6 +298,7 @@ export function createTelegramOutboundAdapter(
           mediaUrl: params.mediaUrl,
           mediaLocalRoots: params.mediaLocalRoots,
           mediaReadFile: params.mediaReadFile,
+          ...(params.audioAsVoice === true ? { asVoice: true } : {}),
           forceDocument: params.forceDocument ?? false,
         });
       },
@@ -310,6 +314,7 @@ export function createTelegramOutboundAdapter(
         react: reactMessageTelegram,
         to: outboundTo,
         payload: params.payload,
+        audioAsVoice: params.audioAsVoice,
         baseOpts: {
           ...baseOpts,
           mediaLocalRoots: params.mediaLocalRoots,

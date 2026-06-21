@@ -42,7 +42,11 @@ export function resolveMessageActionSessionTtsAuto(params: {
 
 type MessageActionTtsPayloadResult = {
   payload: ReplyPayload;
-  payloads?: ReplyPayload[];
+  deferredSupplement?: MessageActionDeferredTtsSupplement;
+};
+
+export type MessageActionDeferredTtsSupplement = {
+  synthesize: () => Promise<ReplyPayload | null>;
 };
 
 function hasMediaPayload(payload: ReplyPayload): boolean {
@@ -104,6 +108,39 @@ export async function maybeApplyTtsToMessageActionSendPayload(params: {
   if (!shouldHonorExplicitDirective && !shouldApplyAmbientSourceReplyTts) {
     return { payload: params.payload };
   }
+
+  const visibleText = params.payload.text?.trim();
+  if (
+    !shouldHonorExplicitDirective &&
+    shouldApplyAmbientSourceReplyTts &&
+    visibleText &&
+    !hasMediaPayload(params.payload)
+  ) {
+    return {
+      payload: params.payload,
+      deferredSupplement: {
+        synthesize: async () => {
+          const { maybeApplyTtsToPayload } = await loadMessageActionTtsRuntime();
+          const ttsPayload = await maybeApplyTtsToPayload({
+            payload: params.payload,
+            cfg: params.cfg,
+            channel: params.channel,
+            kind: "final",
+            inboundAudio: params.inboundAudio,
+            ttsAuto: effectiveAutoMode,
+            agentId: params.agentId,
+            accountId: params.accountId ?? undefined,
+          });
+          if (!hasMediaPayload(ttsPayload)) {
+            return null;
+          }
+          const spokenText = ttsPayload.spokenText?.trim() || visibleText;
+          return buildSupplementalTtsPayload({ payload: ttsPayload, spokenText });
+        },
+      },
+    };
+  }
+
   const { maybeApplyTtsToPayload } = await loadMessageActionTtsRuntime();
   const ttsPayload = await maybeApplyTtsToPayload({
     payload: params.payload,
@@ -115,26 +152,5 @@ export async function maybeApplyTtsToMessageActionSendPayload(params: {
     agentId: params.agentId,
     accountId: params.accountId ?? undefined,
   });
-  if (
-    shouldHonorExplicitDirective ||
-    !shouldApplyAmbientSourceReplyTts ||
-    !hasMediaPayload(ttsPayload)
-  ) {
-    return { payload: ttsPayload };
-  }
-  const visibleText = params.payload.text?.trim();
-  const spokenText = ttsPayload.spokenText?.trim() || visibleText;
-  if (!visibleText || !spokenText) {
-    return { payload: ttsPayload };
-  }
-  return {
-    payload: params.payload,
-    payloads: [
-      params.payload,
-      buildSupplementalTtsPayload({
-        payload: ttsPayload,
-        spokenText,
-      }),
-    ],
-  };
+  return { payload: ttsPayload };
 }
