@@ -1591,7 +1591,7 @@ describe("deliverReplies", () => {
     expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_to_message_id");
   });
 
-  it("clamps reply chunks to Telegram rich message limit", async () => {
+  it("clamps reply chunks to the Telegram text message limit", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 21,
@@ -1610,7 +1610,7 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
-    expect(sendMessage.mock.calls.every((call) => String(call[1]).length <= 32_768)).toBe(true);
+    expect(sendMessage.mock.calls.every((call) => String(call[1]).length <= 4000)).toBe(true);
   });
 
   it("replyToMode 'all' applies reply-to to every text chunk", async () => {

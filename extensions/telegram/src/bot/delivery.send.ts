@@ -12,12 +12,6 @@ import {
   getTelegramNativeQuoteReplyMessageId,
   removeTelegramNativeQuoteParam,
 } from "../reply-parameters.js";
-import {
-  buildTelegramRichMessage,
-  getTelegramRichRawApi,
-  removeTelegramRichNativeQuoteParam,
-  toTelegramRichMessageContextParams,
-} from "../rich-message.js";
 import { buildInlineKeyboard } from "../send.js";
 import type { TelegramThreadSpec } from "./helpers.js";
 
@@ -26,6 +20,7 @@ export { buildTelegramSendParams } from "../reply-parameters.js";
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
+const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -34,6 +29,10 @@ function isTelegramQuoteParamError(err: unknown): boolean {
     return QUOTE_PARAM_RE.test(err.description);
   }
   return QUOTE_PARAM_RE.test(formatErrorMessage(err));
+}
+
+function isTelegramHtmlParseError(err: unknown): boolean {
+  return PARSE_ERR_RE.test(formatErrorMessage(err));
 }
 
 function createTelegramDeliverySendRetry() {
