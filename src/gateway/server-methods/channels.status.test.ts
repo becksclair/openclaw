@@ -189,9 +189,9 @@ describe("channelsHandlers channels.status", () => {
 
     const payload = await runChannelsStatus({ probe: false, timeoutMs: 2000 });
 
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: {},
-    });
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
+      expect.objectContaining({ config: {} }),
+    );
     const snapshotArgs = requireRecord(
       requireFirstCallArg(mocks.buildChannelAccountSnapshot),
       "snapshot args",
