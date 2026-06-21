@@ -162,21 +162,17 @@ describe("SessionHistorySseState", () => {
         messageSeq: 2,
       })?.messageSeq,
     ).toBe(2);
-    expect(
-      state.appendInlineMessage({
-        message: messageToolResult("call-message-channel-hint", "24270", undefined, {
-          chatId: "current-run",
-        }),
-        messageSeq: 3,
-      })?.messageSeq,
-    ).toBe(3);
+    const toolResultAppend = state.appendInlineMessage({
+      message: messageToolResult("call-message-channel-hint", "24270", undefined, {
+        chatId: "current-run",
+      }),
+      messageSeq: 3,
+    });
 
-    const appended = appendAssistantText(state, "NO_REPLY", 4);
-
-    expect(appended?.messageSeq).toBe(4);
+    expect(toolResultAppend).toEqual({ shouldRefresh: true });
     expect(
       (
-        appended?.message as {
+        state.snapshot().messages.at(-1) as {
           content?: Array<{ text?: string }>;
           openclawMessageToolMirror?: unknown;
         }
@@ -184,10 +180,12 @@ describe("SessionHistorySseState", () => {
     ).toBe("Still the current chat.");
     expect(
       Boolean(
-        (appended?.message as { openclawMessageToolMirror?: unknown } | undefined)
+        (state.snapshot().messages.at(-1) as { openclawMessageToolMirror?: unknown } | undefined)
           ?.openclawMessageToolMirror,
       ),
     ).toBe(true);
+
+    expect(appendAssistantText(state, "NO_REPLY", 4)).toBeNull();
   });
 
   test("keeps message-tool mirror pending across projected sessions_send inline history", () => {
@@ -226,29 +224,30 @@ describe("SessionHistorySseState", () => {
       role: "assistant",
       senderLabel: "Forwarded from main",
     });
+    const toolResultAppend = state.appendInlineMessage({
+      message: {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-forwarded",
+        content: { ok: true, messageId: "24271", chatId: "current-run" },
+      },
+      messageSeq: 3,
+    });
+
+    expect(toolResultAppend).toEqual({ shouldRefresh: true });
     expect(
       state.appendInlineMessage({
         message: {
-          role: "toolResult",
-          toolName: "message",
-          toolCallId: "call-message-forwarded",
-          content: { ok: true, messageId: "24271", chatId: "current-run" },
+          role: "assistant",
+          content: [{ type: "text", text: "NO_REPLY" }],
         },
-        messageSeq: 3,
-      })?.messageSeq,
-    ).toBe(3);
-
-    const appended = state.appendInlineMessage({
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
-      messageSeq: 4,
-    });
+        messageSeq: 4,
+      }),
+    ).toBeNull();
 
     expect(
       (
-        appended?.message as {
+        state.snapshot().messages.at(-1) as {
           content?: Array<{ text?: string }>;
           openclawMessageToolMirror?: unknown;
         }
@@ -256,7 +255,7 @@ describe("SessionHistorySseState", () => {
     ).toBe("Still visible after forwarded handoff.");
     expect(
       Boolean(
-        (appended?.message as { openclawMessageToolMirror?: unknown } | undefined)
+        (state.snapshot().messages.at(-1) as { openclawMessageToolMirror?: unknown } | undefined)
           ?.openclawMessageToolMirror,
       ),
     ).toBe(true);
@@ -310,14 +309,16 @@ describe("SessionHistorySseState", () => {
       message: messageToolResult("call-message-first", "first"),
       messageSeq: 3,
     });
-    state.appendInlineMessage({
-      message: messageToolResult("call-message-second", "second"),
-      messageSeq: 4,
-    });
+    expect(
+      state.appendInlineMessage({
+        message: messageToolResult("call-message-second", "second"),
+        messageSeq: 4,
+      }),
+    ).toEqual({ shouldRefresh: true });
 
     const appended = appendAssistantText(state, "NO_REPLY", 5);
 
-    expect(appended).toEqual({ shouldRefresh: true });
+    expect(appended).toBeNull();
     expect(
       state
         .snapshot()
