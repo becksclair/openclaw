@@ -472,6 +472,7 @@ Non-negotiable invariants:
 - Direct tool results sent to the provider stay compact and JSON-safe, with no binary or media payload dumps.
 - Unknown realtime tool calls remain broadcast-only for existing manual/client result submission.
 - Browser/client-owned realtime sessions remain consult/control-only until they get a separate client execution protocol.
+- QR/setup-code pairing may grant bounded operator Talk secrets for owner-main realtime startup, but must not grant `operator.admin` or `operator.pairing`; scoped direct realtime tools still require admin or valid `spawnedBy` lineage.
 
 Expected config shape:
 
