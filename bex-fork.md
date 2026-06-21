@@ -16,7 +16,7 @@ Replay classification:
 
 | Seam                                      | Decision              | Importance | v2026.6.8 evidence                                                                                                                                                                                                                                                                                                                                                                        |
 | ----------------------------------------- | --------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Wear OS voice companion                   | Runtime carry         | Critical   | Target still has no `apps/android/wear` module or shared `apps/android/audio` module. Replay carries the watch app, phone Wearable Data Layer relay, audio assembly/playback, and Wear tests.                                                                                                                                                                                             |
+| Wear OS voice companion                   | Runtime carry         | Critical   | Target still has no `apps/android/wear` module or shared `apps/android/audio` module. Replay carries the watch app, phone Wearable Data Layer relay, audio assembly/playback, dictation partial-transcript recovery, and Wear tests.                                                                                                                                                      |
 | ACP remote target-backed bridge           | Runtime carry         | Critical   | Target has adjacent ACP `cwd` and backend support, but still lacks `runtime.acp.target`, persistent binding `target` metadata, and the codex-devbox ACP verifier. The private `extensions/acpx-remote` implementation remains outside this repo.                                                                                                                                          |
 | Gateway runtime metadata hotpath          | Partial-overlap carry | Critical   | Target has substantial plugin metadata work, but replay still carries current-snapshot reuse for registry/manifest hot paths, lifecycle-cleared package-state probes, provider auth alias cache fixes, and runtime config invalidation details.                                                                                                                                           |
 | ACP backend alias routing                 | Runtime carry         | High       | Target resolves selected ACP agents but still does not pass the selected config agent's `runtime.acp.backend` into ACP session creation.                                                                                                                                                                                                                                                  |
@@ -35,7 +35,8 @@ Replay classification:
 | Docker replay validation directives       | Support/proof carry   | Medium     | Target root instructions still lack Bex's fork-replay Docker-clean broad-proof exception and private-state isolation warnings.                                                                                                                                                                                                                                                            |
 | Codex app-server force full access        | Runtime carry         | Medium     | Target has no `OPENCLAW_CODEX_FORCE_FULL_ACCESS` toggle; native Codex app-server policy is subject to OpenClaw guardian/exec-mode/promotion/binding downgrades. Replay carries the clamp to `danger-full-access` + `never` + `user` at the resolver output, the tool-policy promotion bail, the bound thread/turn builders, and the side-question fork.                                   |
 | Generic agent base prompt                 | Runtime carry         | Medium     | Target still has no harness-neutral `agent-base.md` convention for embedded OpenClaw/full prompts or native Codex `baseInstructions`, no generated global template at startup, and no base prompt fingerprint in native Codex thread bindings.                                                                                                                                            |
-| Android and Discord realtime audio        | Absorbed upstream     | High       | Target already carries Android Gateway Talk relay and Discord realtime voice. Replay keeps dependent Wear code and focused relay fixes only.                                                                                                                                                                                                                                              |
+| Context-rich realtime Talk tools          | Runtime carry         | Medium     | Target has Gateway relay Talk, but not agent-owned `voice-agent-base.md`, projected current-session context with latest `message` tool mirror, degraded large-session context fallback, `talk.realtime.tools`, the `voice` tool profile, hard message-tool exclusion, or server-executed direct tools.                                                                                    |
+| Android and Discord realtime audio        | Absorbed upstream     | High       | Target already carries Android Gateway Talk relay and Discord realtime voice. Replay keeps dependent Wear code, Android setup-code/operator-scope fixes, pending-chat history recovery, and focused relay fixes only.                                                                                                                                                                     |
 | Wear OS native assistant entrypoint       | Runtime carry         | Medium     | Target has no Wear native assistant (`VoiceInteractionService`/`RecognitionService`) shape or phone assistant auto-start bridge. Replay adds a mirrored `:app` and `:wear` assistant layer. The two modules intentionally duplicate `OpenClaw*Service`, `AssistantTrustedStartBridge`, and role helpers to avoid touching upstream `:common`. Keep them in sync when editing either side. |
 | Telegram transcribed-audio TTS intent     | Absorbed upstream     | Medium     | Target shared reply dispatch still preserves TTS intent for transcribed inbound audio. No source carry unless focused proof regresses.                                                                                                                                                                                                                                                    |
 | Agent-scoped TTS conversion config        | Dropped               | Low        | No missing implementation was proved on v2026.6.5; no source carry.                                                                                                                                                                                                                                                                                                                       |
@@ -91,7 +92,7 @@ Replay classification:
 - `c5991de10f` - active seam: keep Control UI read-aloud routed through the Gateway Talk/TTS surface, with Markdown/noisy markup stripped before speech.
 - `discord-deploy-30032-recovery` - active seam: keep the 30032 (application command limit) reconcile-to-overwrite recovery path that bypasses the deploy hash cache with `force: true` and logs the initial failure as recoverable instead of error.
 - `discord-auto-presence-account-auth-store` - active seam: keep Discord auto-presence runtime availability evaluated against the auth profile store of the agent bound to the account (account-level route binding -> agent dir) instead of the bare default store path, which ignores the configured default agent and reads an empty `main`-agent store.
-- `realtime-android-discord-audio` - absorbed upstream: v2026.5.22 already has Android Gateway relay Talk and Discord realtime voice by default; do not replay wholesale unless focused proof finds a regression.
+- `realtime-android-discord-audio` - absorbed upstream: v2026.5.22 already has Android Gateway relay Talk and Discord realtime voice by default; do not replay wholesale unless focused proof finds a regression. Keep the fork-specific Android setup-code/operator-scope and pending-chat recovery fixes with the Android/Wear replay.
 - `wear-os-talk-relay` - active seam: keep the Wear OS push-to-talk companion app and phone-side Wearable Data Layer relay on the durable STT -> `chat.send` -> final TTS audio path, including the configured Wear target session, `deliver: true` chat routing, trusted final-audio reuse, turn ids, phone-node pinning, chunked audio response assembly, app bundle packaging, and narrow review-work proof gates.
 - `02915314ae` - absorbed upstream: v2026.5.22 already preserves TTS intent for transcribed inbound audio through the shared dispatch path; no source carry unless proof fails.
 - `native-codex-message-tool-tts` - partial-overlap carry: keep native Codex `message_tool_only` visible replies TTS-capable, preserve trusted local voice tool media through source-reply suppression, avoid re-synthesizing already-spoken internal-ui source-reply mirrors, suppress duplicate normal final text, and keep Telegram/Discord voice-note delivery on the proper transcode-aware path instead of leaking raw WAV attachments.
@@ -103,6 +104,7 @@ Replay classification:
 - `codex-app-server-force-full-access` - active seam: when `OPENCLAW_CODEX_FORCE_FULL_ACCESS` is set, the native Codex app-server runtime clamps to `sandbox: danger-full-access` + `approvalPolicy: never` + `approvalsReviewer: user` (unrestricted network is implied by danger-full-access at the Codex protocol level) at the resolver output, the OpenClaw tool-policy promotion bail, the bound thread/turn request builders, and the side-question fork. This defeats OpenClaw-side exec-mode/guardian/promotion/binding downgrades. Opt-in, default off; `/etc/codex/requirements.toml` is intentionally not consulted (this fork does not use it).
 
 - `generic-agent-base-prompt` - active seam: keep the generated global `agent-base.md` template and the agent-scoped runtime override convention for embedded OpenClaw/full prompts and native Codex app-server `baseInstructions`. Gateway startup regenerates `<stateDir>/agent-base.md`; only `<agentDir>/agent-base.md` affects runtime. Codex app-server also accepts `<agentDir>/app-server-base.md` as a legacy alias when the canonical file is absent.
+- `context-rich-realtime-talk-tools` - active seam: keep Gateway-owned realtime Talk as a context-rich voice agent surface with exact `voice-agent-base.md` prompt loading, transient current-session context, latest projected `message` tool mirror context, degraded large-session fallback, opt-in `talk.realtime.tools`, the `voice` tool profile, hard exclusion of message-sending tools, and server-executed direct tools. Browser/client-owned realtime remains consult/control-only.
 
 ## Seam inventory
 
@@ -411,6 +413,84 @@ Rebase notes:
 - Upstream introduced a unified `src/talk/*` runtime, Talk gateway sessions, Talk events, and browser realtime client changes. Port this seam as a thin current-Talk integration, not as a parallel legacy TTS flow.
 - Current `TalkSpeakParamsSchema` is strict and does not accept `agentId`; do not send stale UI-side agent scope unless the Gateway protocol grows that field.
 
+### Context-rich realtime Talk tools
+
+Carry behavior: Gateway-owned realtime Talk is a voice-agent surface, not an isolated provider chat. `talk.session.create` with `mode: "realtime"`, `transport: "gateway-relay"`, and `brain: "agent-consult"` reads `<agentDir>/voice-agent-base.md` exactly when present, appends transient current-session context outside that file, includes projected recent history and the latest successful `message` tool mirror, and can expose opt-in direct tools through `talk.realtime.tools`. The relay keeps `openclaw_agent_consult` and `openclaw_agent_control` as escalation tools, executes configured direct tools server-side, and submits compact JSON-safe results to the provider. Browser/client-owned realtime stays consult/control-only.
+
+Rationale: Bex's Sky voice path needs the realtime provider to share the same agent identity, recent context, message-tool visibility, and local-user tool capability as the rest of OpenClaw. The seam reuses current Gateway Talk, projected history, tool profiles, MCP/plugin policy, and relay plumbing instead of adding a parallel voice runtime.
+
+Primary seam files:
+
+- `src/agents/voice-agent-base-prompt-file.ts`
+- `src/agents/tool-catalog.ts`
+- `src/agents/agent-tools.ts`
+- `src/config/types.tools.ts`
+- `src/config/types.gateway.ts`
+- `src/config/talk.ts`
+- `src/config/zod-schema.ts`
+- `src/config/zod-schema.agent-runtime.ts`
+- `src/talk/realtime-instructions.ts`
+- `src/talk/realtime-context.ts`
+- `src/talk/realtime-direct-tools.ts`
+- `src/gateway/server-methods/talk-session.ts`
+- `src/gateway/server-methods/talk-shared.ts`
+- `src/gateway/talk-realtime-relay.ts`
+- `packages/gateway-protocol/src/schema/channels.ts`
+- `packages/gateway-protocol/src/schema/agents-models-skills.ts`
+- `docs/nodes/talk.md`
+- `bex-fork.md`
+
+Primary seam tests:
+
+- `node scripts/run-vitest.mjs src/config/talk.normalize.test.ts src/config/zod-schema.talk.test.ts src/config/config.talk-validation.test.ts packages/gateway-protocol/src/talk-config.contract.test.ts`
+- `node scripts/run-vitest.mjs src/agents/agent-tools.create-openclaw-coding-tools.test.ts`
+- `node scripts/run-vitest.mjs src/talk/realtime-instructions.test.ts src/talk/realtime-context.test.ts src/talk/realtime-direct-tools.test.ts`
+- `node scripts/run-vitest.mjs src/gateway/server-methods/talk.test.ts src/gateway/talk-realtime-relay.test.ts`
+- `pnpm docs:list`
+- `git diff --check`
+
+Replay order:
+
+1. Restore the `voice` tool profile, `talk.realtime.tools`, schema metadata, and Gateway protocol Talk config shape, including `consultRouting`.
+2. Restore `runtimeToolPolicy` support in `createOpenClawCodingTools` so Talk can reuse profile, allow, alsoAllow, deny, plugin, MCP, fs, and exec policy.
+3. Restore exact `voice-agent-base.md` loading, realtime instruction composition, and transient realtime context packet construction.
+4. Restore the direct realtime tool adapter, including reserved-name checks, object-root schema filtering, hard message-tool exclusion, abort handling, and compact result shaping.
+5. Wire `talk.session.create` gateway-relay sessions to resolve agent/session scope, compose instructions, build context, build direct tools, and pass direct executors to the relay.
+6. Restore relay direct-tool execution between consult/control handling and the unknown-tool broadcast fallback.
+7. Update Talk docs and rerun the focused proof commands above.
+
+Non-negotiable invariants:
+
+- Never generate, migrate, overwrite, or patch `<agentDir>/voice-agent-base.md`.
+- Runtime context is appended outside the voice prompt file and is not persisted as a new state file.
+- Unset `talk.realtime.tools` exposes no direct tools; only consult/control remain.
+- `voice` is a stable profile name and starts from broad local-user capability.
+- `deny` wins over profile, `allow`, `alsoAllow`, plugin, MCP, fs, and exec grants.
+- Realtime voice never exposes message-sending tools, even under `profile: "full"` or `profile: "voice"`.
+- Use projected history, not raw `toolResult` scraping, for latest `message` tool mirror context.
+- Large-session summary failures are fail-open: inject a plain degraded-context note and bounded recent tail instead of failing session startup.
+- Direct tool results sent to the provider stay compact and JSON-safe, with no binary or media payload dumps.
+- Unknown realtime tool calls remain broadcast-only for existing manual/client result submission.
+- Browser/client-owned realtime sessions remain consult/control-only until they get a separate client execution protocol.
+
+Expected config shape:
+
+```json5
+{
+  talk: {
+    realtime: {
+      provider: "openai",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      tools: {
+        profile: "voice",
+        deny: ["exec"],
+      },
+    },
+  },
+}
+```
+
 ### Android and Discord realtime audio
 
 Carry behavior: Android Talk Mode discovers realtime availability from `talk.config`, starts `talk.session.create` in realtime mode with `transport: "gateway-relay"` and `brain: "agent-consult"`, streams microphone PCM through relay audio calls, and falls back to legacy batch Talk only when realtime is unavailable. Discord voice channels use the same provider-backed full-duplex realtime bridge by default; `channels.discord.voice.realtime.enabled=false` is the explicit legacy batch STT/TTS escape hatch.
@@ -418,6 +498,12 @@ Carry behavior: Android Talk Mode discovers realtime availability from `talk.con
 Primary seam files:
 
 - `apps/android/app/src/main/java/ai/openclaw/app/voice/*Realtime*`
+- `apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt`
+- `apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt`
+- `apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt`
+- `apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt`
+- `apps/android/app/src/main/java/ai/openclaw/app/node/ConnectionManager.kt`
+- `apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt`
 - `apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeGatewayConfig.kt`
 - `apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt`
 - `extensions/openai/realtime-voice-provider.ts`
@@ -440,18 +526,22 @@ Primary seam files:
 - `extensions/discord/src/voice/audio.ts`
 - `extensions/discord/src/voice/realtime.ts`
 - `extensions/discord/src/voice/manager.ts`
+- `docs/channels/pairing.md`
 - `docs/channels/discord.md`
 - `docs/gateway/config-channels.md`
 
 Primary seam tests:
 
+- `apps/android/app/src/test/java/ai/openclaw/app/GatewayBootstrapAuthTest.kt`
+- `apps/android/app/src/test/java/ai/openclaw/app/chat/ChatControllerMessageIdentityTest.kt`
+- `apps/android/app/src/test/java/ai/openclaw/app/gateway/GatewaySessionInvokeTest.kt`
+- `apps/android/app/src/test/java/ai/openclaw/app/node/ConnectionManagerTest.kt`
 - `apps/android/app/src/test/java/ai/openclaw/app/voice/RealtimeTalkRelayEventParserTest.kt`
 - `apps/android/app/src/test/java/ai/openclaw/app/voice/RealtimeTalkManagerAudioInjectionTest.kt`
 - `apps/android/app/src/test/java/ai/openclaw/app/voice/TalkModeConfigParsingTest.kt`
 - `src/gateway/gateway-misc.test.ts`
 - `src/gateway/protocol/index.test.ts`
 - `src/gateway/server-methods/talk.test.ts`
-- `src/gateway/talk-realtime-relay.test.ts`
 - `node scripts/run-vitest.mjs extensions/openai/realtime-voice-provider.test.ts src/talk/provider-resolver.test.ts src/gateway/server-methods/talk.test.ts`
 - `extensions/discord/src/voice/manager.e2e.test.ts`
 - `extensions/discord/src/voice/realtime.test.ts`
@@ -466,10 +556,12 @@ Rebase notes:
 - Keep relay cleanup tied to Gateway websocket lifecycle so relay sessions close when the client connection closes.
 - Keep Discord receive audio decoded into the shared PCM16 24 kHz realtime contract before sending it to the provider bridge.
 - When Bex asks to build the Android app without naming a flavor, build the sideloadable third-party release APK with `cd apps/android && ./gradlew :app:assembleThirdPartyRelease`; do not default to the Play flavor because the third-party flavor keeps SMS and Call Log permissions.
+- Keep Android QR/setup-code bootstrap usable for operator Talk: setup-code operator handoff includes `operator.talk.secrets`, and a pasted setup code must take precedence over a stored device token when the stored token does not cover the requested scopes. The app setup flow should copy the setup URL into the Gateway endpoint fields and the bootstrap token into bootstrap auth, not overwrite the setup-code field with the URL.
+- Keep Android chat sends recoverable when the Gateway completes but the phone misses the terminal event. Pending runs must poll `chat.history`, reconcile under the canonical run id returned by `chat.send`, keep optimistic-message state synchronized, and clear the pending/working state once the persisted assistant reply appears.
 
 ### Wear OS voice companion
 
-Carry behavior: the Android app ships a Wear OS companion module for push-to-talk voice turns. The watch discovers phones advertising `openclaw_relay_phone`, pins each turn to one reachable phone node, and accepts only terminal audio/status/error messages for the active turn and active phone node. The default watch capture path uses the platform `SpeechRecognizer` and sends final nonblank text over `/openclaw/watch/text/{turnId}`; this avoids watch-side raw audio endpointing in normal environments and lets Wear OS own speech detection. The raw 24 kHz PCM relay remains as the fallback when no recognizer service is available and as the debug path for synthetic endpointing/replay validation. Both Android phone and Wear apps expose the native assistant role surface with `VoiceInteractionService` and `VoiceInteractionSession`: public Android `ACTION_ASSIST` foregrounds only, while automatic assistant-triggered dictation comes from the system-bound session through an in-process trusted bridge. Phone assistant invocation opens the Voice tab and starts the normal platform `SpeechRecognizer` dictation path; watch assistant invocation starts the existing watch text-turn path. Role setup uses `RoleManager.ROLE_ASSISTANT` on each device and only appears when that device exposes the role. The phone-side relay handles watch text turns by skipping Gateway transcription and sending the transcript through normal `chat.send` with `deliver: true`, `thinking: "low"`, and the configured Wear target session. Raw PCM turns still use buffered Gateway transcription first. Both paths ask Gateway for trusted local final TTS media generated for the same run, prefer MP3/Opus response formats when negotiated, and only fall back to `talk.speak` when no reusable final audio is available. Gateway keeps a short-lived run-scoped final-audio registry so the watch can reuse the shared autoTTS artifact without depending on Telegram adapter output.
+Carry behavior: the Android app ships a Wear OS companion module for push-to-talk voice turns. The watch discovers phones advertising `openclaw_relay_phone`, pins each turn to one reachable phone node, and accepts only terminal audio/status/error messages for the active turn and active phone node. The default watch capture path uses the platform `SpeechRecognizer` and sends final nonblank text over `/openclaw/watch/text/{turnId}`; this avoids watch-side raw audio endpointing in normal environments and lets Wear OS own speech detection. If a recognizer emits partial text and then returns an empty final transcript or `No speech recognized`, the watch sends the last nonblank partial transcript instead of dropping the turn. The raw 24 kHz PCM relay remains as the fallback when no recognizer service is available and as the debug path for synthetic endpointing/replay validation. Both Android phone and Wear apps expose the native assistant role surface with `VoiceInteractionService` and `VoiceInteractionSession`: public Android `ACTION_ASSIST` foregrounds only, while automatic assistant-triggered dictation comes from the system-bound session through an in-process trusted bridge. Phone assistant invocation opens the Voice tab and starts the normal platform `SpeechRecognizer` dictation path; watch assistant invocation starts the existing watch text-turn path. Role setup uses `RoleManager.ROLE_ASSISTANT` on each device and only appears when that device exposes the role. The phone-side relay handles watch text turns by skipping Gateway transcription and sending the transcript through normal `chat.send` with `deliver: true`, `thinking: "low"`, and the configured Wear target session. Raw PCM turns still use buffered Gateway transcription first. Both paths ask Gateway for trusted local final TTS media generated for the same run, prefer MP3/Opus response formats when negotiated, and only fall back to `talk.speak` when no reusable final audio is available. Gateway keeps a short-lived run-scoped final-audio registry so the watch can reuse the shared autoTTS artifact without depending on Telegram adapter output.
 
 Session target carry behavior: this fork keeps Android node identity device-scoped for presence, pairing, and capability commands, but makes the conversation target explicit. The default `SessionTargetMode.FollowSelected` starts from the Gateway canonical main session and lets chat, phone voice, Canvas restore/actions, and Wear voice follow the currently selected phone chat session. `SessionTargetMode.Main` pins those surfaces to the Gateway canonical main session, and `SessionTargetMode.Device` preserves upstream-style per-device node session isolation. First launch with this seam clears legacy Wear-only target overrides so old `wear.targetSessionKey` values do not keep the watch pinned to a stale session; after migration, a nonblank `wear.targetSessionKey` remains an explicit override for watch turns only.
 
@@ -501,6 +593,7 @@ Primary seam files:
 - `apps/android/app/src/test/java/ai/openclaw/app/assistant/PhoneAssistantEntryTest.kt`
 - `apps/android/app/src/test/java/ai/openclaw/app/ui/VoiceScreenLogicTest.kt`
 - `apps/android/app/src/test/java/ai/openclaw/app/wear/WearAudioRelayTextTurnTest.kt`
+- `apps/android/app/src/test/java/ai/openclaw/app/wear/WearSttTtsSessionTest.kt`
 - `apps/android/app/src/main/res/values/wear.xml`
 - `apps/android/audio/build.gradle.kts`
 - `apps/android/audio/src/main/java/ai/openclaw/audio/PcmAudio.kt`
@@ -589,6 +682,8 @@ Rebase notes:
 - Keep `WearRelayService` as the background Wearable Data Layer entrypoint, but let the foreground `NodeRuntime` relay own messages when it is already initialized so duplicate service delivery does not double-handle a turn.
 - Keep the phone-side Wear relay on the normal durable turn path. STT still uses Gateway `talk.session.*` transcription events, but assistant replies should route through `chat.send`, reusable final TTS audio, and `talk.speak` only as fallback.
 - Keep watch dictation text turns as the primary user path. Fall back to raw PCM only before capture starts when `SpeechRecognizer` is unavailable or debug PCM/endpoint replay is explicitly invoked; once recognition has started, no-match/client/network errors should surface briefly and return to idle instead of trying to reconstruct missed audio.
+- Keep the last nonblank dictation partial as a sendable transcript until a final transcript or terminal error resolves the turn. This protects Wear OS recognizers that display correct partial text but still end with an empty final transcript or `No speech recognized`.
+- Keep watch transcript status text raw. Do not prefix partial or final transcript display with `Heard:`.
 - Keep `AndroidSpeechDictation` targeting a non-OpenClaw recognition service component. If only OpenClaw's assistant metadata stub is present, dictation must report unavailable so raw PCM fallback remains reachable.
 - Keep assistant-triggered dictation guarded. Do not accept spoofable extras or public `ACTION_ASSIST` launches to start microphone capture; auto-start must come from the system-bound voice interaction session through `AssistantTrustedStartBridge`, and only the foreground/resumed activity path should consume that one-shot request. Preserve `onNewIntent()` handling for `SINGLE_TOP` assistant launches.
 - Keep phone Voice tab transcript ownership mode-specific. The landing `Start Talk` surface should render realtime Talk entries only; dictation entries belong to the active Dictation screen and must not appear under the Talk CTA after capture returns to idle.
@@ -605,6 +700,7 @@ Rebase notes:
 - Keep `chat.finalAudio.get` additive and hidden. It should expose only trusted, run-scoped local audio already produced by the chat reply pipeline, return not-found/unreadable states as fallback signals, and avoid persistent state.
 - A Wear service cold start must not restore persisted phone manual mic capture. Restore that preference only from foreground/UI runtime activation.
 - Wear consults and phone Talk Mode turns can overlap; pending chat completion tracking must be per `runId`, not a single shared waiter.
+- Keep watch processing timeouts long enough for slow realtime/chat turns; the current watchdog is 180 seconds, not the older 60-second path.
 - Keep outbound Wear Data Layer sends bounded and node-pinned. Audio chunks may be dropped under backpressure, but control messages must still be delivered in order.
 - Keep packaging proof tied to the Android release helper. The third-party phone bundle should include the Wear OS module through `bundleThirdPartyRelease`, and the script must copy the generated `.aab` without silently dropping the watch companion artifact.
 - Keep the shared `:audio` module for PCM/resampling/codec helpers that both `:app` and `:wear` consume. Do not duplicate codec logic back into either module.

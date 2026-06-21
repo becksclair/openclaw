@@ -70,6 +70,41 @@ const TalkBrainSchema = Type.Union([
   Type.Literal("none"),
 ]);
 
+const TalkConsultRoutingSchema = Type.Union([
+  Type.Literal("provider-direct"),
+  Type.Literal("force-agent-consult"),
+]);
+
+const ToolProfileSchema = Type.Union([
+  Type.Literal("minimal"),
+  Type.Literal("coding"),
+  Type.Literal("messaging"),
+  Type.Literal("full"),
+  Type.Literal("voice"),
+]);
+
+const ToolPolicyBaseSchema = {
+  deny: Type.Optional(Type.Array(Type.String())),
+  profile: Type.Optional(ToolProfileSchema),
+};
+
+const ToolPolicyConfigSchema = Type.Union([
+  Type.Object(
+    {
+      ...ToolPolicyBaseSchema,
+      allow: Type.Optional(Type.Array(Type.String())),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      ...ToolPolicyBaseSchema,
+      alsoAllow: Type.Optional(Type.Array(Type.String())),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
 /** Agent control actions accepted from Talk clients and managed rooms. */
 const TalkAgentControlModeSchema = Type.Union([
   Type.Literal("status"),
@@ -189,6 +224,7 @@ export const TalkEventSchema = Type.Object(
 export const TalkClientCreateParamsSchema = Type.Object(
   {
     sessionKey: Type.Optional(Type.String()),
+    spawnedBy: Type.Optional(NonEmptyString),
     provider: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
@@ -207,6 +243,7 @@ export const TalkClientCreateParamsSchema = Type.Object(
 export const TalkClientToolCallParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
+    spawnedBy: Type.Optional(NonEmptyString),
     callId: NonEmptyString,
     name: NonEmptyString,
     args: Type.Optional(Type.Unknown()),
@@ -622,6 +659,8 @@ const TalkRealtimeConfigSchema = Type.Object(
     mode: Type.Optional(TalkModeSchema),
     transport: Type.Optional(TalkTransportSchema),
     brain: Type.Optional(TalkBrainSchema),
+    consultRouting: Type.Optional(TalkConsultRoutingSchema),
+    tools: Type.Optional(ToolPolicyConfigSchema),
   },
   { additionalProperties: false },
 );

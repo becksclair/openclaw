@@ -1028,6 +1028,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.realtime.transport": "Talk Realtime Transport",
   "talk.realtime.brain": "Talk Realtime Brain",
   "talk.realtime.consultRouting": "Talk Realtime Consult Routing",
+  "talk.realtime.tools": "Talk Realtime Tools",
   channels: "Channels",
   "channels.defaults": "Channel Defaults",
   "channels.defaults.groupPolicy": "Default Group Policy",

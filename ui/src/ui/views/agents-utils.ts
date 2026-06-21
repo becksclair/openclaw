@@ -125,6 +125,7 @@ export const PROFILE_OPTIONS = [
   { id: "coding", label: "Coding" },
   { id: "messaging", label: "Messaging" },
   { id: "full", label: "Full" },
+  { id: "voice", label: "Voice" },
 ] as const;
 
 export function resolveToolSections(

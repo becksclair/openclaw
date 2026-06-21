@@ -211,4 +211,42 @@ describe("RealtimeTalkSession", () => {
       reasoningEffort: "low",
     });
   });
+
+  it("falls back to Gateway relay session creation for the selected session", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("client-owned realtime unavailable"))
+      .mockResolvedValueOnce({
+        provider: "openai",
+        transport: "gateway-relay",
+        relaySessionId: "relay-1",
+        audio: {
+          inputEncoding: "pcm16",
+          inputSampleRateHz: 24000,
+          outputEncoding: "pcm16",
+          outputSampleRateHz: 24000,
+        },
+      });
+    const session = new RealtimeTalkSession(
+      { request } as never,
+      "agent:main:subagent:child",
+      {},
+      { spawnedBy: "agent:main:parent" },
+    );
+
+    await session.start();
+
+    expect(request).toHaveBeenNthCalledWith(1, "talk.client.create", {
+      sessionKey: "agent:main:subagent:child",
+      spawnedBy: "agent:main:parent",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "talk.session.create", {
+      sessionKey: "agent:main:subagent:child",
+      spawnedBy: "agent:main:parent",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+    });
+    expect(relayCtor).toHaveBeenCalledTimes(1);
+  });
 });

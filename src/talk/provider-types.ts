@@ -59,6 +59,11 @@ export type RealtimeVoiceToolResultOptions = {
   willContinue?: boolean;
 };
 
+export type RealtimeVoiceToolResult = {
+  callId: string;
+  result: unknown;
+};
+
 export type RealtimeVoiceBridgeEvent = {
   direction: "client" | "server";
   type: string;
@@ -184,6 +189,11 @@ export type RealtimeVoiceBrowserSession =
 
 export type RealtimeVoiceBridge = {
   supportsToolResultContinuation?: boolean;
+  /**
+   * Provider can accept a completed tool result without starting a new assistant response.
+   * Providers without this must receive concurrent results in one batch so they respond once.
+   */
+  supportsToolResultSuppression?: boolean;
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   setMediaTimestamp(ts: number): void;
@@ -191,6 +201,10 @@ export type RealtimeVoiceBridge = {
   triggerGreeting?(instructions?: string): void;
   handleBargeIn?(options?: RealtimeVoiceBargeInOptions): void;
   submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;
+  submitToolResults?(
+    results: RealtimeVoiceToolResult[],
+    options?: RealtimeVoiceToolResultOptions,
+  ): void;
   acknowledgeMark(): void;
   close(): void;
   isConnected(): boolean;

@@ -23,10 +23,13 @@ import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceBrowserAudioContract,
+  type RealtimeVoiceBridge,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceTool,
+  type RealtimeVoiceToolResult,
   type RealtimeVoiceToolResultOptions,
 } from "../talk/provider-types.js";
+import type { RealtimeDirectToolExecutor } from "../talk/realtime-direct-tools.js";
 import {
   isLikelyRealtimeVoiceAssistantEchoTranscript,
   recordRealtimeVoiceTranscript,
@@ -58,6 +61,7 @@ const RELAY_EVENT = "talk.event";
 const RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS = 12_000;
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1_800;
+const DIRECT_TOOL_TIMEOUT_MS = 60_000;
 
 type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "ready" }
@@ -88,6 +92,14 @@ type TalkRealtimeRelayEventPayload =
       args: unknown;
       forced?: boolean;
     }
+  | {
+      relaySessionId: string;
+      type: "directToolCall";
+      itemId: string;
+      callId: string;
+      name: string;
+      args: unknown;
+    }
   | { relaySessionId: string; type: "toolResult"; callId: string }
   | { relaySessionId: string; type: "toolProgress"; result: RealtimeVoiceAgentControlResult }
   | {
@@ -115,9 +127,19 @@ type RelaySession = {
   cleanupTimer: ReturnType<typeof setTimeout>;
   activeAgentRuns: Map<string, string>;
   activeAgentToolCalls: Map<string, string>;
+  directToolExecutors: Map<string, RealtimeDirectToolExecutor>;
+  activeDirectToolCalls: Map<string, AbortController>;
+  pendingDirectToolResults: Map<string, PendingDirectToolResult>;
+  cancelledDirectToolCalls: Set<string>;
+  completedDirectToolCalls: Set<string>;
   completedAgentToolCalls: Set<string>;
   forcedConsults: RealtimeVoiceForcedConsultCoordinator;
   transcript: RealtimeVoiceTranscriptEntry[];
+};
+
+type PendingDirectToolResult = {
+  callId: string;
+  result: Awaited<ReturnType<RealtimeDirectToolExecutor>>;
 };
 
 type TalkRealtimeRelayIssue = {
@@ -137,6 +159,7 @@ type CreateTalkRealtimeRelaySessionParams = {
   providerConfig: RealtimeVoiceProviderConfig;
   instructions: string;
   tools: RealtimeVoiceTool[];
+  directToolExecutors?: Map<string, RealtimeDirectToolExecutor>;
   model?: string;
   sessionKey?: string;
   voice?: string;
@@ -271,6 +294,15 @@ function abortRelayAgentRuns(session: RelaySession, reason: string): void {
   session.activeAgentToolCalls.clear();
 }
 
+function abortRelayDirectToolCalls(session: RelaySession): void {
+  for (const [callId, controller] of session.activeDirectToolCalls) {
+    session.cancelledDirectToolCalls.add(callId);
+    controller.abort();
+  }
+  session.activeDirectToolCalls.clear();
+  session.pendingDirectToolResults.clear();
+}
+
 function pruneInactiveRelayAgentRuns(session: RelaySession): number {
   for (const runId of session.activeAgentRuns.keys()) {
     if (!session.context.chatAbortControllers.has(runId)) {
@@ -311,6 +343,46 @@ function broadcastToolResultToOwner(
   });
 }
 
+function flushPendingDirectToolResults(session: RelaySession): void {
+  if (session.pendingDirectToolResults.size === 0) {
+    return;
+  }
+  const results: RealtimeVoiceToolResult[] = [...session.pendingDirectToolResults.values()].map(
+    (entry) => ({
+      callId: entry.callId,
+      result: entry.result,
+    }),
+  );
+  session.pendingDirectToolResults.clear();
+  session.bridge.submitToolResults(results);
+}
+
+function supportsSafeDirectToolResults(bridge: RealtimeVoiceBridge): boolean {
+  return (
+    bridge.supportsToolResultSuppression === true || typeof bridge.submitToolResults === "function"
+  );
+}
+
+function submitRelayDirectToolProviderResult(
+  session: RelaySession,
+  result: PendingDirectToolResult,
+): void {
+  const concurrentCallsActive = session.activeDirectToolCalls.size > 1;
+  const hasQueuedBatch = session.pendingDirectToolResults.size > 0;
+  if (
+    session.bridge.bridge.supportsToolResultSuppression !== true &&
+    (concurrentCallsActive || hasQueuedBatch)
+  ) {
+    session.pendingDirectToolResults.set(result.callId, result);
+    if (!concurrentCallsActive) {
+      flushPendingDirectToolResults(session);
+    }
+    return;
+  }
+  const submitOptions = concurrentCallsActive ? { suppressResponse: true } : undefined;
+  session.bridge.submitToolResult(result.callId, result.result, submitOptions);
+}
+
 function submitRelayAgentControlProviderResults(
   session: RelaySession,
   result: RealtimeVoiceAgentControlResult,
@@ -346,12 +418,133 @@ function submitRelayAgentControlProviderResults(
   session.activeAgentRuns.clear();
 }
 
+async function runRelayDirectToolCall(
+  session: RelaySession,
+  toolCall: {
+    itemId: string;
+    callId: string;
+    name: string;
+    args: unknown;
+  },
+  turnId: string,
+  executor: RealtimeDirectToolExecutor,
+): Promise<void> {
+  if (
+    session.activeDirectToolCalls.has(toolCall.callId) ||
+    session.cancelledDirectToolCalls.has(toolCall.callId) ||
+    session.completedDirectToolCalls.has(toolCall.callId)
+  ) {
+    return;
+  }
+  const controller = new AbortController();
+  session.activeDirectToolCalls.set(toolCall.callId, controller);
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "directToolCall",
+    itemId: toolCall.itemId,
+    callId: toolCall.callId,
+    name: toolCall.name,
+    args: toolCall.args,
+    talkEvent: session.talk.emit({
+      type: "tool.call",
+      itemId: toolCall.itemId,
+      callId: toolCall.callId,
+      turnId,
+      payload: { name: toolCall.name, args: toolCall.args },
+    }),
+  });
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  try {
+    const toolResult = executor({
+      callId: toolCall.callId,
+      name: toolCall.name,
+      args: toolCall.args,
+      signal: controller.signal,
+    });
+    toolResult.catch(() => undefined);
+    const timeoutResult = new Promise<Awaited<ReturnType<RealtimeDirectToolExecutor>>>(
+      (resolve) => {
+        timeoutId = setTimeout(() => {
+          if (controller.signal.aborted) {
+            resolve({
+              ok: false,
+              status: "error",
+              tool: toolCall.name,
+              error: "Realtime direct tool was cancelled before timeout",
+            });
+            return;
+          }
+          timedOut = true;
+          controller.abort();
+          resolve({
+            ok: false,
+            status: "error",
+            tool: toolCall.name,
+            error: `Realtime direct tool timed out after ${DIRECT_TOOL_TIMEOUT_MS}ms`,
+          });
+        }, DIRECT_TOOL_TIMEOUT_MS);
+        timeoutId.unref?.();
+      },
+    );
+    const result = await Promise.race([toolResult, timeoutResult]);
+    if (!relaySessions.has(session.id)) {
+      return;
+    }
+    if (
+      session.cancelledDirectToolCalls.has(toolCall.callId) ||
+      (controller.signal.aborted && !timedOut)
+    ) {
+      return;
+    }
+    submitRelayDirectToolProviderResult(session, {
+      callId: toolCall.callId,
+      result,
+    });
+    broadcastToolResultToOwner(session, {
+      callId: toolCall.callId,
+      turnId,
+      result,
+      final: true,
+    });
+    session.completedDirectToolCalls.add(toolCall.callId);
+  } catch (error) {
+    if (!relaySessions.has(session.id) || controller.signal.aborted) {
+      return;
+    }
+    const result = {
+      ok: false,
+      status: "error" as const,
+      tool: toolCall.name,
+      error: formatError(error),
+    };
+    submitRelayDirectToolProviderResult(session, {
+      callId: toolCall.callId,
+      result,
+    });
+    broadcastToolResultToOwner(session, {
+      callId: toolCall.callId,
+      turnId,
+      result,
+      final: true,
+    });
+    session.completedDirectToolCalls.add(toolCall.callId);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    session.activeDirectToolCalls.delete(toolCall.callId);
+    session.cancelledDirectToolCalls.delete(toolCall.callId);
+  }
+}
+
 function closeRelaySession(session: RelaySession, reason: "completed" | "error"): void {
   session.forcedConsults.clear();
   relaySessions.delete(session.id);
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
   abortRelayAgentRuns(session, reason === "error" ? "relay-error" : "relay-closed");
+  abortRelayDirectToolCalls(session);
   session.bridge.close();
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
@@ -598,6 +791,16 @@ export function createTalkRealtimeRelaySession(
         }
         submitRealtimeAgentConsultWorkingResponse(relay, toolCall.callId, turnId);
       }
+      const directExecutor = relay?.directToolExecutors.get(toolCall.name);
+      if (relay && directExecutor) {
+        void runRelayDirectToolCall(
+          relay,
+          toolCall,
+          turnId ?? ensureRelayTurn(relay),
+          directExecutor,
+        );
+        return;
+      }
       emit(
         {
           relaySessionId,
@@ -644,6 +847,7 @@ export function createTalkRealtimeRelaySession(
       forgetUnifiedTalkSession(relaySessionId);
       clearTimeout(active.cleanupTimer);
       abortRelayAgentRuns(active, "relay-closed");
+      abortRelayDirectToolCalls(active);
       if (!ready && !failureEmitted) {
         const issue = realtimeRelayIssue({
           message: "Realtime provider closed before the session became ready.",
@@ -663,6 +867,13 @@ export function createTalkRealtimeRelaySession(
       );
     },
   });
+  const directToolExecutors = params.directToolExecutors ?? new Map();
+  if (directToolExecutors.size > 0 && !supportsSafeDirectToolResults(bridge.bridge)) {
+    bridge.close();
+    throw new Error(
+      "Realtime provider bridge must support tool-result suppression or batched tool results before direct realtime tools can run.",
+    );
+  }
   const relay: RelaySession = {
     id: relaySessionId,
     connId: params.connId,
@@ -679,6 +890,11 @@ export function createTalkRealtimeRelaySession(
     }, RELAY_SESSION_TTL_MS),
     activeAgentRuns: new Map(),
     activeAgentToolCalls: new Map(),
+    directToolExecutors,
+    activeDirectToolCalls: new Map(),
+    pendingDirectToolResults: new Map(),
+    cancelledDirectToolCalls: new Set(),
+    completedDirectToolCalls: new Set(),
     completedAgentToolCalls: new Set(),
     forcedConsults: createRealtimeVoiceForcedConsultCoordinator(),
     transcript: [],
@@ -1007,6 +1223,7 @@ export function cancelTalkRealtimeRelayTurn(params: {
   cancelForcedConsults(session);
   session.bridge.handleBargeIn({ audioPlaybackActive: true });
   abortRelayAgentRuns(session, reason);
+  abortRelayDirectToolCalls(session);
   const cancelled = session.talk.cancelTurn({
     turnId,
     payload: { reason },
@@ -1031,6 +1248,7 @@ export function stopTalkRealtimeRelaySession(params: {
 export function clearTalkRealtimeRelaySessionsForTest(): void {
   for (const session of relaySessions.values()) {
     session.forcedConsults.clear();
+    abortRelayDirectToolCalls(session);
     clearTimeout(session.cleanupTimer);
     forgetUnifiedTalkSession(session.id);
     session.bridge.close();

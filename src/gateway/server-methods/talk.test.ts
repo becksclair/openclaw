@@ -31,6 +31,13 @@ const mocks = vi.hoisted(() => ({
   controlRealtimeVoiceAgentRun: vi.fn(),
   steerTalkRealtimeRelayAgentRun: vi.fn(),
   resolveSessionKeyFromResolveParams: vi.fn(),
+  readVoiceAgentBasePrompt: vi.fn<() => Promise<unknown>>(async () => ({ source: "none" })),
+  buildTalkRealtimeContextPacket: vi.fn<() => Promise<unknown>>(),
+  createRealtimeDirectTools: vi.fn<() => unknown>(() => ({
+    tools: [],
+    executors: new Map(),
+    excludedTools: [],
+  })),
   transcodeAudioBufferToOpus: vi.fn(async () => Buffer.from("opus-audio")),
   buildMediaUnderstandingRegistry: vi.fn(
     () =>
@@ -81,6 +88,18 @@ vi.mock("../../talk/provider-resolver.js", () => ({
 
 vi.mock("../../talk/agent-run-control.js", () => ({
   controlRealtimeVoiceAgentRun: mocks.controlRealtimeVoiceAgentRun,
+}));
+
+vi.mock("../../agents/voice-agent-base-prompt-file.js", () => ({
+  readVoiceAgentBasePrompt: mocks.readVoiceAgentBasePrompt,
+}));
+
+vi.mock("../../talk/realtime-context.js", () => ({
+  buildTalkRealtimeContextPacket: mocks.buildTalkRealtimeContextPacket,
+}));
+
+vi.mock("../../talk/realtime-direct-tools.js", () => ({
+  createRealtimeDirectTools: mocks.createRealtimeDirectTools,
 }));
 
 vi.mock("./chat.js", () => ({
@@ -175,6 +194,13 @@ describe("talk.catalog handler", () => {
     mocks.listRealtimeVoiceProviders.mockReturnValue([]);
     mocks.getResolvedSpeechProviderConfig.mockReturnValue({});
     mocks.resolveTtsConfig.mockReturnValue({ timeoutMs: 30_000 });
+    mocks.readVoiceAgentBasePrompt.mockResolvedValue({ source: "none" });
+    mocks.buildTalkRealtimeContextPacket.mockReset();
+    mocks.createRealtimeDirectTools.mockReturnValue({
+      tools: [],
+      executors: new Map(),
+      excludedTools: [],
+    });
   });
 
   it("returns safe speech, transcription, and realtime catalogs without provider secrets", async () => {
@@ -1018,7 +1044,7 @@ describe("talk.session unified handlers", () => {
         model: "gpt-realtime",
         voice: "alloy",
       },
-      client: { connId: "conn-1" } as never,
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
       isWebchatConnect: () => false,
       respond: createRespond as never,
       context: {
@@ -1064,7 +1090,7 @@ describe("talk.session unified handlers", () => {
     await talkHandlers["talk.session.appendAudio"]({
       req: { type: "req", id: "2", method: "talk.session.appendAudio" },
       params: { sessionId: "relay-unified-1", audioBase64: "aGVsbG8=", timestamp: 42 },
-      client: { connId: "conn-1" } as never,
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
       isWebchatConnect: () => false,
       respond: inputRespond as never,
       context: {} as never,
@@ -1080,7 +1106,7 @@ describe("talk.session unified handlers", () => {
     await talkHandlers["talk.session.cancelOutput"]({
       req: { type: "req", id: "3", method: "talk.session.cancelOutput" },
       params: { sessionId: "relay-unified-1", reason: "barge-in" },
-      client: { connId: "conn-1" } as never,
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
       isWebchatConnect: () => false,
       respond: cancelRespond as never,
       context: {} as never,
@@ -1154,6 +1180,1108 @@ describe("talk.session unified handlers", () => {
       connId: "conn-1",
     });
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("passes realtime relay spawnedBy visibility scope to session resolution", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.resolveSessionKeyFromResolveParams.mockResolvedValue({
+      ok: true,
+      key: "agent:worker:subagent:child",
+    });
+    mocks.readVoiceAgentBasePrompt.mockResolvedValue({ source: "none" });
+    mocks.buildTalkRealtimeContextPacket.mockResolvedValue(undefined);
+    mocks.createRealtimeDirectTools.mockReturnValue({
+      tools: [],
+      executors: new Map(),
+      excludedTools: [],
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-spawnedby-1",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      expiresAt: 1_797_986_400,
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        sessionKey: "agent:worker:subagent:child",
+        spawnedBy: "agent:main:parent",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                tools: { profile: "voice" },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondOk(respond, { sessionId: "relay-spawnedby-1" });
+    expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        p: {
+          key: "agent:worker:subagent:child",
+          spawnedBy: "agent:main:parent",
+          includeGlobal: true,
+          includeUnknown: true,
+        },
+      }),
+    );
+    expect(mocks.createRealtimeDirectTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:worker:subagent:child",
+        spawnedBy: "agent:main:parent",
+      }),
+    );
+  });
+
+  it("starts fresh realtime relay sessions for the configured default agent key", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.resolveSessionKeyFromResolveParams.mockResolvedValue({
+      ok: false,
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "No session found: agent:sky:main",
+      },
+    });
+    mocks.readVoiceAgentBasePrompt.mockResolvedValue({ source: "none" });
+    mocks.buildTalkRealtimeContextPacket.mockResolvedValue({
+      summarySource: "none",
+      contextNote: "No current session context was found for agent:sky:main.",
+    });
+    mocks.createRealtimeDirectTools.mockReturnValue({
+      tools: [],
+      executors: new Map(),
+      excludedTools: [],
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-fresh-default-1",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      expiresAt: 1_797_986_400,
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        sessionKey: "agent:sky:main",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            agents: { list: [{ id: "sky", default: true }] },
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                tools: { profile: "voice" },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondOk(respond, { sessionId: "relay-fresh-default-1" });
+    expect(mocks.buildTalkRealtimeContextPacket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "sky",
+        sessionKey: "agent:sky:main",
+      }),
+    );
+    expect(mocks.createTalkRealtimeRelaySession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:sky:main" }),
+    );
+  });
+
+  it("starts fresh realtime relay sessions for the main session alias", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.resolveSessionKeyFromResolveParams.mockResolvedValue({
+      ok: false,
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "No session found: main",
+      },
+    });
+    mocks.readVoiceAgentBasePrompt.mockResolvedValue({ source: "none" });
+    mocks.buildTalkRealtimeContextPacket.mockResolvedValue({
+      summarySource: "none",
+      contextNote: "No current session context was found for agent:sky:main.",
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-fresh-main-alias-1",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      expiresAt: 1_797_986_400,
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        sessionKey: "main",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            agents: { list: [{ id: "sky", default: true }] },
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                tools: { profile: "voice" },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondOk(respond, { sessionId: "relay-fresh-main-alias-1" });
+    expect(mocks.buildTalkRealtimeContextPacket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "sky",
+        sessionKey: "agent:sky:main",
+      }),
+    );
+    expect(mocks.createTalkRealtimeRelaySession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:sky:main" }),
+    );
+  });
+
+  it("starts fresh realtime relay sessions for configured non-default agents", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.resolveSessionKeyFromResolveParams.mockResolvedValue({
+      ok: false,
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "No session found: agent:work:main",
+      },
+    });
+    mocks.readVoiceAgentBasePrompt.mockResolvedValue({ source: "none" });
+    mocks.buildTalkRealtimeContextPacket.mockResolvedValue({
+      summarySource: "none",
+      contextNote: "No current session context was found for agent:work:main.",
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-fresh-non-default-1",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      expiresAt: 1_797_986_400,
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        sessionKey: "agent:work:main",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            agents: {
+              list: [{ id: "sky", default: true }, { id: "work" }],
+            },
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                tools: { profile: "voice" },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondOk(respond, { sessionId: "relay-fresh-non-default-1" });
+    expect(mocks.buildTalkRealtimeContextPacket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "work",
+        sessionKey: "agent:work:main",
+      }),
+    );
+    expect(mocks.createTalkRealtimeRelaySession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:work:main" }),
+    );
+  });
+
+  it("rejects fresh realtime relay keys outside the configured default agent", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.resolveSessionKeyFromResolveParams.mockResolvedValue({
+      ok: false,
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "No session found: agent:main:main",
+      },
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        sessionKey: "agent:main:main",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            agents: { list: [{ id: "sky", default: true }] },
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                tools: { profile: "voice" },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "No session found: agent:main:main",
+    });
+    expect(mocks.createTalkRealtimeRelaySession).not.toHaveBeenCalled();
+  });
+
+  it("uses configured default agent ownership for realtime global session keys", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.resolveSessionKeyFromResolveParams.mockResolvedValue({ ok: true, key: "global" });
+    mocks.readVoiceAgentBasePrompt.mockResolvedValue({ source: "none" });
+    mocks.buildTalkRealtimeContextPacket.mockResolvedValue(undefined);
+    mocks.createRealtimeDirectTools.mockReturnValue({
+      tools: [],
+      executors: new Map(),
+      excludedTools: [],
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-global-1",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      expiresAt: 1_797_986_400,
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        sessionKey: "global",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            agents: { list: [{ id: "sky", default: true }] },
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                tools: { profile: "voice" },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondOk(respond, { sessionId: "relay-global-1" });
+    expect(mocks.buildTalkRealtimeContextPacket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "sky",
+        sessionKey: "global",
+      }),
+    );
+    expect(mocks.createRealtimeDirectTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "sky",
+        sessionKey: "global",
+      }),
+    );
+  });
+
+  it("allows write-scoped realtime relay session keys with spawnedBy when direct tools are empty", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.resolveSessionKeyFromResolveParams.mockResolvedValue({
+      ok: true,
+      key: "agent:worker:main",
+    });
+    mocks.readVoiceAgentBasePrompt.mockResolvedValue({ source: "none" });
+    mocks.buildTalkRealtimeContextPacket.mockResolvedValue(undefined);
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-write-scope-1",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      expiresAt: 1_797_986_400,
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        sessionKey: "agent:worker:main",
+        spawnedBy: "agent:main:parent",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                tools: {},
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondOk(respond, { sessionId: "relay-write-scope-1" });
+    expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        p: {
+          key: "agent:worker:main",
+          spawnedBy: "agent:main:parent",
+          includeGlobal: true,
+          includeUnknown: true,
+        },
+      }),
+    );
+    expect(mocks.createRealtimeDirectTools).not.toHaveBeenCalled();
+  });
+
+  it("omits startup context for write-scoped realtime session keys without spawnedBy", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.resolveSessionKeyFromResolveParams.mockResolvedValue({
+      ok: true,
+      key: "agent:worker:main",
+    });
+    mocks.readVoiceAgentBasePrompt.mockResolvedValue({ source: "none" });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-unscoped-context-1",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      expiresAt: 1_797_986_400,
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        sessionKey: "agent:worker:main",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                tools: {},
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondOk(respond, { sessionId: "relay-unscoped-context-1" });
+    expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalled();
+    expect(mocks.buildTalkRealtimeContextPacket).not.toHaveBeenCalled();
+    expect(mocks.createRealtimeDirectTools).not.toHaveBeenCalled();
+  });
+
+  it("rejects realtime direct-tool session keys without spawnedBy or admin scope", async () => {
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        sessionKey: "agent:worker:main",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                tools: { profile: "voice" },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message:
+        "talk.session.create realtime direct tools require spawnedBy or gateway scope: operator.admin",
+    });
+    expect(mocks.resolveSessionKeyFromResolveParams).not.toHaveBeenCalled();
+  });
+
+  it("allows talk-secret operators to create default-main realtime direct-tool sessions", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    const directTool = {
+      type: "function",
+      name: "read",
+      description: "Read a file",
+      parameters: { type: "object", properties: {} },
+    };
+    const directExecutors = new Map([["read", vi.fn()]]);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.resolveSessionKeyFromResolveParams.mockResolvedValue({
+      ok: false,
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "No session found: main",
+      },
+    });
+    mocks.buildTalkRealtimeContextPacket.mockResolvedValue({
+      text: "Recent main-session context",
+      summarySource: "none",
+    });
+    mocks.createRealtimeDirectTools.mockReturnValue({
+      tools: [directTool],
+      executors: directExecutors,
+      excludedTools: [],
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-android-main-1",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      expiresAt: 1_797_986_400,
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        sessionKey: "main",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: {
+        connId: "conn-android",
+        connect: {
+          scopes: [
+            "operator.approvals",
+            "operator.read",
+            "operator.talk.secrets",
+            "operator.write",
+          ],
+        },
+      } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                tools: { profile: "voice", deny: ["message"] },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondOk(respond, { sessionId: "relay-android-main-1" });
+    expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        p: expect.objectContaining({ key: "main" }),
+      }),
+    );
+    expect(mocks.buildTalkRealtimeContextPacket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(mocks.createRealtimeDirectTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+      }),
+    );
+  });
+
+  it("rejects realtime direct-tool fresh session fallback without admin scope", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.resolveSessionKeyFromResolveParams.mockResolvedValue({
+      ok: false,
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "No session found: agent:worker:main",
+      },
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        sessionKey: "agent:worker:main",
+        spawnedBy: "agent:main:forged-parent",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                tools: { profile: "voice" },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message:
+        "talk.session.create realtime direct tools require spawnedBy or gateway scope: operator.admin",
+    });
+    expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalled();
+    expect(mocks.createRealtimeDirectTools).not.toHaveBeenCalled();
+  });
+
+  it("rejects realtime direct-tool configured-agent fresh fallback with forged spawnedBy", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.resolveSessionKeyFromResolveParams.mockResolvedValue({
+      ok: false,
+      error: {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "No session found: agent:worker:main",
+      },
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        sessionKey: "agent:worker:main",
+        spawnedBy: "agent:main:forged-parent",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            agents: { list: [{ id: "main", default: true }, { id: "worker" }] },
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                tools: { profile: "voice" },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message:
+        "talk.session.create realtime direct tools require spawnedBy or gateway scope: operator.admin",
+    });
+    expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalled();
+    expect(mocks.buildTalkRealtimeContextPacket).not.toHaveBeenCalled();
+    expect(mocks.createRealtimeDirectTools).not.toHaveBeenCalled();
+  });
+
+  it("rejects unscoped realtime direct-tool sessions without admin scope", async () => {
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                tools: { profile: "voice" },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message:
+        "talk.session.create realtime direct tools require spawnedBy or gateway scope: operator.admin",
+    });
+    expect(mocks.createRealtimeDirectTools).not.toHaveBeenCalled();
+  });
+
+  it("rejects unscoped realtime direct-tool sessions with unvalidated spawnedBy", async () => {
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        spawnedBy: "agent:main:parent",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                tools: { profile: "voice" },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message:
+        "talk.session.create realtime direct tools require spawnedBy or gateway scope: operator.admin",
+    });
+    expect(mocks.resolveSessionKeyFromResolveParams).not.toHaveBeenCalled();
+    expect(mocks.createRealtimeDirectTools).not.toHaveBeenCalled();
+  });
+
+  it("creates realtime relay sessions with voice context and opt-in direct tools", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    const directTool = {
+      type: "function",
+      name: "read",
+      description: "Read a file",
+      parameters: { type: "object", properties: {} },
+    };
+    const directExecutors = new Map([["read", vi.fn()]]);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.resolveSessionKeyFromResolveParams.mockResolvedValue({
+      ok: true,
+      key: "agent:sky:main",
+    });
+    mocks.readVoiceAgentBasePrompt.mockResolvedValue({
+      source: "agent-file",
+      path: "/tmp/voice-agent-base.md",
+      text: "Sky voice base\n",
+      fingerprint: "sha256:voice",
+    });
+    mocks.buildTalkRealtimeContextPacket.mockResolvedValue({
+      text: "Recent visible history\nLatest message-tool delivery: sent",
+      summarySource: "none",
+    });
+    mocks.createRealtimeDirectTools.mockReturnValue({
+      tools: [directTool],
+      executors: directExecutors,
+      excludedTools: [],
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-context-1",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      expiresAt: 1_797_986_400,
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        sessionKey: "sky",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            agents: { list: [{ id: "sky", default: true }] },
+            talk: {
+              realtime: {
+                provider: "openai",
+                providers: { openai: { apiKey: "openai-key" } },
+                instructions: "Speak warmly.",
+                tools: { profile: "voice", deny: ["message"] },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        p: expect.objectContaining({ key: "sky" }),
+      }),
+    );
+    expect(mocks.readVoiceAgentBasePrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: expect.stringContaining("sky") }),
+    );
+    expect(mocks.buildTalkRealtimeContextPacket).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "sky",
+        sessionKey: "agent:sky:main",
+        summaryThresholdTokens: 100_000,
+      }),
+    );
+    expect(mocks.createRealtimeDirectTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "sky",
+        sessionKey: "agent:sky:main",
+        modelProvider: "openai",
+        senderIsOwner: true,
+      }),
+    );
+    const createInput = mockCallArg(mocks.createTalkRealtimeRelaySession) as Record<
+      string,
+      unknown
+    >;
+    expect(createInput.instructions).toContain("Sky voice base\n");
+    expect(createInput.instructions).toContain("Realtime context:\nRecent visible history");
+    expect(createInput.instructions).toContain("Additional realtime instructions:\nSpeak warmly.");
+    expect(createInput.tools).toEqual([
+      expect.objectContaining({ name: "openclaw_agent_consult" }),
+      expect.objectContaining({ name: "openclaw_agent_control" }),
+      directTool,
+    ]);
+    expect(createInput.directToolExecutors).toBe(directExecutors);
+    expectRecordFields(createInput, { sessionKey: "agent:sky:main" });
+    expectRespondOk(respond, { sessionId: "relay-context-1" });
+  });
+
+  it("starts realtime relay sessions with degraded context when context assembly times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = {
+        id: "openai",
+        label: "OpenAI Realtime",
+        isConfigured: () => true,
+        createBridge: vi.fn(),
+      };
+      mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+        provider,
+        providerConfig: { apiKey: "openai-key" },
+      });
+      mocks.resolveSessionKeyFromResolveParams.mockResolvedValue({
+        ok: true,
+        key: "agent:sky:main",
+      });
+      mocks.readVoiceAgentBasePrompt.mockResolvedValue({
+        source: "agent-file",
+        path: "/tmp/voice-agent-base.md",
+        text: "Sky voice base\n",
+        fingerprint: "sha256:voice",
+      });
+      mocks.buildTalkRealtimeContextPacket.mockImplementation(
+        () =>
+          new Promise(() => {
+            // Intentionally never resolves; this proves session startup uses the timeout path.
+          }),
+      );
+      mocks.createTalkRealtimeRelaySession.mockReturnValue({
+        provider: "openai",
+        transport: "gateway-relay",
+        relaySessionId: "relay-context-timeout-1",
+        audio: {
+          inputEncoding: "pcm16",
+          inputSampleRateHz: 24000,
+          outputEncoding: "pcm16",
+          outputSampleRateHz: 24000,
+        },
+        expiresAt: 1_797_986_400,
+      });
+
+      const respond = vi.fn();
+      const createPromise = talkHandlers["talk.session.create"]({
+        req: { type: "req", id: "1", method: "talk.session.create" },
+        params: {
+          sessionKey: "sky",
+          mode: "realtime",
+          transport: "gateway-relay",
+          brain: "agent-consult",
+        },
+        client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
+        isWebchatConnect: () => false,
+        respond: respond as never,
+        context: {
+          getRuntimeConfig: () =>
+            ({
+              agents: { list: [{ id: "sky", default: true }] },
+              talk: {
+                realtime: {
+                  provider: "openai",
+                  providers: { openai: { apiKey: "openai-key" } },
+                },
+              },
+            }) as OpenClawConfig,
+        } as never,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      await createPromise;
+
+      const createInput = mockCallArg(mocks.createTalkRealtimeRelaySession) as Record<
+        string,
+        unknown
+      >;
+      expect(createInput.instructions).toContain(
+        "Realtime session context was skipped because context assembly exceeded the startup budget.",
+      );
+      expectRespondOk(respond, { sessionId: "relay-context-timeout-1" });
+      expect(mocks.buildTalkRealtimeContextPacket).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "sky",
+          sessionKey: "agent:sky:main",
+          signal: expect.any(AbortSignal),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("creates transcription gateway-relay sessions through the unified API", async () => {
@@ -1697,6 +2825,7 @@ describe("talk.client.toolCall handler", () => {
       req: { type: "req", id: "1", method: "talk.client.toolCall" },
       params: {
         sessionKey: "main",
+        spawnedBy: "agent:main:parent",
         callId: "call-1",
         name: "openclaw_agent_consult",
         args: { question: "What is in this repo?", responseStyle: "one sentence" },
@@ -1714,7 +2843,10 @@ describe("talk.client.toolCall handler", () => {
       params?: Record<string, unknown>;
     };
     expectRecordFields(chatInput.req, { method: "chat.send" });
-    expectRecordFields(chatInput.params, { sessionKey: "main" });
+    expectRecordFields(chatInput.params, {
+      sessionKey: "main",
+      spawnedBy: "agent:main:parent",
+    });
     expect(chatInput.params?.message).toContain("What is in this repo?");
     expect(chatInput.params?.idempotencyKey).toMatch(/^talk-call-1-/);
     const response = expectRespondOk(respond, { runId: "run-voice-1" }) as Record<string, unknown>;

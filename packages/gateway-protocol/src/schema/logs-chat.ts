@@ -133,6 +133,7 @@ export type ChatFinalAudioGetResult = Static<typeof ChatFinalAudioGetResultSchem
 export const ChatSendParamsSchema = Type.Object(
   {
     sessionKey: ChatSendSessionKeyString,
+    spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     sessionId: Type.Optional(NonEmptyString),
     message: Type.String(),

@@ -194,6 +194,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       isWebchatConnect: request.isWebchatConnect,
       requestId: request.req.id,
       sessionKey: params.sessionKey,
+      spawnedBy: normalizeOptionalString(params.spawnedBy),
       callId: params.callId,
       args: params.args ?? {},
       relaySessionId: normalizeOptionalString(params.relaySessionId),

@@ -124,7 +124,14 @@ describe("pairing setup code", () => {
       baseDir: undefined,
       profile: {
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
       },
     });
     if (params.url) {

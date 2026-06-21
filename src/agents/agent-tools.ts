@@ -15,6 +15,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ToolPolicyConfig } from "../config/types.tools.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
@@ -71,6 +72,7 @@ import {
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
@@ -88,11 +90,14 @@ import {
   buildDefaultToolPolicyPipelineSteps,
 } from "./tool-policy-pipeline.js";
 import {
+  collectExplicitAllowlist,
+  collectExplicitDenylist,
   expandToolGroups,
   hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
   normalizeToolName,
   replaceWithEffectiveToolAllowlist,
+  resolveToolProfilePolicy,
 } from "./tool-policy.js";
 import {
   createToolSearchTools,
@@ -494,6 +499,10 @@ export function createOpenClawCodingTools(options?: {
   runtimeToolAllowlist?: string[];
   /** Mutable cron creator cap ref for callers that append final runtime tools later. */
   cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
+  /** Runtime-scoped tool policy layered after configured profile and channel policy. */
+  runtimeToolPolicy?: ToolPolicyConfig;
+  /** Final caller-owned predicate applied before child sessions inherit the effective surface. */
+  finalToolPredicate?: (tool: AnyAgentTool) => boolean;
   /** If true, the model has native vision capability */
   modelHasVision?: boolean;
   /** Require explicit message targets (no implicit last-route sends). */
@@ -610,6 +619,15 @@ export function createOpenClawCodingTools(options?: {
     subagentPolicy,
     inheritedToolPolicy,
   } = capabilityProfile.policy;
+  const runtimeToolAllowlistPolicy = options?.runtimeToolAllowlist
+    ? { allow: options.runtimeToolAllowlist }
+    : undefined;
+  const runtimeToolPolicy = options?.runtimeToolPolicy;
+  const runtimeProfilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(runtimeToolPolicy?.profile),
+    runtimeToolPolicy?.alsoAllow,
+  );
+  const runtimePolicy = pickSandboxToolPolicy(runtimeToolPolicy);
 
   const enableHeartbeatTool =
     options?.enableHeartbeatTool === true ||
@@ -876,13 +894,22 @@ export function createOpenClawCodingTools(options?: {
           workspaceOnly: applyPatchWorkspaceOnly,
         });
   options?.recordToolPrepStage?.("shell-tools");
-  const pluginToolAllowlist = capabilityProfile.policy.explicitToolAllowlist;
-  const pluginToolDenylist = capabilityProfile.policy.explicitToolDenylist;
+  // Upstream precomputes explicit allow/deny from capabilityProfile.policy.inheritancePolicies
+  // (which already includes runtimeToolAllowlist). Re-derive over that list plus the fork's
+  // runtime profile/policy sources so realtime voice tool policy still shapes plugin tool
+  // inclusion and child-session inheritance.
+  const runtimeInheritancePolicies = [
+    ...capabilityProfile.policy.inheritancePolicies,
+    runtimeProfilePolicy,
+    runtimePolicy,
+  ];
+  const pluginToolAllowlist = collectExplicitAllowlist(runtimeInheritancePolicies);
+  const pluginToolDenylist = collectExplicitDenylist(runtimeInheritancePolicies);
   const inheritedToolDenylist = [...pluginToolDenylist];
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
-  const toolPolicyInheritanceSources = capabilityProfile.policy.inheritancePolicies;
+  const toolPolicyInheritanceSources = runtimeInheritancePolicies;
   const shouldInheritEffectiveToolAllowlist =
     toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
   const cronCreatorToolAllowlist = options?.cronCreatorToolAllowlistRef ?? [];
@@ -1103,6 +1130,27 @@ export function createOpenClawCodingTools(options?: {
         unavailableCoreToolReason,
       }),
       {
+        policy: runtimeProfilePolicy,
+        label: runtimeToolPolicy?.profile
+          ? `runtime tools.profile (${runtimeToolPolicy.profile})`
+          : "runtime tools.profile",
+        stripPluginOnlyAllowlist: true,
+        suppressUnavailableCoreToolWarningAllowlist: runtimeProfilePolicy?.allow,
+        unavailableCoreToolReason,
+      },
+      {
+        policy: runtimePolicy,
+        label: "runtime tools.allow",
+        stripPluginOnlyAllowlist: true,
+        unavailableCoreToolReason,
+      },
+      {
+        policy: runtimeToolAllowlistPolicy,
+        label: "runtimeToolAllowlist",
+        stripPluginOnlyAllowlist: true,
+        unavailableCoreToolReason,
+      },
+      {
         policy: sandboxToolPolicyWithToolSearchControls,
         label: "sandbox tools.allow",
         unavailableCoreToolReason,
@@ -1121,8 +1169,11 @@ export function createOpenClawCodingTools(options?: {
       toolDenylist: pluginToolDenylist,
     }),
   });
-  if (shouldInheritEffectiveToolAllowlist) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered);
+  const finalFiltered = options?.finalToolPredicate
+    ? subagentFiltered.filter(options.finalToolPredicate)
+    : subagentFiltered;
+  if (shouldInheritEffectiveToolAllowlist || options?.finalToolPredicate) {
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, finalFiltered);
   }
   if (shouldCaptureCronCreatorToolAllowlist) {
     replaceWithEffectiveCronCreatorToolAllowlist(
@@ -1135,7 +1186,7 @@ export function createOpenClawCodingTools(options?: {
   // Always normalize tool JSON Schemas before handing them to OpenClaw model runtime.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   // Provider-specific cleaning: Gemini needs constraint keywords stripped, but Anthropic expects them.
-  const normalized = subagentFiltered.map((tool) =>
+  const normalized = finalFiltered.map((tool) =>
     normalizeToolParameters(tool, {
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,

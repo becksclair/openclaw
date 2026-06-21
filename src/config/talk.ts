@@ -14,6 +14,7 @@ import type {
 } from "./types.gateway.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { coerceSecretRef } from "./types.secrets.js";
+import type { ToolPolicyConfig, ToolProfileId } from "./types.tools.js";
 
 function normalizeTalkSecretInput(value: unknown): TalkProviderConfig["apiKey"] | undefined {
   if (typeof value === "string") {
@@ -91,6 +92,42 @@ function normalizeTalkProviders(value: unknown): Record<string, TalkProviderConf
   return Object.keys(providers).length > 0 ? providers : undefined;
 }
 
+const TOOL_PROFILES = new Set<ToolProfileId>(["minimal", "coding", "messaging", "full", "voice"]);
+
+function normalizeToolPolicyList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized = value
+    .map((entry) => normalizeOptionalString(entry))
+    .filter((entry): entry is string => typeof entry === "string");
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+export function normalizeTalkToolPolicyConfig(value: unknown): ToolPolicyConfig | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: ToolPolicyConfig = {};
+  const profile = normalizeOptionalString(value.profile);
+  if (profile && TOOL_PROFILES.has(profile as ToolProfileId)) {
+    normalized.profile = profile as ToolProfileId;
+  }
+  const allow = normalizeToolPolicyList(value.allow);
+  if (allow) {
+    normalized.allow = allow;
+  }
+  const alsoAllow = normalizeToolPolicyList(value.alsoAllow);
+  if (alsoAllow && !allow) {
+    normalized.alsoAllow = alsoAllow;
+  }
+  const deny = normalizeToolPolicyList(value.deny);
+  if (deny) {
+    normalized.deny = deny;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -149,6 +186,10 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
     source.consultRouting === "force-agent-consult"
   ) {
     normalized.consultRouting = source.consultRouting;
+  }
+  const tools = normalizeTalkToolPolicyConfig(source.tools);
+  if (tools) {
+    normalized.tools = tools;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }

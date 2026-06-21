@@ -30,7 +30,11 @@ import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandb
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
-import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
+import {
+  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  normalizeToolName,
+  resolveToolProfilePolicy,
+} from "./tool-policy.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 
 const tinyPngBuffer = Buffer.from(
@@ -685,12 +689,51 @@ describe("createOpenClawCodingTools", () => {
     ]);
   });
 
+  it("uses runtime coding profile for plugin discovery", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      runtimeToolPolicy: { profile: "coding" },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolAllowlist, ["bundle-mcp"]);
+  });
+
+  it("uses runtime alsoAllow for optional plugin discovery without narrowing defaults", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      runtimeToolPolicy: { alsoAllow: ["lobster"] },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expect(latestCreateOpenClawToolsOptions().pluginToolAllowlist).toStrictEqual([
+      "lobster",
+      DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+    ]);
+  });
+
   it("passes explicit denylist entries to OpenClaw tool factory planning", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
 
     createOpenClawCodingTools({
       config: { tools: { deny: ["pdf"] } },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolDenylist, ["pdf"]);
+  });
+
+  it("passes runtime denylist entries to OpenClaw tool factory planning", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      runtimeToolPolicy: { deny: ["pdf"] },
     });
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
@@ -827,6 +870,76 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes(cronAllowNames, ["read", "cron"]);
     expect(cronAllowNames?.includes("exec")).toBe(false);
     expect(cronAllowNames?.includes("process")).toBe(false);
+  });
+
+  it("passes runtime allow-list-restricted tool surface to spawned sessions", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      runtimeToolPolicy: { allow: ["read", "sessions_spawn"] },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
+    expectListIncludes(inheritedAllow, ["read", "sessions_spawn"]);
+    expect(inheritedAllow?.includes("exec")).toBe(false);
+    expect(inheritedAllow?.includes("process")).toBe(false);
+  });
+
+  it("passes final-filtered runtime voice tool surface to spawned sessions", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      runtimeToolPolicy: { profile: "voice" },
+      finalToolPredicate: (tool) => tool.name !== "message" && tool.name !== "sessions_send",
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
+    expectListIncludes(inheritedAllow, ["sessions_spawn"]);
+    expect(inheritedAllow?.includes("message")).toBe(false);
+    expect(inheritedAllow?.includes("sessions_send")).toBe(false);
+  });
+
+  it("passes final-filtered deny-only runtime tool surface to spawned sessions", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      runtimeToolPolicy: { deny: ["exec"] },
+      finalToolPredicate: (tool) => tool.name !== "message" && tool.name !== "sessions_send",
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
+    expectListIncludes(inheritedAllow, ["read", "sessions_spawn"]);
+    expect(inheritedAllow?.includes("exec")).toBe(false);
+    expect(inheritedAllow?.includes("message")).toBe(false);
+    expect(inheritedAllow?.includes("sessions_send")).toBe(false);
+  });
+
+  it("does not let runtime alsoAllow widen the configured global profile cap", () => {
+    const tools = createOpenClawCodingTools({
+      config: { tools: { profile: "minimal" } },
+      runtimeToolPolicy: { alsoAllow: ["exec"] },
+    });
+    const names = toolNameList(tools);
+
+    expect(names).not.toContain("exec");
+  });
+
+  it("keeps runtimeToolAllowlist as an allow policy", () => {
+    const tools = createOpenClawCodingTools({
+      runtimeToolAllowlist: ["read", "sessions_spawn"],
+    });
+    const names = toolNameList(tools);
+
+    expect(names).toContain("read");
+    expect(names).toContain("sessions_spawn");
+    expect(names).not.toContain("exec");
+    expect(names).not.toContain("message");
   });
 
   it("records core tool-prep stages for hot-path diagnostics", () => {
@@ -1279,6 +1392,40 @@ describe("createOpenClawCodingTools", () => {
     });
 
     expect(toolNameList(tools)).toContain("skill_workshop");
+  });
+
+  it("applies runtime full profile deny after profile allow", () => {
+    const tools = createOpenClawCodingTools({
+      runtimeToolPolicy: { profile: "full", deny: ["exec"] },
+    });
+    const names = toolNameList(tools);
+
+    expect(names).toContain("read");
+    expect(names).not.toContain("exec");
+  });
+
+  it("routes runtime voice profile through the same policy pipeline once available", () => {
+    const voiceProfile = resolveToolProfilePolicy("voice");
+    if (!voiceProfile) {
+      expect(voiceProfile).toBeUndefined();
+      return;
+    }
+
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const tools = createOpenClawCodingTools({
+      runtimeToolPolicy: { profile: "voice" },
+    });
+    const names = toolNameList(tools);
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    for (const allowed of voiceProfile.allow ?? []) {
+      if (allowed === "bundle-mcp") {
+        expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolAllowlist, [allowed]);
+      } else if (allowed !== "*") {
+        expect(names).toContain(allowed);
+      }
+    }
   });
 
   it("can keep message available when a cron route needs it under a provider coding profile", () => {

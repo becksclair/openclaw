@@ -24,6 +24,7 @@ export type {
 };
 
 export type RealtimeTalkLaunchOptions = {
+  spawnedBy?: string;
   provider?: string;
   model?: string;
   voice?: string;
@@ -66,7 +67,12 @@ function resolveTransport(session: RealtimeTalkSessionResult): string {
 }
 
 function compactLaunchParams(
-  params: RealtimeTalkLaunchOptions & { sessionKey: string; mode?: string; brain?: string },
+  params: RealtimeTalkLaunchOptions & {
+    sessionKey: string;
+    spawnedBy?: string;
+    mode?: string;
+    brain?: string;
+  },
 ): Record<string, unknown> {
   return Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined));
 }
@@ -92,6 +98,7 @@ export class RealtimeTalkSession {
     this.transport = createTransport(session, {
       client: this.client,
       sessionKey: this.sessionKey,
+      spawnedBy: this.options.spawnedBy,
       callbacks: this.callbacks,
       consultThinkingLevel: session.consultThinkingLevel,
       consultFastMode: session.consultFastMode,

@@ -1282,7 +1282,13 @@ export class OpenClawApp extends LitElement {
       return Number.isFinite(parsed) ? parsed : undefined;
     };
     const transport = text(options.transport) as RealtimeTalkLaunchOptions["transport"] | undefined;
+    const selectedSession = this.sessionsResult?.sessions.find(
+      (row) => row.key === this.sessionKey,
+    );
+    const spawnedBy =
+      typeof selectedSession?.spawnedBy === "string" ? text(selectedSession.spawnedBy) : undefined;
     return {
+      spawnedBy,
       provider: text(options.provider),
       model: text(options.model),
       voice: text(options.voice),

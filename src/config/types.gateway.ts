@@ -1,5 +1,6 @@
 // Defines gateway runtime and networking configuration types.
 import type { SecretInput } from "./types.secrets.js";
+import type { ToolPolicyConfig } from "./types.tools.js";
 
 /** Gateway bind-address policy for local server startup. */
 export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet";
@@ -74,6 +75,8 @@ export type TalkRealtimeConfig = {
   brain?: "agent-consult" | "direct-tools" | "none";
   /** How Gateway relay handles final user transcripts when the provider skips a consult. */
   consultRouting?: "provider-direct" | "force-agent-consult";
+  /** Optional direct tool policy for Gateway-relayed realtime Talk sessions. */
+  tools?: ToolPolicyConfig;
 };
 
 export type ResolvedTalkConfig = {

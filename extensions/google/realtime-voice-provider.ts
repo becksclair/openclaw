@@ -31,6 +31,7 @@ import type {
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
+  RealtimeVoiceToolResult,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
@@ -591,52 +592,80 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     result: unknown,
     options?: RealtimeVoiceToolResultOptions,
   ): void {
+    this.submitToolResults([{ callId, result }], options);
+  }
+
+  submitToolResults(
+    results: RealtimeVoiceToolResult[],
+    options?: RealtimeVoiceToolResultOptions,
+  ): void {
     if (!this.session) {
       return;
     }
-    const name = this.pendingFunctionNames.get(callId);
-    if (!name) {
-      this.config.onError?.(
-        new Error(
-          `Google Live function response is missing a matching function call for ${callId}`,
-        ),
-      );
+    // Build per call so one missing/invalid call (e.g. its name was cleared by a reconnect)
+    // is reported and skipped instead of aborting the whole batch and dropping valid siblings.
+    const functionResponses: FunctionResponse[] = [];
+    for (const result of results) {
+      try {
+        functionResponses.push(this.buildFunctionResponse(result.callId, result.result, options));
+      } catch (error) {
+        this.config.onError?.(
+          error instanceof Error
+            ? error
+            : new Error("Failed to build Google Live function response"),
+        );
+      }
+    }
+    if (functionResponses.length === 0) {
       return;
     }
     try {
-      const isConsultTool = name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME;
-      const functionResponse: FunctionResponse = {
-        id: callId,
-        name,
-        response:
-          result && typeof result === "object" && !Array.isArray(result)
-            ? (result as Record<string, unknown>)
-            : { output: result },
-      };
-      if (isConsultTool) {
-        functionResponse.scheduling = "WHEN_IDLE" as FunctionResponseScheduling;
-        if (options?.willContinue === true) {
-          functionResponse.willContinue = true;
-        }
-      } else if (options?.willContinue === true) {
-        this.config.onError?.(
-          new Error(
-            `Google Live continuation is only supported for ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME}`,
-          ),
-        );
-        return;
-      }
       this.session.sendToolResponse({
-        functionResponses: [functionResponse],
+        functionResponses,
       });
       if (options?.willContinue !== true) {
-        this.pendingFunctionNames.delete(callId);
+        for (const result of results) {
+          this.pendingFunctionNames.delete(result.callId);
+        }
       }
     } catch (error) {
       this.config.onError?.(
         error instanceof Error ? error : new Error("Failed to send Google Live function response"),
       );
     }
+  }
+
+  private buildFunctionResponse(
+    callId: string,
+    result: unknown,
+    options?: RealtimeVoiceToolResultOptions,
+  ): FunctionResponse {
+    const name = this.pendingFunctionNames.get(callId);
+    if (!name) {
+      throw new Error(
+        `Google Live function response is missing a matching function call for ${callId}`,
+      );
+    }
+    const isConsultTool = name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME;
+    const functionResponse: FunctionResponse = {
+      id: callId,
+      name,
+      response:
+        result && typeof result === "object" && !Array.isArray(result)
+          ? (result as Record<string, unknown>)
+          : { output: result },
+    };
+    if (isConsultTool) {
+      functionResponse.scheduling = "WHEN_IDLE" as FunctionResponseScheduling;
+      if (options?.willContinue === true) {
+        functionResponse.willContinue = true;
+      }
+    } else if (options?.willContinue === true) {
+      throw new Error(
+        `Google Live continuation is only supported for ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME}`,
+      );
+    }
+    return functionResponse;
   }
 
   acknowledgeMark(): void {}
