@@ -146,13 +146,14 @@ function installSpeechProviders(providers: SpeechProviderPlugin[]): void {
   );
 }
 
-function createTtsConfig(prefsName: string): OpenClawConfig {
+function createTtsConfig(prefsName: string, mode?: "final" | "all"): OpenClawConfig {
   return {
     messages: {
       tts: {
         enabled: true,
         provider: "mock",
         prefsPath: `/tmp/${prefsName}.json`,
+        ...(mode ? { mode } : {}),
       },
     },
   };
@@ -553,6 +554,33 @@ describe("speech-core native voice-note routing", () => {
     expect(synthesizeMock).not.toHaveBeenCalled();
     expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBeUndefined();
     expect(result.text).toBe("Intermediate tool output should not be spoken.");
+  });
+
+  it("skips tool delivery kind even in all mode", async () => {
+    synthesizeMock.mockClear();
+    const cfg = createTtsConfig("openclaw-speech-core-tool-kind-all-mode-tts-test", "all");
+    const result = await maybeApplyTtsToPayload({
+      payload: { text: "Intermediate tool output should not be spoken in all mode." },
+      cfg,
+      channel: "webchat",
+      kind: "tool",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect(result.text).toBe("Intermediate tool output should not be spoken in all mode.");
+  });
+
+  it("still synthesizes block delivery kind in all mode (only tool output is withheld)", async () => {
+    synthesizeMock.mockClear();
+    const cfg = createTtsConfig("openclaw-speech-core-block-kind-all-mode-tts-test", "all");
+    await maybeApplyTtsToPayload({
+      payload: { text: "Streaming assistant block content is voiced in all mode." },
+      cfg,
+      channel: "webchat",
+      kind: "block",
+    });
+
+    expect(synthesizeMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps skipping untagged short TTS text", async () => {
