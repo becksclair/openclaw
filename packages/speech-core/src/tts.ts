@@ -2008,6 +2008,12 @@ export async function maybeApplyTtsToPayload(params: {
     return nextPayload;
   }
 
+  // Tool delivery payloads are tool-activity chrome and are never auto-spoken,
+  // even in "all" mode, which voices assistant content blocks (block/final) and
+  // not intermediate tool output. Without this, mode:"all" speaks tool messages.
+  if (params.kind === "tool") {
+    return nextPayload;
+  }
   const mode = config.mode ?? "final";
   if (mode === "final" && params.kind && params.kind !== "final") {
     return nextPayload;
