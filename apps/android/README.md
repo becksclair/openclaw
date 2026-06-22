@@ -85,8 +85,9 @@ the screenshots, then shuts down the emulator it started.
 
 - Play build: `openclaw-<version>-play-release.aab`
 - Third-party build: `openclaw-<version>-third-party-release.apk`
+- Wear OS companion: `openclaw-<version>-wear-release.aab`
 
-`pnpm android:bundle:release` runs `apps/android/scripts/build-release-aab.ts`, which builds the signed release bundles including the Wear OS companion (`openclaw-<version>-wear-release.aab`). Use the Fastlane lanes above (`android:release:archive` and friends) for Play Store signing, metadata, and upload.
+The archive lane runs `apps/android/scripts/build-release-artifacts.ts` (also runnable directly with `bun` when Fastlane is not installed). Use the Fastlane lanes above (`android:release:archive` and friends) for Play Store signing, metadata, and upload.
 
 `pnpm android:release:archive` is for local archive validation only. It is not a
 fallback upload path after `pnpm android:release:upload` fails.

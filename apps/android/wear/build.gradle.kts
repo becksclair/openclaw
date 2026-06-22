@@ -1,3 +1,23 @@
+import java.util.Properties
+
+val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
+val openClawAndroidVersionProperties =
+  Properties().apply {
+    if (!openClawAndroidVersionFile.isFile) {
+      error("Missing Android version properties. Run `pnpm android:version:sync`.")
+    }
+    openClawAndroidVersionFile.inputStream().use(::load)
+  }
+
+fun requireOpenClawAndroidVersionProperty(name: String): String =
+  openClawAndroidVersionProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
+    ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
+
+val openClawAndroidVersionName = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_NAME")
+val openClawAndroidVersionCode =
+  requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_CODE").toIntOrNull()
+    ?: error("OPENCLAW_ANDROID_VERSION_CODE must be an integer in Config/Version.properties.")
+
 val androidStoreFile = providers.gradleProperty("OPENCLAW_ANDROID_STORE_FILE").orNull?.takeIf { it.isNotBlank() }
 val androidStorePassword = providers.gradleProperty("OPENCLAW_ANDROID_STORE_PASSWORD").orNull?.takeIf { it.isNotBlank() }
 val androidKeyAlias = providers.gradleProperty("OPENCLAW_ANDROID_KEY_ALIAS").orNull?.takeIf { it.isNotBlank() }
@@ -40,8 +60,8 @@ android {
     applicationId = "ai.openclaw.app"
     minSdk = 30
     targetSdk = 36
-    versionCode = 2026060501
-    versionName = "2026.6.5"
+    versionCode = openClawAndroidVersionCode
+    versionName = openClawAndroidVersionName
   }
 
   buildTypes {
