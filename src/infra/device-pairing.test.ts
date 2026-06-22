@@ -1871,5 +1871,4 @@ describe("device pairing tokens", () => {
     ).rejects.toThrow(/paired\.json/);
     await expect(readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
   });
-
 });

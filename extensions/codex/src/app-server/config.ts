@@ -263,8 +263,13 @@ export function isCodexAppServerForcedFullAccess(
 function clampCodexAppServerRuntimeToFullAccess(
   runtime: CodexAppServerRuntimeOptions,
 ): CodexAppServerRuntimeOptions {
+  // Drop any resolved network-proxy profile. A networkProxy restricts filesystem + network and,
+  // because the wire builders (thread-lifecycle/conversation-binding/side-question) emit the proxy
+  // config instead of `sandbox` whenever it is present, it would silently override
+  // danger-full-access. Clearing it here keeps the clamp the last writer for every downstream path.
   return {
     ...runtime,
+    networkProxy: undefined,
     approvalPolicy: "never",
     approvalPolicySource: "env",
     sandbox: "danger-full-access",

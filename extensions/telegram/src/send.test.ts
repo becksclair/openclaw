@@ -1816,10 +1816,14 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
-      caption: undefined,
-    });
-    expect(sendMessage).toHaveBeenCalledTimes(2);
+    const photoCall = firstMockCall(sendPhoto, "send photo call");
+    expect(photoCall[0]).toBe(chatId);
+    const photoParams = requireRecord(photoCall[2], "send photo params");
+    expect(requireString(photoParams.caption, "send photo caption").length).toBeLessThanOrEqual(
+      1024,
+    );
+    expect(photoParams.parse_mode).toBe("HTML");
+    expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
     expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === "HTML")).toBe(true);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toContain("A");
     expect(res.messageId).toBe("74");
@@ -2123,8 +2127,10 @@ describe("sendMessageTelegram", () => {
         expectedVideoNote: { reply_to_message_id: 999, allow_sending_without_reply: true },
         expectedMessage: {
           parse_mode: "HTML",
-          reply_to_message_id: 999,
-          allow_sending_without_reply: true,
+          reply_parameters: {
+            message_id: 999,
+            allow_sending_without_reply: true,
+          },
         },
       },
     ];

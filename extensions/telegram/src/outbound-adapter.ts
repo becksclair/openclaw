@@ -26,7 +26,6 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { splitTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
-import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./limits.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";

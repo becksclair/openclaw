@@ -612,8 +612,7 @@ async function runBoundTurn(params: {
     buildAgentLookup({ agentDir: params.data.agentDir, config: params.config });
   const binding =
     params.binding ?? (await readCodexAppServerBinding(params.data.sessionFile, agentLookup));
-  const threadId = binding?.threadId;
-  if (!threadId) {
+  if (!binding?.threadId) {
     throw new Error("bound Codex conversation has no thread binding");
   }
   let threadId = binding.threadId;

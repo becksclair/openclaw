@@ -336,7 +336,11 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           return;
         }
         if ("missing" in resolvedSession) {
-          respondInvalidRequest(respond, `No session found: ${params.sessionKey}`);
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${params.sessionKey}`),
+          );
           return;
         }
         const handoff = createTalkHandoff({
@@ -433,21 +437,26 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
               includeUnknown: true,
             },
           });
-          if (resolvedSession.ok) {
+          if (resolvedSession.ok && "key" in resolvedSession) {
             sessionKey = resolvedSession.key;
             resolvedSpawnLineage = Boolean(spawnedBy);
           } else {
+            // A `missing` resolution carries no error to surface; fall back to the
+            // not-found message so the fresh-default path has a concrete error.
+            const notFound = resolvedSession.ok
+              ? errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${requestedSessionKey}`)
+              : resolvedSession.error;
             const freshSessionKey = resolveFreshDefaultRealtimeSessionKey({
               cfg: runtimeConfig,
               requestedSessionKey,
-              resolvedSession,
+              resolvedSession: { ok: false, error: notFound },
             });
             if (!freshSessionKey) {
               if (requiresScopedDirectTools && !canCreateScopedRealtime) {
                 respond(false, undefined, realtimeDirectToolsScopeError());
                 return;
               }
-              respond(false, undefined, resolvedSession.error);
+              respond(false, undefined, notFound);
               return;
             }
             sessionKey = freshSessionKey;

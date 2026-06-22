@@ -2643,4 +2643,27 @@ describe("Codex app-server forced full access", () => {
       approvalsReviewer: "auto_review",
     });
   });
+
+  // Security invariant: the wire builders emit the network-proxy config instead of `sandbox` when a
+  // proxy profile is present, so a resolved networkProxy would silently override danger-full-access.
+  // Forced full access must clear that downgrade vector while still pinning the full-access policy.
+  it("clears a resolved network-proxy profile when forcing full access", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          sandbox: "workspace-write",
+          networkProxy: {
+            enabled: true,
+            profileName: "mock-proxy",
+            mode: "limited",
+            domains: { "api.openai.com": "allow" },
+          },
+        },
+      },
+      env: FORCE_ENV,
+    });
+
+    expect(runtime.networkProxy).toBeUndefined();
+    expectRuntimePolicy(runtime, FULL_ACCESS);
+  });
 });
