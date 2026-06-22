@@ -16,39 +16,68 @@ Replay classification:
 
 Replayed from fork head `f2b94c3a56` (base `v2026.6.8`) onto upstream `v2026.6.10-beta.2` (`87b40c7160`). 62 commits replayed; one base-specific CI-repair commit went empty and was dropped.
 
-| Seam                                      | Decision              | Importance | v2026.6.10-beta.2 evidence / replay note                                                                                                                                                                       |
-| ----------------------------------------- | --------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Wear OS voice companion                   | Runtime carry         | Critical   | Target still has no `apps/android/wear` or `apps/android/audio` module; full module + phone relay carried. Merged upstream Android settings-by-intent + mic foreground-service changes into the `:app` files.   |
-| ACP remote target-backed bridge           | Runtime carry         | Critical   | Target still lacks `runtime.acp.target`, persistent-binding `target`, and the codex-devbox verifier. `extensions/acpx-remote` stays a private external lifecycle.                                                |
-| Gateway runtime metadata hotpath          | Runtime carry         | Critical   | Target absorbed snapshot-fingerprint dead code but still lacks the env fingerprint + monotonic external-catalog throttle; carried on top of current snapshot.                                                    |
-| ACP backend alias routing                 | Runtime carry         | High       | `resolveTargetAcpAgentId` still returns no `backendId`; carried.                                                                                                                                                |
-| ACP backend-managed runtime options       | Runtime carry         | High       | `AcpRuntimeCapabilities` still lacks `managedRuntimeOptionKeys`; carried.                                                                                                                                       |
-| Native Codex message-tool TTS delivery    | Partial-overlap carry | High       | TTS scoping + voice-note transcode seam carried. Telegram text-send conflicts resolved toward upstream's `richMessages`-opt-in rewrite, which supersedes the fork's older rich→HTML migration.                  |
-| Gateway message-tool history projection   | Runtime carry         | High       | Target still drops current-session `message` sends from history without a later mirror; fork mirror-flush + alias-aware `resolveMessagingToolSendText` carried over upstream's `readMessagingText`.             |
-| Gateway main session display title        | Runtime carry         | Medium     | `session-utils.ts` still has no canonical-main display override; carried.                                                                                                                                       |
-| Gateway main session direct delivery      | Runtime carry         | Medium     | `chat.ts` still lacks the direct-main delivery-route guard; carried (newest fork seam).                                                                                                                          |
-| Notification heartbeat wakes              | Runtime carry         | Medium     | `notifications-event` wake bypass still absent upstream; carried.                                                                                                                                               |
-| Control UI read aloud through Talk        | Partial-overlap carry | Medium     | Browser `talk-tts.ts` read-aloud surface still absent upstream; carried as a thin current-Talk integration.                                                                                                      |
-| Discord 30032 command deploy recovery     | Runtime carry         | Medium     | `isDiscordDeployCommandLimit` recovery still absent; carried.                                                                                                                                                   |
-| Discord auto-presence account auth store  | Runtime carry         | Medium     | Account-bound auth-store resolution still absent; carried.                                                                                                                                                      |
-| Google TTS volume gain                    | Runtime carry         | Medium     | Google provider `volumeGain` still absent; standalone carry.                                                                                                                                                    |
-| Private plugin sidecar baseline filtering | Support/proof carry   | Medium     | git-tracked bundled-plugin filtering still absent; carried.                                                                                                                                                     |
-| Plugin SDK package-boundary artifacts     | Support/proof carry   | Medium     | `channel-contract-testing` stale-DTS detection carried alongside upstream's entry-shim outputs.                                                                                                                  |
-| Exec safe-bin realpath trust              | Partial-overlap carry | Medium     | Dual-path (symlink + realpath) trust invariant carried on the current trust helper.                                                                                                                              |
-| Docker replay validation directives       | Support/proof carry   | Medium     | Root `AGENTS.md` Docker-clean broad-proof + private-state isolation directives carried.                                                                                                                          |
+| Seam                                      | Decision              | Importance | v2026.6.10-beta.2 evidence / replay note                                                                                                                                                                                                     |
+| ----------------------------------------- | --------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Wear OS voice companion                   | Runtime carry         | Critical   | Target still has no `apps/android/wear` or `apps/android/audio` module; full module + phone relay carried. Merged upstream Android settings-by-intent + mic foreground-service changes into the `:app` files.                                |
+| ACP remote target-backed bridge           | Runtime carry         | Critical   | Target still lacks `runtime.acp.target`, persistent-binding `target`, and the codex-devbox verifier. `extensions/acpx-remote` stays a private external lifecycle.                                                                            |
+| Gateway runtime metadata hotpath          | Runtime carry         | Critical   | Target absorbed snapshot-fingerprint dead code but still lacks the env fingerprint + monotonic external-catalog throttle; carried on top of current snapshot.                                                                                |
+| ACP backend alias routing                 | Runtime carry         | High       | `resolveTargetAcpAgentId` still returns no `backendId`; carried.                                                                                                                                                                             |
+| ACP backend-managed runtime options       | Runtime carry         | High       | `AcpRuntimeCapabilities` still lacks `managedRuntimeOptionKeys`; carried.                                                                                                                                                                    |
+| Native Codex message-tool TTS delivery    | Partial-overlap carry | High       | TTS scoping + voice-note transcode seam carried. Telegram text-send conflicts resolved toward upstream's `richMessages`-opt-in rewrite, which supersedes the fork's older rich→HTML migration.                                               |
+| Gateway message-tool history projection   | Runtime carry         | High       | Target still drops current-session `message` sends from history without a later mirror; fork mirror-flush + alias-aware `resolveMessagingToolSendText` carried over upstream's `readMessagingText`.                                          |
+| Gateway main session display title        | Runtime carry         | Medium     | `session-utils.ts` still has no canonical-main display override; carried.                                                                                                                                                                    |
+| Gateway main session direct delivery      | Runtime carry         | Medium     | `chat.ts` still lacks the direct-main delivery-route guard; carried (newest fork seam).                                                                                                                                                      |
+| Notification heartbeat wakes              | Runtime carry         | Medium     | `notifications-event` wake bypass still absent upstream; carried.                                                                                                                                                                            |
+| Control UI read aloud through Talk        | Partial-overlap carry | Medium     | Browser `talk-tts.ts` read-aloud surface still absent upstream; carried as a thin current-Talk integration.                                                                                                                                  |
+| Discord 30032 command deploy recovery     | Runtime carry         | Medium     | `isDiscordDeployCommandLimit` recovery still absent; carried.                                                                                                                                                                                |
+| Discord auto-presence account auth store  | Runtime carry         | Medium     | Account-bound auth-store resolution still absent; carried.                                                                                                                                                                                   |
+| Google TTS volume gain                    | Runtime carry         | Medium     | Google provider `volumeGain` still absent; standalone carry.                                                                                                                                                                                 |
+| Private plugin sidecar baseline filtering | Support/proof carry   | Medium     | git-tracked bundled-plugin filtering still absent; carried.                                                                                                                                                                                  |
+| Plugin SDK package-boundary artifacts     | Support/proof carry   | Medium     | `channel-contract-testing` stale-DTS detection carried alongside upstream's entry-shim outputs.                                                                                                                                              |
+| Exec safe-bin realpath trust              | Partial-overlap carry | Medium     | Dual-path (symlink + realpath) trust invariant carried on the current trust helper.                                                                                                                                                          |
+| Docker replay validation directives       | Support/proof carry   | Medium     | Root `AGENTS.md` Docker-clean broad-proof + private-state isolation directives carried.                                                                                                                                                      |
 | Codex app-server force full access        | Runtime carry         | Medium     | `OPENCLAW_CODEX_FORCE_FULL_ACCESS` clamp carried; wire values re-verified against sibling `../codex@aaf737fa59` (`DangerFullAccess` / `Never` / `baseInstructions` present). Merged onto upstream's network-proxy + fast-mode runtime shape. |
-| Generic agent base prompt                 | Runtime carry         | Medium     | `agent-base.md` convention + Codex `baseInstructions` carried; merged onto upstream's `requestNewConversationBindingThread` + `recreateBoundThreadForTurn` helpers (added `baseInstructions` param + `agentId`). |
-| Context-rich realtime Talk tools          | Partial-overlap carry | Medium     | `voice` tool profile, `talk.realtime.tools`, realtime direct tools/context carried; target has the Talk relay base but not these. New `src/talk/realtime-*.ts` applied cleanly.                                  |
-| Android and Discord realtime audio        | Partial-overlap carry | High       | Target carries the Android/Discord realtime base; fork keeps Wear-dependent relay + setup-code/operator-scope fixes only. Reconciled with upstream Android settings/mic-foreground changes.                      |
-| Wear OS native assistant entrypoint       | Runtime carry         | Medium     | No Wear native assistant shape upstream; mirrored `:app`/`:wear` assistant layer carried.                                                                                                                        |
-| Telegram transcribed-audio TTS intent     | Absorbed upstream     | Medium     | No source carry; target shared reply dispatch still preserves transcribed-audio TTS intent. Telegram delivery text conflicts resolved toward upstream's `message-action-runner` refactor.                        |
-| Agent-scoped TTS conversion config        | Drop candidate        | Low        | No missing implementation on `v2026.6.10-beta.2`; no source carry.                                                                                                                                              |
-| CI replay repair guardrails               | Drop candidate        | Low        | Base-specific CI repairs resolved toward upstream; the recent fork CI cluster is obsolete on a base that already carries upstream's CI work. One commit went empty.                                              |
-| Gateway memory pressure reduction         | Runtime carry         | High       | Session-store + workspace skill-snapshot interning carried at `src/skills/loading/workspace.ts`.                                                                                                                 |
+| Generic agent base prompt                 | Runtime carry         | Medium     | `agent-base.md` convention + Codex `baseInstructions` carried; merged onto upstream's `requestNewConversationBindingThread` + `recreateBoundThreadForTurn` helpers (added `baseInstructions` param + `agentId`).                             |
+| Context-rich realtime Talk tools          | Partial-overlap carry | Medium     | `voice` tool profile, `talk.realtime.tools`, realtime direct tools/context carried; target has the Talk relay base but not these. New `src/talk/realtime-*.ts` applied cleanly.                                                              |
+| Android and Discord realtime audio        | Partial-overlap carry | High       | Target carries the Android/Discord realtime base; fork keeps Wear-dependent relay + setup-code/operator-scope fixes only. Reconciled with upstream Android settings/mic-foreground changes.                                                  |
+| Wear OS native assistant entrypoint       | Runtime carry         | Medium     | No Wear native assistant shape upstream; mirrored `:app`/`:wear` assistant layer carried.                                                                                                                                                    |
+| Telegram transcribed-audio TTS intent     | Absorbed upstream     | Medium     | No source carry; target shared reply dispatch still preserves transcribed-audio TTS intent. Telegram delivery text conflicts resolved toward upstream's `message-action-runner` refactor.                                                    |
+| Agent-scoped TTS conversion config        | Drop candidate        | Low        | No missing implementation on `v2026.6.10-beta.2`; no source carry.                                                                                                                                                                           |
+| CI replay repair guardrails               | Drop candidate        | Low        | Base-specific CI repairs resolved toward upstream; the recent fork CI cluster is obsolete on a base that already carries upstream's CI work. One commit went empty.                                                                          |
+| Gateway memory pressure reduction         | Runtime carry         | High       | Session-store + workspace skill-snapshot interning carried at `src/skills/loading/workspace.ts`.                                                                                                                                             |
 
-### v2026.6.10-beta.2 packaging decision (revisit)
+### v2026.6.10-beta.2 packaging decision (resolved)
 
-Upstream deleted `apps/android/scripts/build-release-aab.ts` and migrated Android release to Fastlane lanes. The replay restored `build-release-aab.ts` as the Wear-inclusive bundler (`android:bundle:release` -> it) and kept upstream's new `android:release:*` Fastlane lanes. Long-term, integrate the Wear OS bundle into the Fastlane archive lane and drop `build-release-aab.ts`. Release tooling only; does not affect Gateway runtime.
+Upstream deleted `apps/android/scripts/build-release-aab.ts` and migrated Android release to Fastlane lanes. The Wear OS companion AAB is now folded into upstream's Fastlane archive build (`android:release:archive` -> `play_store_archive` -> `apps/android/scripts/build-release-artifacts.ts`), which builds the Play AAB, third-party APK, and `:wear:bundleRelease` AAB (`openclaw-<version>-wear-release.aab`) in one pass. `build-release-aab.ts` and the redundant `android:bundle:release` script are deleted. The `:wear` module now reads the canonical version from `Config/Version.properties` (same as `:app`) instead of a hardcoded `versionCode`/`versionName`, so Fastlane version sync covers the watch artifact. Release tooling only; does not affect Gateway runtime. The Fastlane upload lanes still upload only the Play AAB (third-party APK and Wear AAB stay build-only, matching prior behavior); routing the Wear AAB into the Play upload via `supply` `aab_paths` is a separate, untested distribution decision left open.
+
+### Android release build and signing (evergreen ops)
+
+Build all three signed release artifacts (Play AAB, third-party APK, Wear AAB) with the canonical archive helper:
+
+```bash
+JAVA_HOME=<jdk21> ANDROID_HOME=<android-sdk> bun apps/android/scripts/build-release-artifacts.ts
+# this host: JAVA_HOME=/usr/lib/jvm/java-21-openjdk ANDROID_HOME=/home/bex/Android/Sdk
+```
+
+Output (signature-verified + SHA-256 checksummed) lands in the gitignored `apps/android/build/release-artifacts/`: `openclaw-<version>-play-release.aab`, `openclaw-<version>-third-party-release.apk`, `openclaw-<version>-wear-release.aab`. Version is resolved from `apps/android/version.json` via `Config/Version.properties`.
+
+Both env vars are mandatory on this host:
+
+- **JDK 21.** Gradle 9.5.1 rejects the default Java 26. Point `JAVA_HOME` at JDK 21 for this script, the `pnpm android:*` gradle wrappers, and Fastlane lanes.
+- **`ANDROID_HOME`.** `build-release-artifacts.ts` resolves `apksigner` only from `ANDROID_HOME`/`ANDROID_SDK_ROOT`/`PATH`; it does NOT read `apps/android/local.properties` `sdk.dir` the way gradle does. With the SDK set only via `local.properties` (this host's setup), the script builds + verifies the Play AAB, then aborts with `Missing apksigner` at the third-party APK verify step (AAB verify uses JDK `jarsigner` and survives, which is why a partial run leaves only the Play AAB). Export `ANDROID_HOME` to avoid it. Clean fix if this keeps biting: make `resolveApkSignerFromSdk` fall back to `local.properties` `sdk.dir`.
+
+Signing key: the keystore referenced by `OPENCLAW_ANDROID_STORE_FILE` (props in `~/.gradle/gradle.properties`, never committed) is the single release/upload key for both the phone and Wear apps (shared `applicationId ai.openclaw.app`). Its signing-certificate SHA-256 is:
+
+```
+ed9599f9f49d3e2264c659b0c34cc985ddd1d5dd248d171fd2d032d46f33b4d8
+```
+
+The apps installed on the phone/watch and all three release bundles must carry this cert. Verify same-key without the keystore password (strip colons, lowercase, compare to the fingerprint above):
+
+```bash
+apksigner verify --print-certs <app.apk>     # APK: read the "SHA-256 digest" line
+keytool -printcert -jarfile <app.aab>         # AAB: read the "SHA256:" line
+```
 
 ### v2026.6.10-beta.2 known follow-ups
 
@@ -350,12 +379,38 @@ Rebase notes:
 - Exclude rooms defensively even when older session metadata is incomplete. `route.target.chatType`, `origin.chatType`, `groupId`, `groupChannel`, `space`, `subject`, topic thread kind, `:topic:` targets, `group:` targets, and negative numeric room ids should all prevent direct-main inherited delivery.
 - Keep this separate from the main-session display-title seam. The row can retain direct route/origin metadata for delivery/search while still displaying as `Main session` in `sessions.list`.
 - Do not rely on Telegram delivery mirrors for chat history correctness. The message-tool history projection seam remains responsible for client-visible history.
+- The inherited direct route now delivers main-session tool-call messages to the channel; auto-TTS must not voice them. See the `Auto-TTS excludes tool delivery kind` seam (`packages/speech-core/src/tts.ts`), which skips `kind: "tool"` synthesis in every TTS `mode`.
 
 Closeout proof from the 2026-06-22 direct-main delivery pass:
 
 - Focused regression: `pnpm test src/gateway/server-methods/chat.directive-tags.test.ts -- --reporter=verbose` passed 266 tests across the gateway shards.
 - Static proof: `git diff --check` passed.
 - Review proof: focused `ultra-review` found and fixed the legacy Telegram negative-id group target case; the continuation pass found no remaining blocking or needs-approval findings.
+
+### Auto-TTS excludes tool delivery kind
+
+Carry behavior: the auto-TTS gate never synthesizes audio for `kind: "tool"` delivery payloads, regardless of the resolved TTS `mode`. `mode: "all"` voices assistant content blocks (`block` and `final`) as they stream, but intermediate tool-call/tool-result messages stay text-only. Without this guard, an agent or channel configured with `auto: "always"` + `mode: "all"` speaks tool chrome — a regression made audible by the direct-main delivery seam, which now routes main-session tool-call messages to the channel. This is a general gate fix (not fork-specific behavior); track it until upstream carries the same `kind: "tool"` exclusion.
+
+Primary seam files:
+
+- `packages/speech-core/src/tts.ts`
+- `packages/speech-core/src/tts.test.ts`
+- `bex-fork.md`
+
+Primary seam tests:
+
+- `pnpm test packages/speech-core/src/tts.test.ts`
+
+Rebase notes:
+
+- Keep the guard at the shared `maybeApplyTtsToPayload` chokepoint, not per caller. Tool-progress messages reach the gate tagged `kind: "tool"` via the auto-reply dispatch path, so one guard at the chokepoint covers every caller that tags kind.
+- The pre-existing `mode === "final" && kind !== "final"` skip only suppressed tool/block in final mode; `mode: "all"` bypassed it and spoke tool output. Keep the `kind === "tool"` skip independent of `mode` so the "intermediate tool output is never spoken" intent holds in every mode.
+- Tool payloads that legitimately carry audio (the TTS tool) are promoted to `kind: "final"` before delivery in `chat.ts`, so excluding `kind: "tool"` here does not silence real generated audio.
+
+Closeout proof from the 2026-06-22 auto-TTS tool-kind pass:
+
+- Focused regression: `pnpm test packages/speech-core/src/tts.test.ts` passed 35 tests, including new `mode: "all"` coverage proving tool kind is withheld while block kind still synthesizes.
+- Lint: `node scripts/run-oxlint.mjs packages/speech-core/src/tts.ts packages/speech-core/src/tts.test.ts` clean.
 
 ### Notification heartbeat wakes
 
@@ -679,7 +734,6 @@ Primary seam files:
 - `apps/android/README.md`
 - `apps/android/gradle.properties`
 - `apps/android/gradle/libs.versions.toml`
-- `apps/android/scripts/build-release-aab.ts`
 - `apps/android/settings.gradle.kts`
 - `apps/android/wear/build.gradle.kts`
 - `apps/android/wear/lint.xml`
@@ -744,7 +798,7 @@ Primary seam tests:
 - `cd apps/android && ./gradlew :wear:testDebugUnitTest --tests ai.openclaw.wear.audio.AudioCaptureTest --tests ai.openclaw.wear.audio.AudioEndpointDetectorTest --tests ai.openclaw.wear.audio.PcmAudioTest`
 - `cd apps/android && ./gradlew :app:compilePlayDebugKotlin :wear:compileDebugKotlin :app:testPlayDebugUnitTest :wear:testDebugUnitTest :app:ktlintCheck :wear:ktlintCheck`
 - `node scripts/run-vitest.mjs src/gateway/chat-final-audio.test.ts src/gateway/gateway-misc.test.ts src/gateway/talk-transcription-relay.test.ts`
-- `pnpm exec oxfmt --check --threads=1 apps/android/scripts/build-release-aab.ts src/gateway/gateway-misc.test.ts package.json`
+- `pnpm exec oxfmt --check --threads=1 apps/android/scripts/build-release-artifacts.ts src/gateway/gateway-misc.test.ts package.json`
 - `git diff --check`
 
 Rebase notes:
@@ -777,7 +831,7 @@ Rebase notes:
 - Wear consults and phone Talk Mode turns can overlap; pending chat completion tracking must be per `runId`, not a single shared waiter.
 - Keep watch processing timeouts long enough for slow realtime/chat turns; the current watchdog is 180 seconds, not the older 60-second path.
 - Keep outbound Wear Data Layer sends bounded and node-pinned. Audio chunks may be dropped under backpressure, but control messages must still be delivered in order.
-- Keep packaging proof tied to the Android release helper. The third-party phone bundle should include the Wear OS module through `bundleThirdPartyRelease`, and the script must copy the generated `.aab` without silently dropping the watch companion artifact.
+- Keep packaging proof tied to the Android release helper. `build-release-artifacts.ts` must build and copy all three release artifacts (Play AAB, third-party APK, and `:wear:bundleRelease` AAB) without silently dropping the watch companion, and the `:wear` module must keep reading its version from `Config/Version.properties` so the watch artifact stays in lockstep with `:app`.
 - Keep the shared `:audio` module for PCM/resampling/codec helpers that both `:app` and `:wear` consume. Do not duplicate codec logic back into either module.
 - Keep the `AudioStreamAssembler` + `BufferedAudioResponseReceiver`/`StreamingAudioResponseReceiver` split so the watch can switch between whole-buffer and streaming audio delivery without rewriting the relay client.
 - Keep `WearSttTtsSession` as the canonical phone-side session class; do not resurrect the old `WearAudioSession` split.
