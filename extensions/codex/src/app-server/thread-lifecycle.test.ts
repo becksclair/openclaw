@@ -555,6 +555,8 @@ describe("Codex app-server native code mode config", () => {
         },
       },
     });
+  });
+
   it("passes base instructions on thread/start when an agent override exists", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",

@@ -1348,7 +1348,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       agentId,
       to,
       baseActionParams: params,
-      replyToId: replyToId ?? undefined,
+      replyToId: resolvedReplyToId ?? undefined,
       threadId: resolvedThreadId ?? undefined,
       deliveredMessageId: resolveGatewayDeliveredMessageId(gatewayPluginAction.payload),
     });
@@ -1411,7 +1411,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     supplement: ttsPayload.deferredSupplement,
     baseCtx: sendCtx,
     to,
-    replyToId: replyToId ?? undefined,
+    replyToId: resolvedReplyToId ?? undefined,
     threadId: resolvedThreadId ?? undefined,
     deliveredMessageId: resolveDeliveredMessageId(send.sendResult),
   });

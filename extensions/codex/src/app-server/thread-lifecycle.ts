@@ -451,10 +451,20 @@ export async function startOrResumeThread(params: {
     params.nativeCodeModeEnabled === false &&
     binding?.webSearchThreadConfigFingerprint === undefined &&
     !persistentWebSearchRestriction;
+  // Generic-agent-base seam: explicitly attached external `/codex resume` threads
+  // (and legacy unmarked external bindings) legitimately carry no web-search
+  // fingerprint. They must survive OpenClaw-internal config-fingerprint rotation
+  // rather than silently restart as a new thread, so skip web-search rotation for
+  // any binding the app-server lifecycle does not itself manage.
+  const preserveExternalBindingFromWebSearchRotation =
+    binding !== undefined &&
+    binding.webSearchThreadConfigFingerprint === undefined &&
+    !isBaseInstructionsFingerprintManagedBinding(binding);
   if (
     binding?.threadId &&
     webSearchBindingChanged &&
-    !deferLegacyWebSearchRotationToTransientNativeSurface
+    !deferLegacyWebSearchRotationToTransientNativeSurface &&
+    !preserveExternalBindingFromWebSearchRotation
   ) {
     if (transientWebSearchRestriction) {
       embeddedAgentLog.debug(

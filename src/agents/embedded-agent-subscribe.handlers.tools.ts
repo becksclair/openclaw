@@ -555,16 +555,6 @@ function extendExecMeta(toolName: string, args: unknown, meta?: string): string 
   return meta ? `${meta} · ${suffix}` : suffix;
 }
 
-function readMessagingText(record: Record<string, unknown>): string | undefined {
-  for (const key of ["content", "message", "text", "body"]) {
-    const value = readStringValue(record[key]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 function queuePendingToolMedia(
   ctx: ToolHandlerContext,
   mediaReply: {
@@ -1265,7 +1255,7 @@ export async function handleToolExecutionEnd(
       hookResult: toolSendReceiptResult,
       isError: isToolError,
     });
-  const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
+  const messageText = isMessagingSend ? resolveMessagingToolSendText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
   const messageTarget = hasMessagingTargetEvidence
     ? extractMessagingToolSend(toolName, messagingArgs, {

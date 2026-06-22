@@ -142,9 +142,7 @@ describe("buildTalkRealtimeContextPacket", () => {
     expect(result.text).toContain("user: latest user request");
     expect(result.text).not.toContain("older user request");
     expect(mocks.readRecentSessionMessagesWithStatsAsync).toHaveBeenCalledWith(
-      "session-1",
-      undefined,
-      "session-1.jsonl",
+      expect.objectContaining({ sessionId: "session-1", sessionFile: "session-1.jsonl" }),
       expect.objectContaining({ allowResetArchiveFallback: true }),
     );
     expect(mocks.projectRecentChatDisplayMessages).toHaveBeenCalledWith(
@@ -209,9 +207,7 @@ describe("buildTalkRealtimeContextPacket", () => {
     );
     expect(mocks.readRecentSessionMessagesWithStatsAsync).toHaveBeenNthCalledWith(
       2,
-      "session-1",
-      undefined,
-      "session-1.jsonl",
+      expect.objectContaining({ sessionId: "session-1", sessionFile: "session-1.jsonl" }),
       expect.objectContaining({ maxMessages: 200, maxBytes: 2_000_000 }),
     );
   });

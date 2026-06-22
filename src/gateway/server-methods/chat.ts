@@ -3407,7 +3407,11 @@ export const chatHandlers: GatewayRequestHandlers = {
           includeUnknown: true,
         },
       });
-      if (!resolvedSpawnLineage.ok || resolvedSpawnLineage.key !== sessionKey) {
+      if (
+        !resolvedSpawnLineage.ok ||
+        "missing" in resolvedSpawnLineage ||
+        resolvedSpawnLineage.key !== sessionKey
+      ) {
         respond(
           false,
           undefined,

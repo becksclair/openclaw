@@ -104,6 +104,7 @@ import {
   normalizeToolName,
   replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
+  type ToolPolicyLike,
 } from "./tool-policy.js";
 import {
   createToolSearchTools,
@@ -930,7 +931,10 @@ export function createOpenClawCodingTools(options?: {
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
-  const toolPolicyInheritanceSources = [
+  // Shared allow/deny element type so both the allowlist predicate
+  // (hasRestrictiveAllowPolicy) and the cron-creator deny predicate
+  // (hasExplicitDenyPolicy) accept every runtime/profile policy source.
+  const toolPolicyInheritanceSources: Array<ToolPolicyLike | undefined> = [
     profilePolicy,
     providerProfilePolicy,
     globalPolicy,

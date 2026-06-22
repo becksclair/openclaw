@@ -551,6 +551,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(resolveBoundaryEntryShimRequiredOutputs({})).toContain(
       "packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts",
     );
+  });
+
   it("detects stale package DTS shims that point at missing root declarations", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-stale-dts-"));
     tempRoots.add(rootDir);

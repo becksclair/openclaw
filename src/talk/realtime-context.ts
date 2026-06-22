@@ -245,9 +245,12 @@ export async function buildTalkRealtimeContextPacket(
   const overSummaryThreshold =
     effectiveTotalTokens !== undefined && effectiveTotalTokens > summaryThresholdTokens;
   const recent = await readRecentSessionMessagesWithStatsAsync(
-    entry.sessionId,
-    params.storePath,
-    entry.sessionFile,
+    {
+      agentId: params.agentId,
+      sessionId: entry.sessionId,
+      storePath: params.storePath,
+      sessionFile: entry.sessionFile,
+    },
     {
       maxMessages: Math.max(
         maxRecentMessages,
@@ -316,9 +319,12 @@ export async function buildTalkRealtimeContextPacket(
       throw new Error("No realtime fast summarizer configured");
     }
     const summaryRecent = await readRecentSessionMessagesWithStatsAsync(
-      entry.sessionId,
-      params.storePath,
-      entry.sessionFile,
+      {
+        agentId: params.agentId,
+        sessionId: entry.sessionId,
+        storePath: params.storePath,
+        sessionFile: entry.sessionFile,
+      },
       {
         maxMessages: Math.max(FAST_SUMMARY_MAX_MESSAGES, maxRecentMessages),
         maxBytes: 2_000_000,
