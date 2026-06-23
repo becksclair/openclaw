@@ -95,7 +95,6 @@ keytool -printcert -jarfile <app.aab>         # AAB: read the "SHA256:" line
 | Native Codex message-tool TTS delivery    | Partial-overlap carry | High       | Target has adjacent media delivery support, but not generated TTS local-media trust, duplicate-safe internal-ui source-reply TTS projection, or lightweight bundled channel TTS capability artifacts for transcode-aware voice-note delivery.                                                                                                                                             |
 | Gateway message-tool history projection   | Runtime carry         | High       | Target still drops current-session `message` tool sends from client-visible history unless a silent completion or delivery mirror later flushes them. Replay carries successful-send mirroring at next user turn, normal assistant reply, and history tail while preserving raw `toolResult` rows for debug/projection callers.                                                           |
 | Gateway main session display title        | Runtime carry         | Medium     | Target lets direct-channel `origin.label` become the primary `displayName` for canonical main sessions, so Telegram-routed main rows can appear as `telegram:<id>` in Android and other session lists instead of staying visibly main. Replay keeps origin metadata searchable but not the main row title.                                                                                |
-| Gateway main session direct delivery      | Runtime carry         | Medium     | Target does not route assistant replies from phone/watch UI sends on a main session back to the direct channel that last participated in that session. Replay lets `chat.send` with `deliver: true` inherit only direct stored routes, while group, channel, topic, and group-shaped legacy targets stay internal to prevent surprise room delivery.                                      |
 | Notification heartbeat wakes              | Runtime carry         | Medium     | Target queues Android notification events but heartbeat preflight can skip the run when `HEARTBEAT.md` has tasks and none are due. Replay treats `notifications-event` as an inspectable wake payload so queued notifications get an immediate HEARTBEAT policy judgment pass without notifying Bex by default.                                                                           |
 | Control UI read aloud through Talk        | Partial-overlap carry | Medium     | Target has Gateway Talk/TTS, but not the browser read-aloud control path, Markdown stripping, or `talk.speak` client integration.                                                                                                                                                                                                                                                         |
 | Discord 30032 command deploy recovery     | Runtime carry         | Medium     | Target still lacks the Discord application-command-limit recovery predicate and force-overwrite redeploy path.                                                                                                                                                                                                                                                                            |
@@ -158,7 +157,6 @@ keytool -printcert -jarfile <app.aab>         # AAB: read the "SHA256:" line
 - `gateway-runtime-metadata-hotpath` - active seam: keep Gateway request/status hot paths on prepared plugin metadata snapshots, lifecycle-cleared runtime config caches, cached bundled channel/package-state facts, and model-cost indexes scoped to the active manifest snapshot.
 - `gateway-message-tool-history-projection` - active seam: keep successful current-session `message` tool sends visible in `chat.history` and recent-history projections even when there is no later `NO_REPLY` row or delivery mirror. Flush successful pending message-tool mirrors before the next user turn, before the next normal assistant reply, and at the history tail; preserve the successful `toolResult` rows so debug/projection clients do not lose execution evidence.
 - `gateway-main-session-display-title` - active seam: keep canonical agent main sessions visibly main in `sessions.list` when their latest route/origin metadata comes from Telegram or another direct channel. Direct non-main sessions still use `entry.label`/`origin.label`, and search still finds the main row by origin label.
-- `gateway-main-session-direct-delivery` - active seam: keep main-session phone/watch UI sends able to ask for assistant delivery back to the last direct route on that session with `deliver: true`, while excluding groups, channels, Telegram topics, and group-shaped legacy targets from inherited delivery.
 - `5d62565271` - support/proof carry: keep the operator verifier for target-backed remote ACP bindings, with machine/channel ids supplied by flags or environment only.
 - `plugin-sdk-package-boundary-artifacts` - support/proof carry: keep package-boundary DTS prep aware of `channel-contract-testing` source inputs, required package outputs, and stale package-local declaration shims that must trigger incremental-state invalidation.
 - `extensions/acpx-remote` - active seam: keep the local target-backed remote ACP bridge as a separate nested/excluded plugin lifecycle; do not fold it into the outer repo replay.
@@ -356,40 +354,9 @@ Rebase notes:
 - Do not move this into the Android app as a client-only workaround. Other clients consume `sessions.list`, and the Gateway is the owner of the row display contract.
 - Live proof for this seam is host-local: build/restart the managed Gateway, call `sessions.list`, and confirm the `agent:sky:main` row has `displayName: "Main session"` while its `origin.label` remains present and `agent:sky:main:heartbeat` is absent from the default list.
 
-### Gateway main session direct delivery
-
-Carry behavior: a phone/watch/UI `chat.send` on a canonical main session may request assistant delivery back to the direct channel that last participated in the same session by setting `deliver: true`. The inherited route is assistant-reply-only: the UI/user utterance remains a main-session turn, while the assistant reply can also reach the stored direct Telegram or other direct-channel target. Group, channel, Telegram topic, topic-thread, and group-shaped legacy targets must stay internal unless the caller uses an explicit channel-scoped session key.
-
-Primary seam files:
-
-- `src/gateway/server-methods/chat.ts`
-- `src/gateway/server-methods/chat.directive-tags.test.ts`
-- `bex-fork.md`
-
-Primary seam tests:
-
-- `pnpm test src/gateway/server-methods/chat.directive-tags.test.ts -- --reporter=verbose`
-
-Rebase notes:
-
-- Keep this in Gateway route resolution, not Android or Wear UI code. The main-session client asks for delivery with `deliver: true`; Gateway owns the delivery route decision and the `MsgContext` fields consumed by reply dispatch.
-- Direct-route inheritance is deliberately narrower than a participant list. Do not add durable participant state, schema, config, or env flags for this seam unless a later product decision explicitly asks for multi-channel fanout.
-- Preserve the existing channel-scoped behavior: `agent:<agentId>:telegram:direct:<id>` and legacy channel-peer sessions still inherit external routes as before.
-- Preserve the existing configured-main CLI behavior: CLI callers and legacy callers with no client metadata can still inherit configured-main external routes.
-- Exclude rooms defensively even when older session metadata is incomplete. `route.target.chatType`, `origin.chatType`, `groupId`, `groupChannel`, `space`, `subject`, topic thread kind, `:topic:` targets, `group:` targets, and negative numeric room ids should all prevent direct-main inherited delivery.
-- Keep this separate from the main-session display-title seam. The row can retain direct route/origin metadata for delivery/search while still displaying as `Main session` in `sessions.list`.
-- Do not rely on Telegram delivery mirrors for chat history correctness. The message-tool history projection seam remains responsible for client-visible history.
-- The inherited direct route now delivers main-session tool-call messages to the channel; auto-TTS must not voice them. See the `Auto-TTS excludes tool delivery kind` seam (`packages/speech-core/src/tts.ts`), which skips `kind: "tool"` synthesis in every TTS `mode`.
-
-Closeout proof from the 2026-06-22 direct-main delivery pass:
-
-- Focused regression: `pnpm test src/gateway/server-methods/chat.directive-tags.test.ts -- --reporter=verbose` passed 266 tests across the gateway shards.
-- Static proof: `git diff --check` passed.
-- Review proof: focused `ultra-review` found and fixed the legacy Telegram negative-id group target case; the continuation pass found no remaining blocking or needs-approval findings.
-
 ### Auto-TTS excludes tool delivery kind
 
-Carry behavior: the auto-TTS gate never synthesizes audio for `kind: "tool"` delivery payloads, regardless of the resolved TTS `mode`. `mode: "all"` voices assistant content blocks (`block` and `final`) as they stream, but intermediate tool-call/tool-result messages stay text-only. Without this guard, an agent or channel configured with `auto: "always"` + `mode: "all"` speaks tool chrome — a regression made audible by the direct-main delivery seam, which now routes main-session tool-call messages to the channel. This is a general gate fix (not fork-specific behavior); track it until upstream carries the same `kind: "tool"` exclusion.
+Carry behavior: the auto-TTS gate never synthesizes audio for `kind: "tool"` delivery payloads, regardless of the resolved TTS `mode`. `mode: "all"` voices assistant content blocks (`block` and `final`) as they stream, but intermediate tool-call/tool-result messages stay text-only. Without this guard, an agent or channel configured with `auto: "always"` + `mode: "all"` speaks tool chrome — a regression for any channel or mode that routes intermediate tool-call messages to a TTS sink. This is a general gate fix (not fork-specific behavior); track it until upstream carries the same `kind: "tool"` exclusion.
 
 Primary seam files:
 

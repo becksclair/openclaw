@@ -4008,8 +4008,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("chat.send inherits direct delivery context for UI clients on main sessions when deliver is enabled", async () => {
-    createTranscriptFixture("openclaw-chat-send-main-ui-deliver-direct-route-");
+  it("chat.send does not inherit external delivery context for UI clients on main sessions when deliver is enabled", async () => {
+    createTranscriptFixture("openclaw-chat-send-main-ui-deliver-no-route-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
       deliveryContext: {
@@ -4027,110 +4027,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await runNonStreamingChatSend({
       context,
       respond,
-      idempotencyKey: "idem-main-ui-deliver-direct-route",
-      client: {
-        connect: {
-          client: {
-            mode: GATEWAY_CLIENT_MODES.UI,
-            id: "openclaw-tui",
-          },
-        },
-      } as unknown,
-      sessionKey: "agent:main:main",
-      deliver: true,
-      expectBroadcast: false,
-    });
-
-    expectDispatchContextFields({
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:200482621",
-      ExplicitDeliverRoute: true,
-      AccountId: "default",
-    });
-  });
-
-  it("chat.send does not inherit Telegram topic delivery context for UI clients on main sessions when deliver is enabled", async () => {
-    createTranscriptFixture("openclaw-chat-send-main-ui-deliver-topic-no-route-");
-    mockState.finalText = "ok";
-    mockState.sessionEntry = {
-      route: {
-        channel: "telegram",
-        accountId: "default",
-        target: {
-          to: "telegram:-1003841603622:topic:928",
-          chatType: "group",
-        },
-        thread: {
-          id: 928,
-          kind: "topic",
-        },
-      },
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:-1003841603622:topic:928",
-        accountId: "default",
-        threadId: 928,
-      },
-      origin: {
-        provider: "telegram",
-        chatType: "group",
-        accountId: "default",
-        threadId: 928,
-      },
-      groupId: "-1003841603622",
-      lastChannel: "telegram",
-      lastTo: "telegram:-1003841603622:topic:928",
-      lastAccountId: "default",
-      lastThreadId: 928,
-    };
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey: "idem-main-ui-deliver-topic-no-route",
-      client: {
-        connect: {
-          client: {
-            mode: GATEWAY_CLIENT_MODES.UI,
-            id: "openclaw-tui",
-          },
-        },
-      } as unknown,
-      sessionKey: "agent:main:main",
-      deliver: true,
-      expectBroadcast: false,
-    });
-
-    expectDispatchContextFields({
-      OriginatingChannel: "webchat",
-      OriginatingTo: undefined,
-      ExplicitDeliverRoute: false,
-      AccountId: undefined,
-    });
-  });
-
-  it("chat.send does not infer Telegram legacy group targets as direct main-session delivery routes", async () => {
-    createTranscriptFixture("openclaw-chat-send-main-ui-deliver-legacy-group-no-route-");
-    mockState.finalText = "ok";
-    mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:-1003841603622",
-        accountId: "default",
-      },
-      lastChannel: "telegram",
-      lastTo: "telegram:-1003841603622",
-      lastAccountId: "default",
-    };
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey: "idem-main-ui-deliver-legacy-group-no-route",
+      idempotencyKey: "idem-main-ui-deliver-no-route",
       client: {
         connect: {
           client: {

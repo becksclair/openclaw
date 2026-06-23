@@ -649,14 +649,9 @@ type ChatSendDeliveryEntry = {
   };
   origin?: {
     provider?: string;
-    chatType?: string;
     accountId?: string;
     threadId?: string | number;
   };
-  groupId?: string;
-  groupChannel?: string;
-  space?: string;
-  subject?: string;
   lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
@@ -1145,56 +1140,6 @@ function scheduleChatHistoryManagedImageCleanup(params: {
   chatHistoryManagedImageCleanupState.set(cleanupKey, pending);
 }
 
-function normalizeChatSendRouteFact(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim().toLowerCase() : null;
-}
-
-function isGroupShapedChatSendTarget(params: { routeChannel: string; routeTo: string }): boolean {
-  const trimmedRouteTo = params.routeTo.trim();
-  const channelPrefix = `${params.routeChannel}:`;
-  const prefixedTarget = trimmedRouteTo.toLowerCase().startsWith(channelPrefix)
-    ? trimmedRouteTo.slice(channelPrefix.length).trim()
-    : trimmedRouteTo;
-  return /^group:/i.test(prefixedTarget) || /^-\d+(?::|$)/.test(prefixedTarget);
-}
-
-function isDirectMainSessionDeliveryRoute(params: {
-  entry?: ChatSendDeliveryEntry;
-  routeChannel?: string | null;
-  routeTo?: string | null;
-}): boolean {
-  const routeChannel = normalizeMessageChannel(params.routeChannel);
-  const routeTo = params.routeTo?.trim();
-  if (!routeChannel || routeChannel === INTERNAL_MESSAGE_CHANNEL || !routeTo) {
-    return false;
-  }
-
-  const entry = params.entry;
-  const chatTypeFacts = [entry?.route?.target?.chatType, entry?.origin?.chatType].map(
-    normalizeChatSendRouteFact,
-  );
-  if (chatTypeFacts.some((chatType) => chatType === "group" || chatType === "channel")) {
-    return false;
-  }
-  if (chatTypeFacts.some((chatType) => chatType && chatType !== "direct" && chatType !== "dm")) {
-    return false;
-  }
-
-  if (
-    entry?.groupId?.trim() ||
-    entry?.groupChannel?.trim() ||
-    entry?.space?.trim() ||
-    entry?.subject?.trim() ||
-    entry?.route?.thread?.kind === "topic" ||
-    /(^|:)topic:/i.test(routeTo) ||
-    isGroupShapedChatSendTarget({ routeChannel, routeTo })
-  ) {
-    return false;
-  }
-
-  return true;
-}
-
 function resolveChatSendOriginatingRoute(params: {
   client?: { mode?: string | null; id?: string | null } | null;
   deliver?: boolean;
@@ -1276,25 +1221,16 @@ function resolveChatSendOriginatingRoute(params: {
     isConfiguredMainSessionScope &&
     params.hasConnectedClient &&
     (isFromGatewayCliClient || !hasClientMetadata);
-  const canInheritDirectMainRoute =
-    isConfiguredMainSessionScope &&
-    params.hasConnectedClient &&
-    isDirectMainSessionDeliveryRoute({
-      entry: params.entry,
-      routeChannel: routeChannelCandidate,
-      routeTo: routeToCandidate,
-    });
-  const canInheritChannelRoute =
-    !isFromWebchatClient &&
-    !isChannelAgnosticSessionScope &&
-    (isChannelScopedSession || hasLegacyChannelPeerShape);
 
-  // UI main sessions may inherit only direct routes; group/channel routes still
-  // need channel-scoped session keys so a phone/watch send cannot surprise rooms.
+  // Webchat clients never inherit external delivery routes. Configured-main
+  // sessions are stricter than channel-scoped sessions: only CLI callers, or
+  // legacy callers with no client metadata, may inherit the last external route.
   const canInheritDeliverableRoute = Boolean(
+    !isFromWebchatClient &&
     sessionChannelHint &&
     sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
-    (canInheritChannelRoute || canInheritConfiguredMainRoute || canInheritDirectMainRoute),
+    ((!isChannelAgnosticSessionScope && (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
+      canInheritConfiguredMainRoute),
   );
   const hasDeliverableRoute =
     canInheritDeliverableRoute &&
