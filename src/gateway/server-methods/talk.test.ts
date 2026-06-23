@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
-import { talkHandlers } from "./talk.js";
+import { clearTalkSpeakOpusTranscodeQueueForTest, talkHandlers } from "./talk.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
@@ -551,6 +551,80 @@ describe("talk.speak handler", () => {
 
     releaseTranscode(Buffer.from("opus-audio"));
     await Promise.all(calls.map(({ done }) => Promise.resolve(done)));
+  });
+
+  it("drops a queued opus transcode waiter that exceeds its timeout before it consumes a slot", async () => {
+    const runtimeConfig = {
+      ...createTalkConfig("env-acme-key"),
+      messages: { tts: { timeoutMs: 20 } },
+    } as OpenClawConfig;
+    mocks.getSpeechProvider.mockReturnValue({
+      id: "acme",
+      label: "Acme Speech",
+      resolveTalkConfig: ({
+        talkProviderConfig,
+      }: {
+        talkProviderConfig: Record<string, unknown>;
+      }) => talkProviderConfig,
+    });
+    mocks.synthesizeSpeech.mockResolvedValue({
+      success: true,
+      provider: "acme",
+      audioBuffer: Buffer.from("wav-audio"),
+      outputFormat: "wav",
+      voiceCompatible: false,
+      fileExtension: ".wav",
+    });
+
+    // First two requests occupy the active transcode slots and stay blocked,
+    // forcing the third to enqueue and race its timeout deadline.
+    let releaseTranscode: (value: Buffer<ArrayBuffer>) => void = () => {};
+    const transcodeBlocked = new Promise<Buffer<ArrayBuffer>>((resolve) => {
+      releaseTranscode = resolve;
+    });
+    mocks.transcodeAudioBufferToOpus.mockImplementation(async () => await transcodeBlocked);
+
+    const speak = () => {
+      const respond = vi.fn();
+      const done = talkHandlers["talk.speak"]({
+        req: { type: "req", id: "1", method: "talk.speak" },
+        params: { text: "Hello from talk mode.", outputFormat: "opus" },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: respond as never,
+        context: { getRuntimeConfig: () => runtimeConfig } as never,
+      });
+      return { respond, done };
+    };
+
+    const blockers = [speak(), speak()];
+    const queued = speak();
+
+    // The queued waiter has no free slot; once its 20ms deadline lapses it must
+    // be rejected as unavailable rather than waiting forever for a slot.
+    await vi.waitFor(() => {
+      expect(queued.respond.mock.calls[0]?.[0]).toBe(false);
+    });
+    expectRecordFields(mockCallArg(queued.respond, 0, 2), {
+      code: ErrorCodes.UNAVAILABLE,
+      message: "talk.speak Opus transcode queue is full",
+    });
+    const queuedError = mockCallArg(queued.respond, 0, 2) as { details?: { reason?: string } };
+    expect(queuedError.details?.reason).toBe("method_unavailable");
+
+    // The timed-out waiter must be removed from the pending queue, so when the
+    // active slots free up no phantom waiter is resumed onto a slot. A fresh
+    // request fired afterwards must get a slot and complete successfully.
+    mocks.transcodeAudioBufferToOpus.mockResolvedValue(Buffer.from("opus-audio"));
+    releaseTranscode(Buffer.from("opus-audio"));
+    await Promise.all(blockers.map(({ done }) => Promise.resolve(done)));
+    await Promise.resolve(queued.done);
+
+    const fresh = speak();
+    await Promise.resolve(fresh.done);
+    expect(fresh.respond.mock.calls[0]?.[0]).toBe(true);
+
+    clearTalkSpeakOpusTranscodeQueueForTest();
   });
 });
 
