@@ -259,4 +259,37 @@ describe("elevenlabs speech provider", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("maps loose output format tokens to qualified ElevenLabs formats", async () => {
+    const provider = buildElevenLabsSpeechProvider();
+    const cases = [
+      { token: "mp3", expected: "mp3_44100_128", ext: ".mp3" },
+      { token: "opus", expected: "opus_48000_64", ext: ".opus" },
+      { token: "ogg_opus", expected: "opus_48000_64", ext: ".opus" },
+      { token: "pcm_24000", expected: "pcm_24000", ext: ".pcm" },
+      { token: "opus_48000_128", expected: "opus_48000_128", ext: ".opus" },
+    ] as const;
+    for (const testCase of cases) {
+      const fetchMock = vi.fn(async (url: string) => {
+        expect(new URL(url).searchParams.get("output_format"), testCase.token).toBe(
+          testCase.expected,
+        );
+        return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await provider.synthesize?.({
+        text: "hi",
+        target: "audio-file",
+        cfg: {} as never,
+        providerConfig: { apiKey: "xi-test" },
+        providerOverrides: { outputFormat: testCase.token },
+        timeoutMs: 1_000,
+      });
+
+      expect(result?.outputFormat, testCase.token).toBe(testCase.expected);
+      expect(result?.fileExtension, testCase.token).toBe(testCase.ext);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    }
+  });
 });

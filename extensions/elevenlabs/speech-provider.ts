@@ -59,6 +59,51 @@ function normalizeElevenLabsTtsModelId(value: string | undefined): string | unde
   }
 }
 
+// ElevenLabs requires fully-qualified output_format strings (codec_sampleRate_bitrate),
+// e.g. "mp3_44100_128" or "opus_48000_64". Talk/relay callers pass loose playback tokens
+// ("mp3", "opus", "ogg_opus", "pcm_24000") that other providers tolerate; map them to the
+// ElevenLabs equivalent so synthesis does not fail with "invalid format". opus_48000_64 is
+// verified Ogg-Opus (OggS/OpusHead container); 48kHz is the only ElevenLabs opus rate.
+const ELEVENLABS_QUALIFIED_OUTPUT_FORMAT_RE = /^(mp3|pcm|opus|ulaw|alaw)_/;
+
+function normalizeElevenLabsOutputFormat(value: unknown): string | undefined {
+  const normalized = trimToUndefined(value)?.toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (ELEVENLABS_QUALIFIED_OUTPUT_FORMAT_RE.test(normalized)) {
+    return normalized;
+  }
+  switch (normalized) {
+    case "mp3":
+      return "mp3_44100_128";
+    case "opus":
+    case "ogg_opus":
+    case "ogg":
+      return "opus_48000_64";
+    case "pcm":
+      return "pcm_24000";
+    case "ulaw":
+      return "ulaw_8000";
+    case "alaw":
+      return "alaw_8000";
+    default:
+      return undefined;
+  }
+}
+
+// Derive the container extension from the resolved format, not the request target, so talk
+// post-processing reads the true codec for its passthrough-vs-transcode decision (a forced
+// opus override on a non-voice-note target must report .opus, not .mp3).
+function elevenLabsOutputFileExtension(outputFormat: string): string {
+  const normalized = outputFormat.toLowerCase();
+  if (normalized.startsWith("opus")) return ".opus";
+  if (normalized.startsWith("pcm")) return ".pcm";
+  if (normalized.startsWith("ulaw")) return ".ulaw";
+  if (normalized.startsWith("alaw")) return ".alaw";
+  return ".mp3";
+}
+
 type ElevenLabsProviderConfig = {
   apiKey?: string;
   baseUrl: string;
@@ -546,7 +591,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     synthesize: async (req) => {
       const overrides = req.providerOverrides ?? {};
       const outputFormat =
-        trimToUndefined(overrides.outputFormat) ??
+        normalizeElevenLabsOutputFormat(overrides.outputFormat) ??
         (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
       const audioBuffer = await elevenLabsTTS(
         resolveElevenLabsTtsRequest(req, {
@@ -557,14 +602,14 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       return {
         audioBuffer,
         outputFormat,
-        fileExtension: req.target === "voice-note" ? ".opus" : ".mp3",
+        fileExtension: elevenLabsOutputFileExtension(outputFormat),
         voiceCompatible: req.target === "voice-note",
       };
     },
     streamSynthesize: async (req) => {
       const overrides = req.providerOverrides ?? {};
       const outputFormat =
-        trimToUndefined(overrides.outputFormat) ??
+        normalizeElevenLabsOutputFormat(overrides.outputFormat) ??
         (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
       const stream = await elevenLabsTTSStream(
         resolveElevenLabsTtsRequest(req, {
@@ -575,7 +620,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       return {
         audioStream: stream.audioStream,
         outputFormat,
-        fileExtension: req.target === "voice-note" ? ".opus" : ".mp3",
+        fileExtension: elevenLabsOutputFileExtension(outputFormat),
         voiceCompatible: req.target === "voice-note",
         release: stream.release,
       };
