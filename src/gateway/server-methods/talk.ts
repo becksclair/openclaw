@@ -105,13 +105,41 @@ function releaseNextOpusTranscodeWaiter(): void {
   }
 }
 
-async function withTalkSpeakOpusTranscodeSlot<T>(fn: () => Promise<T>): Promise<T> {
+async function withTalkSpeakOpusTranscodeSlot<T>(
+  fn: () => Promise<T>,
+  timeoutMs?: number,
+): Promise<T> {
   if (activeTalkSpeakOpusTranscodes >= MAX_TALK_SPEAK_OPUS_TRANSCODES) {
     if (pendingTalkSpeakOpusTranscodes.length >= MAX_PENDING_TALK_SPEAK_OPUS_TRANSCODES) {
       throw new TalkSpeakOpusTranscodeBusyError();
     }
+    // Bound the queue wait to the caller's TTS deadline so a vanished/timed-out
+    // caller is dropped from the queue instead of consuming a real slot later.
     await new Promise<void>((resolve, reject) => {
-      pendingTalkSpeakOpusTranscodes.push({ resolve, reject, cancelled: false });
+      const waiter: OpusTranscodeWaiter = { resolve, reject, cancelled: false };
+      const timer =
+        timeoutMs && timeoutMs > 0
+          ? setTimeout(() => {
+              const index = pendingTalkSpeakOpusTranscodes.indexOf(waiter);
+              if (index >= 0) {
+                pendingTalkSpeakOpusTranscodes.splice(index, 1);
+              }
+              reject(new TalkSpeakOpusTranscodeBusyError());
+            }, timeoutMs)
+          : undefined;
+      waiter.resolve = () => {
+        if (timer) {
+          clearTimeout(timer);
+        }
+        resolve();
+      };
+      waiter.reject = (error) => {
+        if (timer) {
+          clearTimeout(timer);
+        }
+        reject(error);
+      };
+      pendingTalkSpeakOpusTranscodes.push(waiter);
     });
   } else {
     activeTalkSpeakOpusTranscodes++;
@@ -417,13 +445,15 @@ async function formatTalkSpeakResultAudio(params: {
     };
   }
   return {
-    audioBuffer: await withTalkSpeakOpusTranscodeSlot(() =>
-      transcodeAudioBufferToOpus({
-        audioBuffer: params.audioBuffer,
-        inputExtension: params.fileExtension,
-        tempPrefix: "talk-speak-opus-",
-        timeoutMs: params.timeoutMs,
-      }),
+    audioBuffer: await withTalkSpeakOpusTranscodeSlot(
+      () =>
+        transcodeAudioBufferToOpus({
+          audioBuffer: params.audioBuffer,
+          inputExtension: params.fileExtension,
+          tempPrefix: "talk-speak-opus-",
+          timeoutMs: params.timeoutMs,
+        }),
+      params.timeoutMs,
     ),
     outputFormat: "opus",
     fileExtension: ".opus",
