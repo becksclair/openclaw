@@ -4,6 +4,8 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.common.wear.WearRelayProtocol
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
@@ -41,7 +43,7 @@ class WearAudioRelayTextTurnTest {
         sourceNodeId = "watch-node",
       )
       relay.handleWatchMessage(
-        WearRelayProtocol.turnPath(WearRelayProtocol.PATH_AUDIO_CHUNK, "audio-turn"),
+        WearRelayProtocol.audioChunkPath("audio-turn", 0),
         byteArrayOf(1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0),
         sourceNodeId = "watch-node",
       )
@@ -61,7 +63,7 @@ class WearAudioRelayTextTurnTest {
         "chat",
         """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"audio reply"}}""",
       )
-      waitForSentPath(transport, "/openclaw/watch/audio/audio-turn/format/mp3")
+      waitForSentPath(transport, "/openclaw/watch/audio/audio-turn/done")
 
       assertTrue(gateway.methods.contains("talk.session.create"))
       assertTrue(gateway.methods.contains("talk.session.appendAudio"))
@@ -77,6 +79,228 @@ class WearAudioRelayTextTurnTest {
       assertEquals("wear-main", chatRoot["sessionKey"]?.jsonPrimitive?.content)
       assertEquals("turn transcript", chatRoot["message"]?.jsonPrimitive?.content)
       assertEquals("low", chatRoot["thinking"]?.jsonPrimitive?.content)
+    }
+
+  @Test
+  fun lateAudioChunkForCompletedTurnIsIgnored() =
+    runTest {
+      val gateway = FakeWearRelayGateway()
+      val transport = FakeWearRelayTransport()
+      val relay =
+        WearAudioRelay(
+          gateway = gateway,
+          wearTargetSessionKeyProvider = { "wear-main" },
+          transport = transport,
+          scope = this,
+        )
+
+      relay.handleWatchMessage(
+        WearRelayProtocol.turnPath(WearRelayProtocol.PATH_START, "audio-turn"),
+        """{"acceptedResponseFormats":["mp3","pcm_24000"]}""".toByteArray(),
+        sourceNodeId = "watch-node",
+      )
+      relay.handleWatchMessage(
+        WearRelayProtocol.audioChunkPath("audio-turn", 0),
+        byteArrayOf(1, 0, 2, 0, 3, 0, 4, 0),
+        sourceNodeId = "watch-node",
+      )
+      relay.handleWatchMessage(
+        WearRelayProtocol.turnPath(WearRelayProtocol.PATH_END, "audio-turn"),
+        ByteArray(0),
+        sourceNodeId = "watch-node",
+      )
+      waitForGatewayMethod(gateway, "talk.session.close")
+      relay.handleGatewayEvent(
+        "talk.event",
+        """{"type":"transcript","transcriptionSessionId":"stt-1","text":"turn transcript"}""",
+      )
+      waitForGatewayMethod(gateway, "chat.send")
+      relay.handleGatewayEvent(
+        "chat",
+        """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"audio reply"}}""",
+      )
+      waitForSentPath(transport, "/openclaw/watch/audio/audio-turn/done")
+
+      val sessionsBefore = gateway.requests.count { it.method == "talk.session.create" }
+
+      // A stale chunk for the already-finished turn must not auto-start a fresh run.
+      relay.handleWatchMessage(
+        WearRelayProtocol.audioChunkPath("audio-turn", 1),
+        byteArrayOf(9, 0, 9, 0),
+        sourceNodeId = "watch-node",
+      )
+      delay(50)
+
+      assertEquals(sessionsBefore, gateway.requests.count { it.method == "talk.session.create" })
+      assertEquals(1, gateway.requests.count { it.method == "chat.send" })
+    }
+
+  @Test
+  fun audioChunkMiddleGapFailsTheTurnAtEnd() =
+    runTest {
+      val gateway = FakeWearRelayGateway()
+      val transport = FakeWearRelayTransport()
+      val relay =
+        WearAudioRelay(
+          gateway = gateway,
+          wearTargetSessionKeyProvider = { "wear-main" },
+          transport = transport,
+          scope = this,
+        )
+
+      relay.handleWatchMessage(
+        WearRelayProtocol.turnPath(WearRelayProtocol.PATH_START, "gap-turn"),
+        """{"acceptedResponseFormats":["mp3","pcm_24000"]}""".toByteArray(),
+        sourceNodeId = "watch-node",
+      )
+      relay.handleWatchMessage(
+        WearRelayProtocol.audioChunkPath("gap-turn", 0),
+        byteArrayOf(1, 0, 2, 0),
+        sourceNodeId = "watch-node",
+      )
+      // Index 2 arrives but index 1 is never sent: a real middle drop. The relay
+      // tolerates this mid-stream (a benign reorder could still fill index 1) and
+      // only detects the hole when PATH_END assembles the buffer.
+      relay.handleWatchMessage(
+        WearRelayProtocol.audioChunkPath("gap-turn", 2),
+        byteArrayOf(3, 0, 4, 0),
+        sourceNodeId = "watch-node",
+      )
+      // No error yet: a mid-stream gap must never fail the turn.
+      delay(50)
+      assertFalse(transport.sent.any { it.path == "/openclaw/watch/error" })
+
+      // PATH_END finds the hole (indices {0,2}, no contiguous 0..1..2) and fails.
+      relay.handleWatchMessage(
+        WearRelayProtocol.turnPath(WearRelayProtocol.PATH_END, "gap-turn"),
+        ByteArray(0),
+        sourceNodeId = "watch-node",
+      )
+      waitForSentPath(transport, "/openclaw/watch/error")
+
+      val errorMessage = transport.sent.single { it.path == "/openclaw/watch/error" }
+      val errorRoot = json.parseToJsonElement(errorMessage.data.decodeToString()).jsonObject
+      assertEquals("audio dropped", errorRoot["message"]?.jsonPrimitive?.content)
+      assertEquals("gap-turn", errorRoot["turnId"]?.jsonPrimitive?.content)
+
+      // The holey buffer is never transcribed.
+      assertFalse(gateway.methods.contains("talk.session.close"))
+      assertFalse(gateway.methods.contains("chat.send"))
+    }
+
+  @Test
+  fun outOfOrderAudioChunksAreReassembledAndTranscribed() =
+    runTest {
+      val gateway = FakeWearRelayGateway()
+      val transport = FakeWearRelayTransport()
+      val relay =
+        WearAudioRelay(
+          gateway = gateway,
+          wearTargetSessionKeyProvider = { "wear-main" },
+          transport = transport,
+          scope = this,
+        )
+
+      relay.handleWatchMessage(
+        WearRelayProtocol.turnPath(WearRelayProtocol.PATH_START, "reorder-turn"),
+        """{"acceptedResponseFormats":["mp3","pcm_24000"]}""".toByteArray(),
+        sourceNodeId = "watch-node",
+      )
+      // The Data Layer does not guarantee ordering: index 1 lands before index 0.
+      relay.handleWatchMessage(
+        WearRelayProtocol.audioChunkPath("reorder-turn", 1),
+        byteArrayOf(3, 0, 4, 0),
+        sourceNodeId = "watch-node",
+      )
+      relay.handleWatchMessage(
+        WearRelayProtocol.audioChunkPath("reorder-turn", 0),
+        byteArrayOf(1, 0, 2, 0),
+        sourceNodeId = "watch-node",
+      )
+      relay.handleWatchMessage(
+        WearRelayProtocol.turnPath(WearRelayProtocol.PATH_END, "reorder-turn"),
+        ByteArray(0),
+        sourceNodeId = "watch-node",
+      )
+
+      // Indices {0,1} are contiguous once reordered, so the turn proceeds to STT.
+      waitForGatewayMethod(gateway, "talk.session.close")
+      relay.handleGatewayEvent(
+        "talk.event",
+        """{"type":"transcript","transcriptionSessionId":"stt-1","text":"reordered transcript"}""",
+      )
+      waitForGatewayMethod(gateway, "chat.send")
+      relay.handleGatewayEvent(
+        "chat",
+        """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"audio reply"}}""",
+      )
+      waitForSentPath(transport, "/openclaw/watch/audio/reorder-turn/done")
+
+      // No drop was reported despite the out-of-order arrival: indices {1,0}
+      // buffered, then the END contiguity check passed. The relay always
+      // assembles via (0 until count).map { getValue(it) }, so the PCM handed to
+      // STT is in ascending index order regardless of arrival order.
+      assertFalse(transport.sent.any { it.path == "/openclaw/watch/error" })
+      assertTrue(gateway.methods.contains("talk.session.appendAudio"))
+      assertTrue(gateway.methods.contains("talk.session.close"))
+      assertTrue(gateway.methods.contains("chat.send"))
+    }
+
+  @Test
+  fun recordingLeaseExpiryTearsDownTurnWithoutPathEnd() =
+    runTest {
+      val gateway = FakeWearRelayGateway()
+      val transport = FakeWearRelayTransport()
+      val relay =
+        WearAudioRelay(
+          gateway = gateway,
+          wearTargetSessionKeyProvider = { "wear-main" },
+          transport = transport,
+          scope = this,
+        )
+
+      relay.handleWatchMessage(
+        WearRelayProtocol.turnPath(WearRelayProtocol.PATH_START, "stuck-turn"),
+        """{"acceptedResponseFormats":["mp3","pcm_24000"]}""".toByteArray(),
+        sourceNodeId = "watch-node",
+      )
+      relay.handleWatchMessage(
+        WearRelayProtocol.audioChunkPath("stuck-turn", 0),
+        byteArrayOf(1, 0, 2, 0),
+        sourceNodeId = "watch-node",
+      )
+
+      // The watch disconnects mid-recording and never sends PATH_END. Advancing
+      // virtual time past MAX_RECORDING_MS (60s) fires the recording-lease watchdog.
+      advanceTimeBy(61_000)
+      runCurrent()
+      waitForSentPath(transport, "/openclaw/watch/error")
+
+      val errorMessage = transport.sent.single { it.path == "/openclaw/watch/error" }
+      val errorRoot = json.parseToJsonElement(errorMessage.data.decodeToString()).jsonObject
+      assertEquals("Recording timed out", errorRoot["message"]?.jsonPrimitive?.content)
+      assertEquals("stuck-turn", errorRoot["turnId"]?.jsonPrimitive?.content)
+      // The stale turn never reached STT/chat.
+      assertFalse(gateway.methods.contains("talk.session.close"))
+      assertFalse(gateway.methods.contains("chat.send"))
+
+      // State was reset, so a brand-new turn can start and run to completion.
+      relay.handleWatchMessage(
+        WearRelayProtocol.turnPath(WearRelayProtocol.PATH_START, "fresh-turn"),
+        """{"acceptedResponseFormats":["mp3","pcm_24000"]}""".toByteArray(),
+        sourceNodeId = "watch-node",
+      )
+      relay.handleWatchMessage(
+        WearRelayProtocol.audioChunkPath("fresh-turn", 0),
+        byteArrayOf(5, 0, 6, 0),
+        sourceNodeId = "watch-node",
+      )
+      relay.handleWatchMessage(
+        WearRelayProtocol.turnPath(WearRelayProtocol.PATH_END, "fresh-turn"),
+        ByteArray(0),
+        sourceNodeId = "watch-node",
+      )
+      waitForGatewayMethod(gateway, "talk.session.close")
     }
 
   @Test
@@ -103,7 +327,7 @@ class WearAudioRelayTextTurnTest {
         """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"hi back"}}""",
       )
       waitForGatewayMethod(gateway, "chat.finalAudio.get")
-      waitForSentPath(transport, "/openclaw/watch/audio/turn-1/format/mp3")
+      waitForSentPath(transport, "/openclaw/watch/audio/turn-1/done")
 
       assertFalse(gateway.methods.contains("talk.session.create"))
       assertFalse(gateway.methods.contains("talk.session.appendAudio"))
@@ -167,7 +391,7 @@ class WearAudioRelayTextTurnTest {
         "chat",
         """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"hi back"}}""",
       )
-      waitForSentPath(transport, "/openclaw/watch/audio/turn-complete/format/mp3")
+      waitForSentPath(transport, "/openclaw/watch/audio/turn-complete/done")
       relay.handleWatchMessage(path, payload, sourceNodeId = "watch-node")
       delay(50)
 
@@ -310,6 +534,85 @@ class WearAudioRelayTextTurnTest {
       assertEquals("turn-large-speak", doneRoot["turnId"]?.jsonPrimitive?.content)
       assertEquals("mp3", doneRoot["format"]?.jsonPrimitive?.content)
     }
+
+  @Test
+  fun smallResponseIsDeliveredBeforeTurnCompletesAndUsesSingleChunk() =
+    runTest {
+      val gateway = FakeWearRelayGateway()
+      val transport = FakeWearRelayTransport()
+      val relay =
+        WearAudioRelay(
+          gateway = gateway,
+          wearTargetSessionKeyProvider = { "wear-main" },
+          transport = transport,
+          scope = this,
+        )
+      val path = "/openclaw/watch/text/turn-deliver"
+      val payload = """{"text":"hello sky","acceptedResponseFormats":["mp3","pcm_24000"]}""".toByteArray()
+
+      relay.handleWatchMessage(path, payload, sourceNodeId = "watch-node")
+      waitForGatewayMethod(gateway, "chat.send")
+      relay.handleGatewayEvent(
+        "chat",
+        """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"hi back"}}""",
+      )
+      // The done marker is the last message of the awaited send, so observing it
+      // proves the audio reached the transport before the turn could complete.
+      waitForSentPath(transport, "/openclaw/watch/audio/turn-deliver/done")
+
+      val paths = transport.sent.map { it.path }
+      val chunkIndex = paths.indexOf("/openclaw/watch/audio/turn-deliver/0")
+      val doneIndex = paths.indexOf("/openclaw/watch/audio/turn-deliver/done")
+      assertTrue(chunkIndex >= 0)
+      assertTrue(doneIndex > chunkIndex)
+      val doneRoot = json.parseToJsonElement(transport.sent[doneIndex].data.decodeToString()).jsonObject
+      // A small response is the chunkCount == 1 case of the single chunked path.
+      assertEquals("1", doneRoot["chunkCount"]?.jsonPrimitive?.content)
+
+      // The turn is completed only after delivery: a redelivery is now treated as
+      // an already-finished turn and does not restart the chat run.
+      relay.handleWatchMessage(path, payload, sourceNodeId = "watch-node")
+      delay(50)
+      assertEquals(1, gateway.requests.count { it.method == "chat.send" })
+      assertFalse(gateway.methods.contains("chat.abort"))
+    }
+
+  @Test
+  fun responseSendFailureFailsTheTurnWithPathError() =
+    runTest {
+      val gateway = FakeWearRelayGateway()
+      // Fail the audio response send; status/error sends still go through so the
+      // watch can be told the turn failed.
+      val transport = FakeWearRelayTransport(failPathSubstring = "/openclaw/watch/audio/")
+      val relay =
+        WearAudioRelay(
+          gateway = gateway,
+          wearTargetSessionKeyProvider = { "wear-main" },
+          transport = transport,
+          scope = this,
+        )
+
+      relay.handleWatchMessage(
+        "/openclaw/watch/text/turn-send-fail",
+        """{"text":"hello sky","acceptedResponseFormats":["mp3","pcm_24000"]}""".toByteArray(),
+        sourceNodeId = "watch-node",
+      )
+      waitForGatewayMethod(gateway, "chat.send")
+      relay.handleGatewayEvent(
+        "chat",
+        """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"hi back"}}""",
+      )
+      // A send failure must surface as PATH_ERROR, not a swallowed log line.
+      waitForSentPath(transport, WearRelayProtocol.PATH_ERROR)
+      delay(50)
+
+      val errorMessage = transport.sent.single { it.path == WearRelayProtocol.PATH_ERROR }
+      val errorRoot = json.parseToJsonElement(errorMessage.data.decodeToString()).jsonObject
+      assertTrue(errorRoot["message"]?.jsonPrimitive?.content?.startsWith("Voice failed:") == true)
+      assertEquals("turn-send-fail", errorRoot["turnId"]?.jsonPrimitive?.content)
+      // No silent success: the done marker is never delivered for a failed send.
+      assertFalse(transport.sent.any { it.path == "/openclaw/watch/audio/turn-send-fail/done" })
+    }
 }
 
 private suspend fun waitForGatewayMethod(
@@ -385,7 +688,9 @@ private class FakeWearRelayGateway(
   )
 }
 
-private class FakeWearRelayTransport : WearRelayTransport {
+private class FakeWearRelayTransport(
+  private val failPathSubstring: String? = null,
+) : WearRelayTransport {
   val sent = mutableListOf<SentMessage>()
   private var listener: WearRelayMessageListener? = null
 
@@ -406,6 +711,11 @@ private class FakeWearRelayTransport : WearRelayTransport {
     path: String,
     data: ByteArray,
   ) {
+    // Record before throwing is intentionally skipped for failing paths: the
+    // send never reached the watch, so it must not appear as a delivered message.
+    if (failPathSubstring != null && path.contains(failPathSubstring)) {
+      throw IllegalStateException("send failed for $path")
+    }
     sent += SentMessage(nodeId = nodeId, path = path, data = data)
   }
 

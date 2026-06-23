@@ -15,6 +15,7 @@ import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.serialization.encodeToString
@@ -51,7 +52,13 @@ class WearAudioRelay internal constructor(
 
     // ~1 minute of 200ms chunks prevents unbounded buffered audio growth.
     private const val MAX_AUDIO_CHUNKS = 300
-    private const val RECENT_TEXT_TURN_IDS_LIMIT = 32
+    private const val RECENT_COMPLETED_TURN_IDS_LIMIT = 32
+
+    // A watch that disconnects mid-recording never sends PATH_END, so without a
+    // ceiling the relay stays stuck recording and rejects every later turn. This
+    // matches the MAX_AUDIO_CHUNKS budget (~300 * 200ms) so a healthy turn always
+    // ends via PATH_END or the buffer cap before the watchdog ever fires.
+    private const val MAX_RECORDING_MS = 60_000L
 
     internal fun isWatchMessagePath(path: String): Boolean = WearRelayProtocol.parseWatchMessagePath(path) != null
   }
@@ -59,11 +66,16 @@ class WearAudioRelay internal constructor(
   private val json = Json { ignoreUnknownKeys = true }
 
   private val listenerRegistrationLock = Any()
-  private val audioBuffer = mutableListOf<ByteArray>()
-  private val audioBufferLock = Any()
+  // Inbound audio is keyed by chunkIndex, not appended in arrival order: the
+  // Wearable Data Layer does not guarantee message ordering, so a benign reorder
+  // (e.g. chunk 1 before chunk 0) must buffer and fill in, never fail the turn.
+  // The contiguity check at PATH_END (stopRecording) detects a real middle drop.
+  // Touched only inside turnStateLock critical sections, so it needs no separate
+  // lock that would otherwise race a publish-then-clear window.
+  private val audioChunks = mutableMapOf<Int, ByteArray>()
   private val turnStateLock = Any()
-  private val recentTextTurnIds = ArrayDeque<String>()
-  private val recentTextTurnIdSet = mutableSetOf<String>()
+  private val recentCompletedTurnIds = ArrayDeque<String>()
+  private val recentCompletedTurnIdSet = mutableSetOf<String>()
   private val turnCounter = AtomicLong(0)
   private val watchMessageListener =
     WearRelayMessageListener { path, data, sourceNodeId ->
@@ -114,7 +126,9 @@ class WearAudioRelay internal constructor(
     Log.d(TAG, "watch message received: path=$path bytes=${data.size} sourceNodeId=$sourceNodeId")
     when (watchMessage.path) {
       WearRelayProtocol.PATH_START -> startRecording(sourceNodeId, watchMessage.turnId, parseWearRelayStartPayload(data))
-      WearRelayProtocol.PATH_AUDIO_CHUNK -> receiveAudioChunk(data, sourceNodeId, watchMessage.turnId)
+      WearRelayProtocol.PATH_AUDIO_CHUNK ->
+        // parseWatchMessagePath only returns PATH_AUDIO_CHUNK with a numeric index.
+        receiveAudioChunk(data, sourceNodeId, watchMessage.turnId, watchMessage.chunkIndex ?: return)
       WearRelayProtocol.PATH_END -> stopRecording(sourceNodeId, watchMessage.turnId)
       WearRelayProtocol.PATH_TEXT -> startTextTurn(sourceNodeId, watchMessage.turnId, parseWearRelayTextPayload(data))
       WearRelayProtocol.PATH_CANCEL -> cancel(sourceNodeId, watchMessage.turnId)
@@ -123,12 +137,18 @@ class WearAudioRelay internal constructor(
 
   private fun startRecording(
     sourceNodeId: String? = null,
-    turnId: String? = null,
+    turnId: String,
     startPayload: WearRelayStartPayload? = null,
   ) {
-    val currentTurnId: String?
+    val currentTurnId: String
+    val recordingGeneration: Long
     synchronized(turnStateLock) {
       if (isRecording) {
+        return
+      }
+      // A late/stale chunk for an already-finished turn must not auto-start a
+      // fresh gateway STT/chat run, so reject completed turn ids up front.
+      if (isRecentCompletedTurnId(turnId)) {
         return
       }
       if (activeWatchTurnId != null && !isActiveWatchTurn(turnId)) {
@@ -149,20 +169,49 @@ class WearAudioRelay internal constructor(
       isRecording = true
       activeResponseFormat = chooseResponseFormat(startPayload)
       activeTargetSessionKey = wearTargetSessionKeyProvider()
-      currentTurnId = activeWatchTurnId
+      audioChunks.clear()
+      currentTurnId = turnId
+      recordingGeneration = turnCounter.get()
     }
-    synchronized(audioBufferLock) { audioBuffer.clear() }
+    // turnCounter is bumped on every real end/cancel/new-turn, so a completed
+    // turn turns this pending watchdog into an automatic no-op.
+    scope.launch {
+      delay(MAX_RECORDING_MS)
+      reapStaleRecording(recordingGeneration)
+    }
     sendStatus("Recording...", currentTurnId)
+  }
+
+  private fun reapStaleRecording(recordingGeneration: Long) {
+    val staleTurnId: String?
+    synchronized(turnStateLock) {
+      if (!isRecording || !isCurrentTurn(recordingGeneration)) return
+      turnCounter.incrementAndGet()
+      isRecording = false
+      activeSession?.cancel()
+      activeSession = null
+      staleTurnId = activeWatchTurnId
+      activeWatchNodeId = null
+      activeWatchTurnId = null
+      activeTargetSessionKey = null
+      audioChunks.clear()
+      // Block a chunk arriving just after lease expiry from reviving this turn.
+      if (staleTurnId != null) rememberCompletedTurnId(staleTurnId)
+    }
+    Log.w(TAG, "recording lease expired; reaping stale turn=$staleTurnId")
+    if (staleTurnId != null) {
+      sendError("Recording timed out", staleTurnId)
+    }
   }
 
   private fun startTextTurn(
     sourceNodeId: String? = null,
-    turnId: String? = null,
+    turnId: String,
     textPayload: WearRelayTextPayload? = null,
   ) {
     val transcript = textPayload?.text?.trim().orEmpty()
     val counterTurnId: Long
-    val watchTurnId: String?
+    val watchTurnId: String
     val targetNodeId: String?
     val responseFormat: String
     val targetSessionKey: String
@@ -174,7 +223,7 @@ class WearAudioRelay internal constructor(
         Log.w(TAG, "ignoring text turn from non-active watch node")
         return
       }
-      if (isRecentTextTurnId(turnId)) {
+      if (isRecentCompletedTurnId(turnId)) {
         return
       }
       turnCounter.incrementAndGet()
@@ -186,13 +235,13 @@ class WearAudioRelay internal constructor(
       activeResponseFormat = chooseResponseFormat(textPayload?.acceptedResponseFormats.orEmpty())
       activeTargetSessionKey = wearTargetSessionKeyProvider()
       counterTurnId = turnCounter.get()
-      watchTurnId = activeWatchTurnId
+      watchTurnId = turnId
       targetNodeId = activeWatchNodeId
       responseFormat = activeResponseFormat
       targetSessionKey = activeTargetSessionKey.orEmpty()
-      rememberTextTurnId(turnId)
+      audioChunks.clear()
+      rememberCompletedTurnId(turnId)
     }
-    synchronized(audioBufferLock) { audioBuffer.clear() }
     if (transcript.isEmpty()) {
       sendError("No speech recognized", turnId)
       completeActiveTurn(turnId)
@@ -230,41 +279,57 @@ class WearAudioRelay internal constructor(
   fun receiveAudioChunk(
     chunk: ByteArray,
     sourceNodeId: String? = null,
-    turnId: String? = null,
+    turnId: String,
+    chunkIndex: Int,
   ) {
-    val shouldStartRecording = synchronized(turnStateLock) { !isRecording }
+    val shouldStartRecording = synchronized(turnStateLock) { !isRecording && !isRecentCompletedTurnId(turnId) }
     if (shouldStartRecording) {
       Log.d(TAG, "starting watch turn from first audio chunk")
       startRecording(sourceNodeId, turnId)
     }
-    val stopTarget =
-      synchronized(turnStateLock) {
-        if (!isActiveWatchNode(sourceNodeId) || !isActiveWatchTurn(turnId)) {
-          Log.w(TAG, "ignoring audio chunk from non-active watch node")
-          return
+    var outcome: AudioChunkOutcome
+    val targetNodeId: String?
+    synchronized(turnStateLock) {
+      // The recording phase is what stores chunks. A chunk arriving after stop/
+      // cancel/completion (not recording, wrong turn, or an already-finished id)
+      // must be ignored, never mutate buffers or cancel the now-live session that
+      // stopRecording launched. This is the post-stop/late-chunk safety gate.
+      val recordingThisTurn = isRecording && isActiveWatchTurn(turnId) && !isRecentCompletedTurnId(turnId)
+      if (!recordingThisTurn || !isActiveWatchNode(sourceNodeId)) {
+        Log.d(TAG, "ignoring audio chunk outside the active recording turn")
+        return
+      }
+      targetNodeId = activeWatchNodeId
+      // Index-keyed store tolerates reorders/duplicates: a later index simply
+      // buffers, an earlier index fills its slot. The PATH_END contiguity check
+      // (stopRecording) decides whether the assembled run has a real middle hole.
+      audioChunks[chunkIndex] = chunk
+      outcome =
+        if (audioChunks.size > MAX_AUDIO_CHUNKS) {
+          // Genuine overload (not a gap): more distinct chunks than a healthy turn
+          // can produce. Stop + tear down via the BUFFER_FULL path, as before.
+          AudioChunkOutcome.BUFFER_FULL
+        } else {
+          AudioChunkOutcome.STORED
         }
-        activeWatchNodeId to activeWatchTurnId
-      }
-    var shouldStopRecording = false
-    synchronized(audioBufferLock) {
-      if (audioBuffer.size >= MAX_AUDIO_CHUNKS) {
-        Log.w(TAG, "Audio buffer full - stopping recording")
-        shouldStopRecording = true
-      } else {
-        audioBuffer.add(chunk)
-      }
     }
-    if (shouldStopRecording) {
-      stopRecording(sourceNodeId = stopTarget.first, turnId = stopTarget.second)
+    when (outcome) {
+      AudioChunkOutcome.BUFFER_FULL -> {
+        Log.w(TAG, "Audio buffer full - stopping recording")
+        stopRecording(sourceNodeId = targetNodeId, turnId = turnId)
+      }
+      AudioChunkOutcome.STORED -> Unit
     }
   }
 
+  private enum class AudioChunkOutcome { STORED, BUFFER_FULL }
+
   fun stopRecording(
     sourceNodeId: String? = null,
-    turnId: String? = null,
+    turnId: String,
   ) {
     val counterTurnId: Long
-    val watchTurnId: String?
+    val watchTurnId: String
     val targetNodeId: String?
     val responseFormat: String
     val targetSessionKey: String
@@ -277,23 +342,40 @@ class WearAudioRelay internal constructor(
       }
       isRecording = false
       counterTurnId = turnCounter.get()
-      watchTurnId = activeWatchTurnId
+      watchTurnId = turnId
       targetNodeId = activeWatchNodeId
       responseFormat = activeResponseFormat
       targetSessionKey = activeTargetSessionKey.orEmpty()
+      val chunkCount = audioChunks.size
+      val maxIndex = audioChunks.keys.maxOrNull()
+      // Contiguous means indices form 0..(count-1) with no hole below the max
+      // received index. Reorders that fully filled in pass here; a real middle
+      // drop leaves a hole and the max index exceeds count-1.
+      val contiguous = maxIndex != null && maxIndex == chunkCount - 1
       capturedFrames =
-        synchronized(audioBufferLock) {
-          if (audioBuffer.isEmpty()) {
+        when {
+          chunkCount == 0 -> {
             if (isCurrentTurn(counterTurnId)) {
               sendError("No audio recorded", watchTurnId)
             }
-            activeWatchNodeId = null
-            activeWatchTurnId = null
-            activeTargetSessionKey = null
+            // No transcribable audio: tear down and remember the id so a late
+            // chunk for this turn cannot auto-start a fresh recording.
+            tearDownTurn(watchTurnId)
             null
-          } else {
-            audioBuffer.toList().also { audioBuffer.clear() }
           }
+          !contiguous -> {
+            // A hole below the max index is a real dropped chunk; transcribing
+            // the holey buffer would garble the turn, so fail it instead.
+            if (isCurrentTurn(counterTurnId)) {
+              sendError("audio dropped", watchTurnId)
+            }
+            Log.w(TAG, "audio dropped on turn=$watchTurnId (received $chunkCount chunks, maxIndex=$maxIndex)")
+            tearDownTurn(watchTurnId)
+            null
+          }
+          else ->
+            // Assemble in ascending index order so reorders are corrected before STT.
+            (0 until chunkCount).map { audioChunks.getValue(it) }.also { audioChunks.clear() }
         }
     }
     if (capturedFrames == null) return
@@ -332,7 +414,7 @@ class WearAudioRelay internal constructor(
     targetSessionKey: String,
     responseFormat: String,
     targetNodeId: String?,
-    watchTurnId: String?,
+    watchTurnId: String,
     counterTurnId: Long,
     isActiveSession: () -> Boolean,
   ): WearSttTtsSession =
@@ -344,19 +426,22 @@ class WearAudioRelay internal constructor(
       onAudioResponse = { audioResponse ->
         val active = synchronized(turnStateLock) { isActiveSession() }
         if (active) {
+          // Suspends until the send awaits Data Layer delivery. A throw here
+          // propagates into the session so the turn fails and routes through
+          // onError -> sendError (PATH_ERROR) instead of a swallowed log line.
           sendAudioResponse(audioResponse, watchTurnId, counterTurnId)
         }
       },
       onStatus = { status ->
-        val (active, currentTurnId) = synchronized(turnStateLock) { isActiveSession() to activeWatchTurnId }
+        val active = synchronized(turnStateLock) { isActiveSession() }
         if (active) {
-          sendStatus(status, currentTurnId)
+          sendStatus(status, watchTurnId)
         }
       },
       onError = { error ->
-        val (active, currentTurnId) = synchronized(turnStateLock) { isActiveSession() to activeWatchTurnId }
+        val active = synchronized(turnStateLock) { isActiveSession() }
         if (active) {
-          sendError(error, currentTurnId)
+          sendError(error, watchTurnId)
         }
       },
       onComplete = { completedSession ->
@@ -370,6 +455,9 @@ class WearAudioRelay internal constructor(
               activeWatchTurnId = null
             }
             activeTargetSessionKey = null
+            // Remember the finished turn so a late/stale chunk for it cannot
+            // auto-start a fresh gateway run.
+            rememberCompletedTurnId(watchTurnId)
           }
         }
       },
@@ -384,7 +472,10 @@ class WearAudioRelay internal constructor(
     turnId: String?,
   ) {
     synchronized(turnStateLock) {
-      if (!isActiveWatchNode(sourceNodeId) || !isActiveWatchTurn(turnId)) {
+      // A null turnId is the lifecycle teardown path (disconnect/cancel()) and
+      // force-cancels any active turn; a watch-initiated cancel must match strictly.
+      val turnMatches = turnId == null || isActiveWatchTurn(turnId)
+      if (!isActiveWatchNode(sourceNodeId) || !turnMatches) {
         Log.w(TAG, "ignoring cancel from non-active watch node")
         return
       }
@@ -392,11 +483,14 @@ class WearAudioRelay internal constructor(
       isRecording = false
       activeSession?.cancel()
       activeSession = null
+      val cancelledTurnId = activeWatchTurnId
       activeWatchNodeId = null
       activeWatchTurnId = null
       activeTargetSessionKey = null
+      audioChunks.clear()
+      // A cancelled turn is finished; block a late chunk from reviving it.
+      if (cancelledTurnId != null) rememberCompletedTurnId(cancelledTurnId)
     }
-    synchronized(audioBufferLock) { audioBuffer.clear() }
   }
 
   fun handleGatewayEvent(
@@ -415,15 +509,31 @@ class WearAudioRelay internal constructor(
     }
   }
 
+  // Shared stopRecording teardown for the no-audio and dropped-chunk branches:
+  // free buffered chunks, remember the id so a late chunk cannot auto-start a
+  // fresh recording, and release the active node/turn/session-key slot. Caller
+  // holds turnStateLock and has already set isRecording = false.
+  private fun tearDownTurn(turnId: String) {
+    audioChunks.clear()
+    rememberCompletedTurnId(turnId)
+    activeWatchNodeId = null
+    activeWatchTurnId = null
+    activeTargetSessionKey = null
+  }
+
   private fun isCurrentTurn(turnId: Long): Boolean = turnCounter.get() == turnId
 
   private fun completeActiveTurn(turnId: String?) {
     synchronized(turnStateLock) {
       if (turnId != null && activeWatchTurnId != turnId) return
+      val completedTurnId = turnId ?: activeWatchTurnId
       activeSession = null
       activeWatchNodeId = null
       activeWatchTurnId = null
       activeTargetSessionKey = null
+      // Block a late/stale chunk from auto-starting a fresh run for a turn that
+      // already finished.
+      if (completedTurnId != null) rememberCompletedTurnId(completedTurnId)
     }
   }
 
@@ -432,19 +542,19 @@ class WearAudioRelay internal constructor(
     return sourceNodeId == null || sourceNodeId == activeNodeId
   }
 
-  private fun isActiveWatchTurn(turnId: String?): Boolean {
-    val activeTurnId = activeWatchTurnId ?: return true
-    return turnId == null || turnId == activeTurnId
-  }
+  // Strict: an inbound turn must match the active turn exactly. Inbound turn ids
+  // are always non-null (parseWatchMessagePath guarantees it), so there is no
+  // wildcard match against a missing id.
+  private fun isActiveWatchTurn(turnId: String): Boolean = turnId == activeWatchTurnId
 
-  private fun isRecentTextTurnId(turnId: String?): Boolean = turnId != null && recentTextTurnIdSet.contains(turnId)
+  private fun isRecentCompletedTurnId(turnId: String): Boolean = recentCompletedTurnIdSet.contains(turnId)
 
-  private fun rememberTextTurnId(turnId: String?) {
-    if (turnId == null || !recentTextTurnIdSet.add(turnId)) return
-    recentTextTurnIds.addLast(turnId)
-    while (recentTextTurnIds.size > RECENT_TEXT_TURN_IDS_LIMIT) {
-      val removed = recentTextTurnIds.removeFirst()
-      recentTextTurnIdSet.remove(removed)
+  private fun rememberCompletedTurnId(turnId: String) {
+    if (!recentCompletedTurnIdSet.add(turnId)) return
+    recentCompletedTurnIds.addLast(turnId)
+    while (recentCompletedTurnIds.size > RECENT_COMPLETED_TURN_IDS_LIMIT) {
+      val removed = recentCompletedTurnIds.removeFirst()
+      recentCompletedTurnIdSet.remove(removed)
     }
   }
 
@@ -462,11 +572,14 @@ class WearAudioRelay internal constructor(
 
   private fun chooseResponseFormat(startPayload: WearRelayStartPayload?): String = chooseResponseFormat(startPayload?.acceptedResponseFormats.orEmpty())
 
+  // Prefer Ogg-Opus: smallest payload over the Wear Data Layer (stays under the ~90KB
+  // message cap), watch-native decode, and the gateway passes ElevenLabs opus_48000_64
+  // (verified Ogg-Opus) straight through without transcoding. Fall back to mp3, then PCM.
   private fun chooseResponseFormat(acceptedResponseFormats: List<String>): String =
-    if (acceptedResponseFormats.contains(WearRelayProtocol.RESPONSE_FORMAT_MP3)) {
-      WearRelayProtocol.RESPONSE_FORMAT_MP3
-    } else if (acceptedResponseFormats.contains(WearRelayProtocol.RESPONSE_FORMAT_OGG_OPUS)) {
+    if (acceptedResponseFormats.contains(WearRelayProtocol.RESPONSE_FORMAT_OGG_OPUS)) {
       WearRelayProtocol.RESPONSE_FORMAT_OGG_OPUS
+    } else if (acceptedResponseFormats.contains(WearRelayProtocol.RESPONSE_FORMAT_MP3)) {
+      WearRelayProtocol.RESPONSE_FORMAT_MP3
     } else {
       WearRelayProtocol.RESPONSE_FORMAT_PCM_24K
     }
@@ -491,7 +604,7 @@ class WearAudioRelay internal constructor(
 
   private fun sendStatus(
     message: String,
-    turnId: String? = activeWatchTurnId,
+    turnId: String,
   ) {
     val payload = json.encodeToString(WearRelayStatusPayload(state = "processing", message = message, turnId = turnId))
     sendMessage(WearRelayProtocol.PATH_STATUS, payload.toByteArray())
@@ -499,97 +612,62 @@ class WearAudioRelay internal constructor(
 
   private fun sendError(
     message: String,
-    turnId: String? = activeWatchTurnId,
+    turnId: String,
   ) {
     val payload = json.encodeToString(WearRelayErrorPayload(message = message, turnId = turnId))
     sendMessage(WearRelayProtocol.PATH_ERROR, payload.toByteArray())
   }
 
-  private fun sendAudioResponse(
+  // Single canonical delivery path: always chunk over the indexed
+  // "<base>/<turnId>/<index>" + "/done" wire protocol (a small response is just
+  // chunkCount == 1). Suspends until every send awaits Data Layer delivery, so
+  // the caller (the session's completion path) treats the awaited return as the
+  // delivery signal and a throw as a turn failure. No swallow-and-log here:
+  // failures propagate so the watch is told via PATH_ERROR.
+  private suspend fun sendAudioResponse(
     audioResponse: WearAudioResponse,
-    turnId: String?,
+    turnId: String,
     counterTurnId: Long,
   ) {
     val audioBytes = audioResponse.audioBytes
     val format = audioResponse.format
-    // Audio might be large; if it exceeds message size limit, chunk it.
-    // MessageClient has a ~100 KB limit. Chunks are indexed and reassembled by
-    // the watch, so sequential indexed sends are sufficient.
     val maxChunkSize = WearRelayProtocol.MAX_MESSAGE_BYTES
     val targetNodeId = synchronized(turnStateLock) { activeWatchNodeId }
-    if (audioBytes.size <= maxChunkSize) {
-      scope.launch {
-        try {
-          val startedAtMs = SystemClock.elapsedRealtime()
-          if (!isCurrentTurn(counterTurnId)) return@launch
-          sendMessageSuspending(audioResponsePath(turnId, format), audioBytes, targetNodeId)
-          sendMessageSuspending(WearRelayProtocol.PATH_STATUS, json.encodeToString(WearRelayStatusPayload(state = "processing", message = "Response received", turnId = turnId)).toByteArray(), targetNodeId)
-          Log.d(TAG, "audio response send done turn=$turnId format=$format bytes=${audioBytes.size} elapsedMs=${SystemClock.elapsedRealtime() - startedAtMs}")
-        } catch (err: Throwable) {
-          Log.w(TAG, "sendAudioResponse failed: ${err.message}")
-        }
-      }
-      return
+    val startedAtMs = SystemClock.elapsedRealtime()
+    if (!isCurrentTurn(counterTurnId)) return
+    val targetNodes = if (targetNodeId != null) listOf(targetNodeId) else transport.connectedNodeIds()
+    if (targetNodes.isEmpty()) {
+      // No reachable node means delivery cannot happen; fail the turn instead of
+      // silently abandoning it so the session marks the turn errored.
+      throw IllegalStateException("watch unreachable: no connected nodes")
     }
-    scope.launch {
-      try {
-        val startedAtMs = SystemClock.elapsedRealtime()
-        if (!isCurrentTurn(counterTurnId)) return@launch
-        val targetNodes =
-          if (targetNodeId != null) {
-            listOf(targetNodeId)
-          } else {
-            transport.connectedNodeIds()
-          }
-        if (targetNodes.isEmpty()) {
-          // No connected nodes means the watch is no longer reachable. There is
-          // nothing to deliver the response to; broadcasting a status message
-          // would also have no destinations. Cancel the session before clearing
-          // the active-turn fields so the session's still-running work (any
-          // in-flight talk.speak / audio decode) is torn down rather than
-          // orphaned: once activeSession is nulled, the session's own
-          // onComplete callback can no longer match and will skip its cleanup.
-          Log.w(TAG, "chunked audio response: no connected nodes; abandoning turn=$turnId")
-          synchronized(turnStateLock) { activeSession?.cancel() }
-          completeActiveTurn(turnId)
-          return@launch
-        }
-        var offset = 0
-        var chunkIndex = 0
-        val responseBasePath = turnPath(WearRelayProtocol.PATH_AUDIO_RESPONSE, turnId)
-        Log.d(
-          TAG,
-          "audio response chunked send start turn=$turnId format=$format bytes=${audioBytes.size} maxChunkBytes=$maxChunkSize",
-        )
-        while (offset < audioBytes.size) {
-          if (!isCurrentTurn(counterTurnId)) return@launch
-          val end = minOf(offset + maxChunkSize, audioBytes.size)
-          val chunk = audioBytes.copyOfRange(offset, end)
-          sendToNodeIds(targetNodes, "$responseBasePath/$chunkIndex", chunk)
-          offset = end
-          chunkIndex++
-        }
-        if (!isCurrentTurn(counterTurnId)) return@launch
-        sendToNodeIds(
-          targetNodes,
-          "${turnPath(WearRelayProtocol.PATH_AUDIO_RESPONSE, turnId)}/done",
-          json.encodeToString(WearRelayAudioDonePayload(chunkCount = chunkIndex, turnId = turnId, format = format)).toByteArray(),
-        )
-        sendToNodeIds(
-          targetNodes,
-          WearRelayProtocol.PATH_STATUS,
-          json
-            .encodeToString(WearRelayStatusPayload(state = "processing", message = "Response received", turnId = turnId))
-            .toByteArray(),
-        )
-        Log.d(
-          TAG,
-          "audio response chunked send done turn=$turnId format=$format bytes=${audioBytes.size} chunks=$chunkIndex elapsedMs=${SystemClock.elapsedRealtime() - startedAtMs}",
-        )
-      } catch (err: Throwable) {
-        Log.w(TAG, "chunked audio response failed: ${err.message}")
-      }
-    }
+    val responseBasePath = WearRelayProtocol.turnPath(WearRelayProtocol.PATH_AUDIO_RESPONSE, turnId)
+    Log.d(TAG, "audio response send start turn=$turnId format=$format bytes=${audioBytes.size} maxChunkBytes=$maxChunkSize")
+    var offset = 0
+    var chunkIndex = 0
+    do {
+      if (!isCurrentTurn(counterTurnId)) return
+      val end = minOf(offset + maxChunkSize, audioBytes.size)
+      sendToNodeIds(targetNodes, "$responseBasePath/$chunkIndex", audioBytes.copyOfRange(offset, end))
+      offset = end
+      chunkIndex++
+      // Empty audio still emits one chunk so the watch sees chunkCount == 1.
+    } while (offset < audioBytes.size)
+    if (!isCurrentTurn(counterTurnId)) return
+    sendToNodeIds(
+      targetNodes,
+      "$responseBasePath/done",
+      json.encodeToString(WearRelayAudioDonePayload(chunkCount = chunkIndex, turnId = turnId, format = format)).toByteArray(),
+    )
+    sendToNodeIds(
+      targetNodes,
+      WearRelayProtocol.PATH_STATUS,
+      json.encodeToString(WearRelayStatusPayload(state = "processing", message = "Response received", turnId = turnId)).toByteArray(),
+    )
+    Log.d(
+      TAG,
+      "audio response send done turn=$turnId format=$format bytes=${audioBytes.size} chunks=$chunkIndex elapsedMs=${SystemClock.elapsedRealtime() - startedAtMs}",
+    )
   }
 
   private fun sendMessage(
@@ -627,19 +705,6 @@ class WearAudioRelay internal constructor(
       transport.sendToNode(nodeId, path, data)
     }
   }
-
-  private fun audioResponsePath(
-    turnId: String?,
-    format: String,
-  ): String {
-    val base = turnPath(WearRelayProtocol.PATH_AUDIO_RESPONSE, turnId)
-    return if (format == WearRelayProtocol.RESPONSE_FORMAT_PCM_24K) base else "$base/format/$format"
-  }
-
-  private fun turnPath(
-    basePath: String,
-    turnId: String?,
-  ): String = turnId?.let { "$basePath/$it" } ?: basePath
 }
 
 internal fun interface WearRelayMessageListener {

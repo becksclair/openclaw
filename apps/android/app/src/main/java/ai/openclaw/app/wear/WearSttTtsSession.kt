@@ -14,14 +14,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -83,7 +81,9 @@ internal class WearSttTtsSession(
   private val gateway: WearGateway,
   private val sessionKey: String,
   private val responseFormat: String = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K,
-  private val onAudioResponse: (WearAudioResponse) -> Unit,
+  // Suspends until the response is actually delivered to the watch; the turn is
+  // only marked successful after this returns, and a thrown failure fails the turn.
+  private val onAudioResponse: suspend (WearAudioResponse) -> Unit,
   private val onStatus: (String) -> Unit,
   private val onError: (String) -> Unit,
   private val onComplete: (WearSttTtsSession) -> Unit,
@@ -93,7 +93,7 @@ internal class WearSttTtsSession(
     session: GatewaySession,
     sessionKey: String,
     responseFormat: String = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K,
-    onAudioResponse: (WearAudioResponse) -> Unit,
+    onAudioResponse: suspend (WearAudioResponse) -> Unit,
     onStatus: (String) -> Unit,
     onError: (String) -> Unit,
     onComplete: (WearSttTtsSession) -> Unit,
@@ -113,9 +113,9 @@ internal class WearSttTtsSession(
     private const val INPUT_SAMPLE_RATE_HZ = 24_000
     private const val TRANSCRIPTION_SAMPLE_RATE_HZ = 8_000
     private const val MAX_APPEND_AUDIO_BYTES = 128 * 1024
-    private const val TRANSCRIPTION_TIMEOUT_MS = 25_000L
+    // Covers the gateway's 60s transcription finalize budget plus RTT.
+    private const val TRANSCRIPTION_TIMEOUT_MS = 65_000L
     private const val CHAT_TIMEOUT_MS = 120_000L
-    private const val CHAT_HISTORY_FALLBACK_TIMEOUT_MS = 25_000L
     private const val FINAL_AUDIO_TIMEOUT_MS = 30_000L
     private const val SPEAK_TIMEOUT_MS = 120_000L
     private const val WATCH_OUTPUT_SAMPLE_RATE_HZ = 24_000
@@ -185,7 +185,6 @@ internal class WearSttTtsSession(
             onStatus("Thinking...")
             val chatWaiter = CompletableDeferred<ChatFinalEvent>()
             chatFinalSignal = chatWaiter
-            val chatStartedAtSeconds = System.currentTimeMillis().toDouble() / 1_000.0
             val runId = sendChat(transcript)
             logTurnLatency("chat-send-ok", turnStartedAtMs, "runId=${runId.shortForLog()} transcriptChars=${transcript.length}")
 
@@ -215,17 +214,7 @@ internal class WearSttTtsSession(
             )
 
             val assistantText =
-              finalEventText
-                ?.takeIf { it.isNotEmpty() }
-                ?: finalAudioSpokenText
-                ?: run {
-                  if (spokenAudio != null) {
-                    null
-                  } else {
-                    Log.w(TAG, "chat final missing text or timed out runId=${runId.shortForLog()}; attempting history fallback")
-                    fetchLatestAssistantText(chatStartedAtSeconds, CHAT_HISTORY_FALLBACK_TIMEOUT_MS)?.trim()
-                  }
-                }.orEmpty()
+              (finalEventText?.takeIf { it.isNotEmpty() } ?: finalAudioSpokenText).orEmpty()
             if (assistantText.isEmpty()) {
               if (spokenAudio == null) {
                 onError("No assistant response received")
@@ -255,6 +244,9 @@ internal class WearSttTtsSession(
             }
             coroutineContext.ensureActive()
             logTurnLatency("audio-ready", turnStartedAtMs, "format=${audioToPlay.format} bytes=${audioToPlay.audioBytes.size}")
+            // Delivery is the terminal step: await the real send before declaring
+            // success. If the send throws, the catch below fails the turn so the
+            // watch is told instead of silently waiting for audio that never lands.
             onAudioResponse(audioToPlay)
             successfullyCompleted = true
           } catch (_: TimeoutCancellationException) {
@@ -406,11 +398,19 @@ internal class WearSttTtsSession(
 
   private suspend fun closeTranscriptionSession(sessionId: String) {
     if (!transcriptionClosing.compareAndSet(false, true)) return
-    gateway.request(
-      "talk.session.close",
-      buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }.toString(),
-      timeoutMs = 5_000,
-    )
+    try {
+      gateway.request(
+        "talk.session.close",
+        buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }.toString(),
+        timeoutMs = 5_000,
+      )
+    } catch (err: Throwable) {
+      // Close did not land; release the single-closer guard so the start job's
+      // finally block or cancel() can retry instead of leaking the gateway
+      // transcription session until its server-side TTL.
+      transcriptionClosing.set(false)
+      throw err
+    }
   }
 
   private suspend fun abortChatRun(
@@ -552,10 +552,17 @@ internal class WearSttTtsSession(
   }
 
   private suspend fun speakAssistantText(text: String): WearAudioResponse {
-    // For PCM watches we still ask the gateway for opus and decode it here,
-    // because talk.speak does not emit raw PCM. For compressed watches request
-    // the negotiated format so the gateway can pass it through unchanged.
-    val requestedFormat = if (responseFormat == WearRelayProtocol.RESPONSE_FORMAT_PCM_24K) "opus" else responseFormat
+    // Map the negotiated Wear format to the gateway's talk.speak TTS token. The
+    // gateway only transcodes to Opus when the request is exactly "opus", so
+    // both PCM and OGG_OPUS watches ask for "opus": PCM watches decode the opus
+    // bytes locally, opus watches play them directly. mp3 passes through as-is.
+    val requestedFormat =
+      when (responseFormat) {
+        WearRelayProtocol.RESPONSE_FORMAT_OGG_OPUS,
+        WearRelayProtocol.RESPONSE_FORMAT_PCM_24K,
+        -> "opus"
+        else -> responseFormat
+      }
     val response =
       gateway.request(
         "talk.speak",
@@ -677,50 +684,6 @@ internal class WearSttTtsSession(
     }
   }
 
-  private suspend fun fetchLatestAssistantText(
-    sinceSeconds: Double,
-    timeoutMs: Long,
-  ): String? {
-    val deadline = SystemClock.elapsedRealtime() + timeoutMs
-    var delayMs = 300L
-    while (SystemClock.elapsedRealtime() < deadline) {
-      val text = fetchLatestAssistantText(sinceSeconds)
-      if (!text.isNullOrBlank()) return text
-      delay(delayMs)
-      delayMs = (delayMs * 2).coerceAtMost(4_000L)
-    }
-    return null
-  }
-
-  private suspend fun fetchLatestAssistantText(sinceSeconds: Double): String? {
-    val key = sessionKey.ifBlank { "main" }
-    val response =
-      gateway.request(
-        "chat.history",
-        buildJsonObject { put("sessionKey", JsonPrimitive(key)) }.toString(),
-      )
-    val root = json.parseToJsonElement(response).asObjectOrNull() ?: return null
-    val messages = root["messages"] as? JsonArray ?: return null
-    for (item in messages.reversed()) {
-      val obj = item.asObjectOrNull() ?: continue
-      if (obj["role"].asStringOrNull() != "assistant") continue
-      val timestamp = obj["timestamp"].asDoubleOrNull()
-      if (timestamp != null && timestamp <= sinceSeconds) continue
-      val content = obj["content"] as? JsonArray ?: continue
-      val text =
-        content
-          .mapNotNull { entry ->
-            entry
-              .asObjectOrNull()
-              ?.get("text")
-              ?.asStringOrNull()
-              ?.trim()
-          }.filter { it.isNotEmpty() }
-      if (text.isNotEmpty()) return text.joinToString("\n")
-    }
-    return null
-  }
-
   private fun parseRunId(response: String): String? =
     runCatching {
       json
@@ -786,8 +749,6 @@ internal class WearSttTtsSession(
   private fun kotlinx.serialization.json.JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
 
   private fun kotlinx.serialization.json.JsonElement?.asBooleanOrNull(): Boolean? = (this as? JsonPrimitive)?.content?.toBooleanStrictOrNull()
-
-  private fun kotlinx.serialization.json.JsonElement?.asDoubleOrNull(): Double? = (this as? JsonPrimitive)?.content?.toDoubleOrNull()
 
   private fun String.shortForLog(): String = if (length <= 8) this else take(8)
 

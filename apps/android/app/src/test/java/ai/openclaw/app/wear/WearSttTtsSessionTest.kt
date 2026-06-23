@@ -5,6 +5,7 @@ import ai.openclaw.common.wear.WearRelayProtocol
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
@@ -233,37 +234,90 @@ class WearSttTtsSessionTest {
     }
 
   @Test
-  fun startTranscript_fallbackSynthesisRequestsNegotiatedFormat() =
+  fun startTranscript_fallbackSynthesisRequestsMp3ForMp3Watch() =
     runTest {
+      assertEquals("mp3", speakOutputFormatFor(WearRelayProtocol.RESPONSE_FORMAT_MP3))
+    }
+
+  @Test
+  fun startTranscript_fallbackSynthesisRequestsOpusForOggOpusWatch() =
+    runTest {
+      // The gateway only transcodes to Opus for the exact "opus" token, so the
+      // negotiated ogg_opus Wear format must map to "opus", not "ogg_opus".
+      assertEquals("opus", speakOutputFormatFor(WearRelayProtocol.RESPONSE_FORMAT_OGG_OPUS))
+    }
+
+  @Test
+  fun startTranscript_fallbackSynthesisRequestsOpusForPcmWatch() =
+    runTest {
+      // PCM watches still ask the gateway for opus and decode locally.
+      assertEquals("opus", speakOutputFormatFor(WearRelayProtocol.RESPONSE_FORMAT_PCM_24K))
+    }
+
+  private suspend fun TestScope.speakOutputFormatFor(negotiatedFormat: String): String {
+    val gateway = FakeWearGateway(finalAudioPayloadJson = """{"found":false}""")
+    val session =
+      WearSttTtsSession(
+        scope = this,
+        gateway = gateway,
+        sessionKey = "main",
+        responseFormat = negotiatedFormat,
+        onAudioResponse = {},
+        onStatus = {},
+        onError = { error("unexpected error: $it") },
+        onComplete = {},
+      )
+
+    session.startTranscript("hello sky")
+    runCurrent()
+    session.handleGatewayEvent(
+      "chat",
+      """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"hi back"}}""",
+    )
+    waitForGatewayMethod(gateway, "talk.speak")
+    runCurrent()
+
+    val speakParams =
+      gateway.requests
+        .single { it.method == "talk.speak" }
+        .paramsJson
+        .orEmpty()
+    return Json.parseToJsonElement(speakParams).jsonObject["outputFormat"]?.jsonPrimitive?.content.orEmpty()
+  }
+
+  @Test
+  fun startTranscript_errorsWhenNoRunScopedTextOrAudioIsAvailable() =
+    runTest {
+      // chat final arrives with no assistant text and chat.finalAudio.get reports
+      // no audio: the run-scoped recovery path is exhausted, so the turn must
+      // error instead of speaking another run's history.
       val gateway = FakeWearGateway(finalAudioPayloadJson = """{"found":false}""")
+      val errors = mutableListOf<String>()
+      val completed = mutableListOf<WearSttTtsSession>()
       val session =
         WearSttTtsSession(
           scope = this,
           gateway = gateway,
           sessionKey = "main",
-          responseFormat = WearRelayProtocol.RESPONSE_FORMAT_MP3,
-          onAudioResponse = {},
+          onAudioResponse = { error("unexpected audio response") },
           onStatus = {},
-          onError = { error("unexpected error: $it") },
-          onComplete = {},
+          onError = { errors += it },
+          onComplete = { completed += it },
         )
 
       session.startTranscript("hello sky")
       runCurrent()
       session.handleGatewayEvent(
         "chat",
-        """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"hi back"}}""",
+        """{"runId":"run-1","state":"final","message":{"role":"assistant","content":""}}""",
       )
-      waitForGatewayMethod(gateway, "talk.speak")
+      waitForGatewayMethod(gateway, "chat.finalAudio.get")
       runCurrent()
 
-      val speakParams =
-        gateway.requests
-          .single { it.method == "talk.speak" }
-          .paramsJson
-          .orEmpty()
-      val speakRoot = Json.parseToJsonElement(speakParams).jsonObject
-      assertEquals("mp3", speakRoot["outputFormat"]?.jsonPrimitive?.content)
+      assertEquals(listOf("No assistant response received"), errors)
+      assertEquals(listOf(session), completed)
+      assertFalse(gateway.methods.contains("chat.history"))
+      assertFalse(gateway.methods.contains("talk.speak"))
     }
 
   @Test
@@ -383,6 +437,34 @@ class WearSttTtsSessionTest {
     }
 
   @Test
+  fun startAudio_retriesTranscriptionCloseWhenFirstCloseFails() =
+    runTest {
+      // A failed talk.session.close must not be recorded as success; the close
+      // guard is released so the start job's finally block retries instead of
+      // leaking the gateway transcription session until its TTL.
+      val gateway = FakeWearGateway(failFirstTranscriptionClose = true)
+      val errors = mutableListOf<String>()
+      val session =
+        WearSttTtsSession(
+          scope = this,
+          gateway = gateway,
+          sessionKey = "main",
+          onAudioResponse = { error("unexpected audio response") },
+          onStatus = {},
+          onError = { errors += it },
+          onComplete = {},
+        )
+
+      session.start(listOf(ByteArray(960) { index -> if (index % 2 == 0) 1 else 0 }))
+      // The first close throws inside transcribeAudioFrames before the transcript
+      // is awaited, which fails the turn and triggers the finally-block retry.
+      waitForGatewayMethodCount(gateway, "talk.session.close", 2)
+
+      assertEquals(2, gateway.methods.count { it == "talk.session.close" })
+      assertTrue(errors.any { it.contains("close failed") })
+    }
+
+  @Test
   fun startAudio_forwardsPartialTranscriptAsRawStatus() =
     runTest {
       val gateway = FakeWearGateway()
@@ -431,11 +513,26 @@ private suspend fun waitForGatewayMethod(
   }
 }
 
+private suspend fun waitForGatewayMethodCount(
+  gateway: FakeWearGateway,
+  method: String,
+  count: Int,
+) {
+  withTimeout(2_000) {
+    while (gateway.methods.count { it == method } < count) {
+      delay(10)
+    }
+  }
+}
+
 private class FakeWearGateway(
   private val finalAudioPayloadJson: String = """{"found":false}""",
   private val failTalkSpeak: Boolean = false,
+  private val failFirstTranscriptionClose: Boolean = false,
 ) : WearGateway {
   val requests = mutableListOf<Request>()
+
+  private var transcriptionCloseAttempts = 0
 
   val methods: List<String>
     get() = requests.map { it.method }
@@ -449,7 +546,13 @@ private class FakeWearGateway(
     return when (method) {
       "talk.session.create" -> """{"sessionId":"stt-1"}"""
       "talk.session.appendAudio" -> "{}"
-      "talk.session.close" -> "{}"
+      "talk.session.close" -> {
+        transcriptionCloseAttempts += 1
+        if (failFirstTranscriptionClose && transcriptionCloseAttempts == 1) {
+          error("close failed")
+        }
+        "{}"
+      }
       "chat.send" -> """{"runId":"run-1"}"""
       "talk.speak" -> {
         if (failTalkSpeak) error("synthesis failed")

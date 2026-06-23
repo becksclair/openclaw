@@ -10,9 +10,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -44,9 +47,17 @@ class AudioCapture(
     private const val CHUNK_INTERVAL_MS = 200L
     private const val BYTES_PER_SAMPLE = 2
     private const val MILLIS_PER_SECOND = 1_000
+    // Bounded backoff for a quiet/slow HAL returning 0-byte reads; start
+    // sleeping after a couple of zero reads and bail if it never recovers.
+    private const val ZERO_READ_BACKOFF_THRESHOLD = 2
+    private const val ZERO_READ_BACKOFF_MS = 12L
+    private const val MAX_CONSECUTIVE_ZERO_READS = 250
   }
 
   private val recorderRef = AtomicReference<WearAudioRecord?>(null)
+  // Single dedicated thread for blocking AudioRecord HAL teardown so a slow
+  // vendor stop()/release() never janks the caller (often Main.immediate).
+  private val audioDispatcher = Dispatchers.IO.limitedParallelism(1)
   private var recordJob: Job? = null
   private val isRecording = AtomicBoolean(false)
   private val flushPendingOnStopRef = AtomicReference<AtomicBoolean?>(null)
@@ -144,9 +155,32 @@ class AudioCapture(
         var recordingChunkIndex = 0
         var chunkStartMs = clock()
         val writerJob = captureWriterJob
+        var consecutiveZeroReads = 0
         try {
           while (isActive && isRecording.get()) {
             val read = active.read(readBuffer, 0, readBuffer.size)
+            if (read < 0) {
+              // A negative code means the HAL is dead/errored; never retry it.
+              // Break so the finally below stops/releases the recorder once.
+              Log.w(TAG, "AudioRecord.read error $read")
+              break
+            }
+            if (read == 0) {
+              // A quiet/slow HAL can return 0 repeatedly; back off after a couple
+              // of zero reads so we do not pin a CPU core. A read>0 resets the
+              // counter; an unrecoverable stall ends the capture like the
+              // playback path treats a stuck AudioTrack write.
+              consecutiveZeroReads++
+              if (consecutiveZeroReads >= MAX_CONSECUTIVE_ZERO_READS) {
+                Log.w(TAG, "AudioRecord.read stuck at zero; ending capture")
+                break
+              }
+              if (consecutiveZeroReads >= ZERO_READ_BACKOFF_THRESHOLD) {
+                delay(ZERO_READ_BACKOFF_MS)
+              }
+            } else {
+              consecutiveZeroReads = 0
+            }
             if (read > 0) {
               if (accumulatorOffset + read <= accumulator.size) {
                 readBuffer.copyInto(accumulator, accumulatorOffset, 0, read)
@@ -188,12 +222,21 @@ class AudioCapture(
             }
           }
         } finally {
+          // CAS still gates the single release; if stop() already claimed the
+          // recorder it cleared recorderRef and tears down on the dispatcher.
+          // When the job owns teardown, serialize it on the same audio
+          // dispatcher so the blocking HAL stop()/release() stays off any
+          // caller thread and never overlaps a stop()-driven teardown.
           if (recorderRef.compareAndSet(active, null)) {
             isRecording.set(false)
-            runCatching { active.stop() }
-            active.unregisterAudioRecordingCallback(callback)
             recordingCallback = null
-            active.release()
+            // NonCancellable so a cancelled job still completes HAL teardown
+            // instead of leaking the AudioRecord when it wins the CAS.
+            withContext(NonCancellable + audioDispatcher) {
+              runCatching { active.stop() }
+              active.unregisterAudioRecordingCallback(callback)
+              active.release()
+            }
           }
           flushPendingOnStopRef.compareAndSet(flushPendingOnStop, null)
           val shouldFlushPending = flushPendingOnStop.getAndSet(true)
@@ -280,16 +323,22 @@ class AudioCapture(
   ) {
     flushPendingOnStopRef.getAndSet(null)?.set(!discardPending)
     isRecording.set(false)
-    // Stop and release the recorder synchronously so the blocking
-    // AudioRecord.read() returns and the record job can finish its finally
-    // block. The finally block will skip its own release because recorderRef
-    // has already been cleared.
+    // Claim ownership synchronously: clearing recorderRef makes the record
+    // job's finally skip its own release and keeps cancellation correct.
+    // The blocking AudioRecord HAL teardown then runs off the caller thread
+    // (often Main.immediate) so a slow vendor stop()/release() cannot jank UI.
     val active = recorderRef.getAndSet(null)
-    active?.let {
-      runCatching { it.stop() }
-      recordingCallback?.let(it::unregisterAudioRecordingCallback)
-      recordingCallback = null
-      it.release()
+    val callback = recordingCallback
+    recordingCallback = null
+    if (active != null) {
+      // NonCancellable so teardown still runs when stop() is reached after the
+      // scope is cancelled (e.g. ViewModel.onCleared); otherwise launch on a
+      // cancelled scope is cancelled-on-arrival and leaks the AudioRecord/mic.
+      scope.launch(NonCancellable + audioDispatcher) {
+        runCatching { active.stop() }
+        callback?.let(active::unregisterAudioRecordingCallback)
+        active.release()
+      }
     }
     val job = recordJob
     // Don't null recordJob here; the record coroutine's finally block clears it

@@ -16,6 +16,17 @@ import android.speech.SpeechRecognizer
 private const val WEAR_COMPLETE_SILENCE_LENGTH_MS = 3_200
 private const val WEAR_POSSIBLY_COMPLETE_SILENCE_LENGTH_MS = 2_400
 
+/**
+ * Classifies a dictation failure so the consumer can decide whether to salvage a
+ * partial transcript. NoSpeech means the recognizer simply heard nothing usable
+ * (safe to keep a partial); Transient covers network/client/audio failures where
+ * a partial may be truncated and must not be sent as if final.
+ */
+internal enum class DictationErrorKind {
+  NoSpeech,
+  Transient,
+}
+
 internal sealed interface SpeechDictationEvent {
   data object Listening : SpeechDictationEvent
 
@@ -33,6 +44,7 @@ internal sealed interface SpeechDictationEvent {
 
   data class Error(
     val message: String,
+    val kind: DictationErrorKind,
   ) : SpeechDictationEvent
 }
 
@@ -63,7 +75,7 @@ internal class AndroidSpeechDictation(
     }
     mainHandler.post {
       if (!startOnMain(component, onEvent)) {
-        onEvent(SpeechDictationEvent.Error("Speech recognition unavailable"))
+        onEvent(SpeechDictationEvent.Error("Speech recognition unavailable", DictationErrorKind.Transient))
       }
     }
     return true
@@ -137,7 +149,12 @@ internal class AndroidSpeechDictation(
     }
 
     override fun onError(error: Int) {
-      onEvent(SpeechDictationEvent.Error(SpeechRecognizerHelper.errorMessage(error)))
+      val kind =
+        when (SpeechRecognizerHelper.errorKind(error)) {
+          SpeechRecognizerHelper.ErrorKind.NoSpeech -> DictationErrorKind.NoSpeech
+          SpeechRecognizerHelper.ErrorKind.Transient -> DictationErrorKind.Transient
+        }
+      onEvent(SpeechDictationEvent.Error(SpeechRecognizerHelper.errorMessage(error), kind))
     }
 
     override fun onResults(results: Bundle?) {

@@ -10,10 +10,10 @@ import ai.openclaw.wear.audio.AudioPlayer
 import ai.openclaw.wear.audio.CompressedAudioDecoder
 import ai.openclaw.wear.audio.WearAudioCapture
 import ai.openclaw.wear.client.PhoneRelayAudioResponse
-import ai.openclaw.wear.client.PhoneRelayAudioStreamEvent
 import ai.openclaw.wear.client.PhoneRelayClient
 import ai.openclaw.wear.client.WearPhoneRelay
 import ai.openclaw.wear.speech.AndroidSpeechDictation
+import ai.openclaw.wear.speech.DictationErrorKind
 import ai.openclaw.wear.speech.SpeechDictationEvent
 import ai.openclaw.wear.speech.WatchSpeechDictation
 import android.app.Application
@@ -56,11 +56,12 @@ class WatchViewModel private constructor(
     private const val PHONE_CONNECTION_WAIT_TIMEOUT_MS = 10_000L
     private const val DEBUG_PHONE_CONNECTION_POLL_INTERVAL_MS = 500L
 
-    // Gentle boost applied to the final MP3 TTS file before it is played on the watch speaker.
-    // Value chosen empirically: loud enough on watch speakers without clipping the 16-bit PCM range.
+    // Boost applied to the final MP3 TTS file before it is played on the watch speaker.
+    // Value chosen empirically for loudness on watch speakers. Note this does not avoid
+    // clipping: at 1.2x, 16-bit PCM peaks above ~27306 hard-clip to the +/-32767 range.
     private const val FINAL_MP3_AUDIO_GAIN = 1.2
     private const val PROCESSING_TURN_TIMEOUT_MS = 180_000L
-    internal val DEFAULT_ENDPOINTING_CONFIG = AudioEndpointingConfig(endSilenceMs = 2_200)
+    internal val DEFAULT_ENDPOINTING_CONFIG = AudioEndpointingConfig(endSilenceMs = 1_200)
     private val ALLOWED_DEBUG_STATES = setOf(WatchState.Idle, WatchState.CheckingPhone)
   }
 
@@ -76,13 +77,16 @@ class WatchViewModel private constructor(
     val keepsScreenAwake: Boolean
       get() =
         when (this) {
+          // Keep the screen on while the watch is capturing audio or playing a
+          // response. Remote Processing has no local activity, so let the screen
+          // sleep rather than burning battery waiting on the phone.
           Recording,
-          Processing,
+          CheckingPhone,
           Playing,
           -> true
 
           Idle,
-          CheckingPhone,
+          Processing,
           Error,
           -> false
         }
@@ -140,10 +144,19 @@ class WatchViewModel private constructor(
     viewModelScope.launch {
       relayClient.phoneConnected.collect { connected ->
         if (!connected) {
-          if (_state.value != WatchState.Idle && _state.value != WatchState.Error) {
-            failTurn("Phone disconnected")
-          } else {
-            _statusText.value = "Waiting for phone..."
+          // Only capture/processing turns depend on the phone link. Whole-buffer
+          // playback is fully local, so a disconnect during Playing (or Idle/Error)
+          // must not fail it; leave playback running and surface the wait status.
+          when (_state.value) {
+            WatchState.Recording,
+            WatchState.Processing,
+            WatchState.CheckingPhone,
+            -> failTurn("Phone disconnected")
+
+            WatchState.Idle,
+            WatchState.Playing,
+            WatchState.Error,
+            -> _statusText.value = "Waiting for phone..."
           }
         } else {
           if (_state.value == WatchState.CheckingPhone || _state.value == WatchState.Idle) {
@@ -168,40 +181,6 @@ class WatchViewModel private constructor(
           } else {
             activeTurnId = null
             playPcmResponse(response)
-          }
-        }
-      }
-    }
-
-    viewModelScope.launch {
-      relayClient.audioStreamEvents.collect { event ->
-        when (event) {
-          is PhoneRelayAudioStreamEvent.Chunk -> {
-            if (!isActiveTurnResponse(event.turnId) || event.audioBytes.isEmpty()) return@collect
-            // Streaming chunks are always PCM_24K under the current relay; format
-            // negotiation has not landed (see PhoneRelayAudioStreamEvent.Chunk kdoc).
-            if (_state.value == WatchState.Processing) {
-              val generation = playbackGeneration.incrementAndGet()
-              transitionTo(WatchState.Playing, "Playing response...")
-              audioPlayer.startStream(
-                onComplete = {
-                  completePlayback(generation)
-                },
-                onError = {
-                  failPlayback(generation)
-                },
-                debugTurnId = event.turnId,
-              )
-            }
-            val appended = _state.value == WatchState.Playing && audioPlayer.appendStream(event.audioBytes)
-            if (!appended && _state.value == WatchState.Playing) {
-              failTurn("Audio playback unavailable")
-            }
-          }
-          is PhoneRelayAudioStreamEvent.Done -> {
-            if (!isActiveTurnResponse(event.turnId)) return@collect
-            activeTurnId = null
-            audioPlayer.finishStream()
           }
         }
       }
@@ -310,7 +289,7 @@ class WatchViewModel private constructor(
         endpointingConfig = DEFAULT_ENDPOINTING_CONFIG,
         onEndpoint = { endpoint ->
           viewModelScope.launch {
-            completeStoppedRecording(turnId, RecordingCompletion.AutoEndpoint(endpoint))
+            completeStoppedRecording(turnId, endpoint)
           }
         },
       )
@@ -319,18 +298,6 @@ class WatchViewModel private constructor(
       return
     }
     transitionTo(WatchState.Recording, "Listening...")
-  }
-
-  fun onMicButtonUp() {
-    if (isDictating) {
-      speechDictation.stopListening()
-      transitionTo(WatchState.Recording, "Processing speech...")
-      return
-    }
-    val turnId = claimRecordingCompletion() ?: return
-    audioCapture.stop {
-      sendRecordingEnd(turnId, RecordingCompletion.Manual)
-    }
   }
 
   fun onCancelTurn() {
@@ -411,7 +378,7 @@ class WatchViewModel private constructor(
         offset = end
         val event = detector?.process(chunk)
         if (event is AudioEndpointEvent.Endpoint) {
-          completeStoppedRecording(turnId, RecordingCompletion.AutoEndpoint(event))
+          completeStoppedRecording(turnId, event)
           Log.d(DEBUG_TURN_TAG, "$debugKind auto-ended bytesSent=$offset inputBytes=${pcmBytes.size}")
           return@launch
         }
@@ -419,7 +386,7 @@ class WatchViewModel private constructor(
       }
       val finishEndpoint = detector?.finish()
       if (finishEndpoint != null && activeTurnId == turnId) {
-        completeStoppedRecording(turnId, RecordingCompletion.AutoEndpoint(finishEndpoint))
+        completeStoppedRecording(turnId, finishEndpoint)
         Log.d(DEBUG_TURN_TAG, "$debugKind finished bytesSent=$offset inputBytes=${pcmBytes.size}")
       } else if (activeTurnId == turnId) {
         if (useEndpointing) {
@@ -629,10 +596,7 @@ class WatchViewModel private constructor(
     transitionTo(WatchState.Error, message)
   }
 
-  private fun isActiveTurnResponse(turnId: String?): Boolean {
-    val active = activeTurnId ?: return false
-    return turnId == null || turnId == active
-  }
+  private fun isActiveTurnResponse(turnId: String): Boolean = turnId == activeTurnId
 
   override fun onCleared() {
     super.onCleared()
@@ -647,34 +611,14 @@ class WatchViewModel private constructor(
 
   private fun completeStoppedRecording(
     turnId: String?,
-    completion: RecordingCompletion,
+    endpoint: AudioEndpointEvent.Endpoint,
   ) {
     if (claimRecordingCompletion(turnId) == null) return
-    sendRecordingEnd(turnId, completion)
-  }
-
-  private fun claimRecordingCompletion(expectedTurnId: String? = activeTurnId): String? =
-    synchronized(recordingLock) {
-      val turnId = activeTurnId
-      if (!isRecording || turnId == null || expectedTurnId != turnId) return@synchronized null
-      isRecording = false
-      turnId
-    }
-
-  private fun sendRecordingEnd(
-    turnId: String?,
-    completion: RecordingCompletion,
-  ) {
-    when (completion) {
-      RecordingCompletion.Manual ->
-        Log.d(DEBUG_TURN_TAG, "recording completion source=manual turnId=$turnId")
-      is RecordingCompletion.AutoEndpoint ->
-        Log.d(
-          DEBUG_TURN_TAG,
-          "recording completion source=endpoint turnId=$turnId reason=${completion.endpoint.reason} totalMs=${completion.endpoint.totalAudioMs} speechMs=${completion.endpoint.speechMs} trailingSilenceMs=${completion.endpoint.trailingSilenceMs}",
-        )
-    }
-    if (completion is RecordingCompletion.AutoEndpoint && completion.endpoint.reason == AudioEndpointReason.NoSpeech) {
+    Log.d(
+      DEBUG_TURN_TAG,
+      "recording completion source=endpoint turnId=$turnId reason=${endpoint.reason} totalMs=${endpoint.totalAudioMs} speechMs=${endpoint.speechMs} trailingSilenceMs=${endpoint.trailingSilenceMs}",
+    )
+    if (endpoint.reason == AudioEndpointReason.NoSpeech) {
       relayClient.sendCancel()
       resetTurnState()
       transitionTo(WatchState.Idle, "Tap mic to speak")
@@ -685,6 +629,14 @@ class WatchViewModel private constructor(
       transitionToProcessing("Processing...")
     }
   }
+
+  private fun claimRecordingCompletion(expectedTurnId: String? = activeTurnId): String? =
+    synchronized(recordingLock) {
+      val turnId = activeTurnId
+      if (!isRecording || turnId == null || expectedTurnId != turnId) return@synchronized null
+      isRecording = false
+      turnId
+    }
 
   private fun handleDictationEvent(event: SpeechDictationEvent) {
     if (!isDictating) return
@@ -718,7 +670,10 @@ class WatchViewModel private constructor(
         isDictating = false
         pendingDictationText = null
         speechDictation.destroy()
-        if (text.isNotEmpty()) {
+        // Only salvage a partial when the recognizer merely heard nothing usable.
+        // Transient (network/client/audio) errors may have truncated the partial,
+        // so route to a recoverable error instead of submitting truncated text.
+        if (event.kind == DictationErrorKind.NoSpeech && text.isNotEmpty()) {
           submitDictationText(text)
           return
         }
@@ -745,14 +700,6 @@ class WatchViewModel private constructor(
         transitionTo(WatchState.Idle, "Tap mic to speak")
       }
     }
-  }
-
-  private sealed class RecordingCompletion {
-    data object Manual : RecordingCompletion()
-
-    data class AutoEndpoint(
-      val endpoint: AudioEndpointEvent.Endpoint,
-    ) : RecordingCompletion()
   }
 
   private data class Dependencies(
