@@ -43,9 +43,22 @@ internal class AudioStreamAssembler(
   private var expectedChunkTotal: Int? = null
   private val pendingChunks = mutableMapOf<Int, ByteArray>()
 
+  // Terminal latch: once a stream completes or breaks, further chunks/done are
+  // ignored until the caller reset()s for a new turn. Without it, a late chunk
+  // arriving after done would start a phantom stream and emit stray audio.
+  private var closed = false
+
   fun reset() {
     expectedChunkIndex = 0
     expectedChunkTotal = null
+    closed = false
+    pendingChunks.clear()
+  }
+
+  // Latch the stream terminal and free buffered data; the caller resets counters
+  // when it starts the next turn.
+  private fun finish() {
+    closed = true
     pendingChunks.clear()
   }
 
@@ -53,6 +66,7 @@ internal class AudioStreamAssembler(
     index: Int,
     data: ByteArray,
   ) {
+    if (closed) return
     when {
       index < expectedChunkIndex -> Unit
       index == expectedChunkIndex -> {
@@ -61,11 +75,10 @@ internal class AudioStreamAssembler(
         completeIfReady()
       }
       pendingChunks.size >= MAX_PENDING_CHUNKS -> {
-        // Capture the missing-chunk count BEFORE reset() zeros the underlying
-        // counters; otherwise the callback receives 0 and the operator log
-        // loses the only signal of how broken the stream was.
+        // Capture the missing-chunk count BEFORE finish() so the callback gets a
+        // real signal of how broken the stream was, not 0.
         val missing = incompleteChunkCount().coerceAtLeast(1)
-        reset()
+        finish()
         onIncomplete(StreamBreakReason.TooManyPendingChunks(missingChunks = missing))
       }
       else -> pendingChunks[index] = data
@@ -73,9 +86,20 @@ internal class AudioStreamAssembler(
   }
 
   fun acceptDone(chunkCount: Int) {
+    if (closed) return
     if (chunkCount < expectedChunkIndex) {
       val extra = expectedChunkIndex - chunkCount
-      reset()
+      finish()
+      onIncomplete(StreamBreakReason.DoneCountBehind(extraChunksEmitted = extra))
+      return
+    }
+    // A buffered index at/beyond the announced total can never be emitted
+    // without over-shooting the count, so the stream is structurally broken.
+    // Includes done(0) with any buffered data. Report the over-shoot count.
+    val maxBufferedIndex = pendingChunks.keys.maxOrNull()
+    if (maxBufferedIndex != null && maxBufferedIndex >= chunkCount) {
+      val extra = maxBufferedIndex - chunkCount + 1
+      finish()
       onIncomplete(StreamBreakReason.DoneCountBehind(extraChunksEmitted = extra))
       return
     }
@@ -92,7 +116,7 @@ internal class AudioStreamAssembler(
     missingChunkCount().takeIf { it > 0 }
       ?: if (hasOpenStream()) 1 else 0
 
-  fun hasOpenStream(): Boolean = expectedChunkIndex > 0 || expectedChunkTotal != null || pendingChunks.isNotEmpty()
+  fun hasOpenStream(): Boolean = !closed && (expectedChunkIndex > 0 || expectedChunkTotal != null || pendingChunks.isNotEmpty())
 
   private fun emitChunk(data: ByteArray) {
     if (data.isNotEmpty()) onChunk(data)
@@ -100,7 +124,9 @@ internal class AudioStreamAssembler(
   }
 
   private fun flushContiguousChunks() {
-    while (true) {
+    // Never advance past the announced total: once enough chunks are emitted,
+    // any later-indexed buffered chunk is a protocol break handled by acceptDone.
+    while (expectedChunkTotal == null || expectedChunkIndex < expectedChunkTotal!!) {
       val next = pendingChunks.remove(expectedChunkIndex) ?: return
       emitChunk(next)
     }
@@ -108,8 +134,10 @@ internal class AudioStreamAssembler(
 
   private fun completeIfReady() {
     val total = expectedChunkTotal ?: return
-    if (expectedChunkIndex < total) return
-    reset()
+    // Strict equality: flushContiguousChunks() is bounded by total, so the index
+    // can land exactly on total and never beyond. Over-shoot is impossible here.
+    if (expectedChunkIndex != total) return
+    finish()
     onComplete(total)
   }
 }

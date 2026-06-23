@@ -13,29 +13,6 @@ internal class WireAudioDebugCapture(
 ) {
   private val lock = Any()
 
-  fun captureStreamChunk(
-    turnId: String?,
-    chunkIndex: Int,
-    data: ByteArray,
-  ) {
-    if (!isWearAudioCaptureEnabled()) return
-    capture(turnId) { directory ->
-      File(directory, "stream-${chunkIndex.toString().padStart(6, '0')}.pcm").writeBytes(data)
-      appendWearCaptureEvent(directory, "streamChunk\t$chunkIndex\t${data.size}")
-    }
-  }
-
-  fun captureStreamDone(
-    turnId: String?,
-    chunkCount: Int,
-  ) {
-    if (!isWearAudioCaptureEnabled()) return
-    capture(turnId) { directory ->
-      File(directory, "stream.done").writeText(chunkCount.toString())
-      appendWearCaptureEvent(directory, "streamDone\t$chunkCount\t0")
-    }
-  }
-
   fun captureWholeResponse(
     turnId: String?,
     data: ByteArray,

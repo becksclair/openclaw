@@ -36,17 +36,44 @@ object WearRelayProtocol {
   // MessageClient enforces a ~100 KB per-message ceiling; keep a safe margin.
   const val MAX_MESSAGE_BYTES = 90_000
 
+  /** Turn-scoped control/text path: "<base>/<turnId>". Every watch message is turn-scoped. */
   fun turnPath(
     basePath: String,
-    turnId: String?,
-  ): String = turnId?.let { "$basePath/$it" } ?: basePath
+    turnId: String,
+  ): String = "$basePath/$turnId"
 
+  /**
+   * Watch->phone audio chunk path: "<PATH_AUDIO_CHUNK>/<turnId>/<chunkIndex>". The
+   * monotonic chunk index lets the phone detect a dropped chunk instead of silently
+   * transcribing a shortened buffer.
+   */
+  fun audioChunkPath(
+    turnId: String,
+    chunkIndex: Int,
+  ): String = "$PATH_AUDIO_CHUNK/$turnId/$chunkIndex"
+
+  /**
+   * Parse an inbound watch message path. Returns null when the path is unknown or is
+   * missing its required turn id; audio-chunk paths must also carry a numeric index.
+   */
   fun parseWatchMessagePath(path: String): WatchMessagePath? {
+    val audioPrefix = "$PATH_AUDIO_CHUNK/"
+    if (path.startsWith(audioPrefix)) {
+      val rest = path.removePrefix(audioPrefix)
+      val slash = rest.indexOf('/')
+      if (slash <= 0) return null
+      // Reject negative/non-numeric indices at the boundary: a negative key would
+      // defeat the contiguity check in the relay and crash buffer assembly.
+      val chunkIndex = rest.substring(slash + 1).toIntOrNull()?.takeIf { it >= 0 } ?: return null
+      return WatchMessagePath(PATH_AUDIO_CHUNK, rest.substring(0, slash), chunkIndex)
+    }
     for (basePath in WATCH_MESSAGE_PATHS) {
-      if (path == basePath) return WatchMessagePath(basePath, null)
+      if (basePath == PATH_AUDIO_CHUNK) continue
       val prefix = "$basePath/"
       if (path.startsWith(prefix)) {
-        return WatchMessagePath(basePath, path.removePrefix(prefix).takeIf { it.isNotEmpty() })
+        val turnId = path.removePrefix(prefix)
+        if (turnId.isEmpty()) return null
+        return WatchMessagePath(basePath, turnId, null)
       }
     }
     return null
@@ -55,12 +82,12 @@ object WearRelayProtocol {
 
 data class WatchMessagePath(
   val path: String,
-  val turnId: String?,
+  val turnId: String,
+  val chunkIndex: Int?,
 )
 
 @Serializable
 data class WearRelayStartPayload(
-  val responseStreaming: Boolean = false,
   val acceptedResponseFormats: List<String> = emptyList(),
 )
 
@@ -74,18 +101,18 @@ data class WearRelayTextPayload(
 data class WearRelayStatusPayload(
   val state: String,
   val message: String,
-  val turnId: String? = null,
+  val turnId: String,
 )
 
 @Serializable
 data class WearRelayErrorPayload(
   val message: String,
-  val turnId: String? = null,
+  val turnId: String,
 )
 
 @Serializable
 data class WearRelayAudioDonePayload(
   val chunkCount: Int,
-  val turnId: String? = null,
+  val turnId: String,
   val format: String = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K,
 )

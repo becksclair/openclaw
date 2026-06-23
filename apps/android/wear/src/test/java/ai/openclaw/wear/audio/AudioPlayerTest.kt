@@ -16,25 +16,4 @@ class AudioPlayerTest {
   fun `PLAYBACK_SAMPLE_RATE constant is 48000`() {
     assertEquals(48_000, AudioPlayer.PLAYBACK_SAMPLE_RATE)
   }
-
-  @Test
-  fun `stream buffer primes enough audio to absorb Wear chunk jitter`() {
-    val sizes = AudioPlayer.computeStreamBufferSizes(minBufferSize = 7_744)
-
-    assertEquals(192_000, sizes?.primeBufferSize)
-    assertEquals(384_000, sizes?.streamBufferSize)
-  }
-
-  @Test
-  fun `stream buffer respects larger platform minimums`() {
-    val sizes = AudioPlayer.computeStreamBufferSizes(minBufferSize = 60_000)
-
-    assertEquals(192_000, sizes?.primeBufferSize)
-    assertEquals(384_000, sizes?.streamBufferSize)
-  }
-
-  @Test
-  fun `stream buffer rejects invalid platform minimums`() {
-    assertEquals(null, AudioPlayer.computeStreamBufferSizes(minBufferSize = 0))
-  }
 }

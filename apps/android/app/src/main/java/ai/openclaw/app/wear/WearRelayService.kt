@@ -44,15 +44,17 @@ class WearRelayService : WearableListenerService() {
   }
 
   private fun sendPhoneNotReadyError(messageEvent: MessageEvent) {
-    val sourceNodeId = messageEvent.sourceNodeId
-    val turnId = WearRelayProtocol.parseWatchMessagePath(messageEvent.path)?.turnId
+    // Scope the error to the watch's turn. A path without a parseable turn id is
+    // malformed (the watch always sends turn-scoped paths), so there is nothing
+    // to fail back to the watch.
+    val turnId = WearRelayProtocol.parseWatchMessagePath(messageEvent.path)?.turnId ?: return
     val payload =
       json
         .encodeToString(WearRelayErrorPayload(message = PHONE_NOT_READY_MESSAGE, turnId = turnId))
         .toByteArray()
     Wearable
       .getMessageClient(this)
-      .sendMessage(sourceNodeId, WearRelayProtocol.PATH_ERROR, payload)
+      .sendMessage(messageEvent.sourceNodeId, WearRelayProtocol.PATH_ERROR, payload)
       .addOnFailureListener { err ->
         Log.w(TAG, "failed to send phone-not-ready wear error: ${err.message}")
       }

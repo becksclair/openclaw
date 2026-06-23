@@ -1,5 +1,6 @@
 package ai.openclaw.wear.speech
 
+import ai.openclaw.common.speech.SpeechRecognizerHelper
 import ai.openclaw.wear.assistant.resolveRecognitionServiceComponent
 import android.content.ComponentName
 import android.content.Context
@@ -10,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.provider.Settings
 import android.speech.RecognitionService
 import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -136,6 +138,36 @@ class SpeechDictationTest {
       2_400,
       intent.getIntExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, -1),
     )
+  }
+
+  @Test
+  fun `recognizer no-match and speech-timeout classify as no speech`() {
+    assertEquals(
+      SpeechRecognizerHelper.ErrorKind.NoSpeech,
+      SpeechRecognizerHelper.errorKind(SpeechRecognizer.ERROR_NO_MATCH),
+    )
+    assertEquals(
+      SpeechRecognizerHelper.ErrorKind.NoSpeech,
+      SpeechRecognizerHelper.errorKind(SpeechRecognizer.ERROR_SPEECH_TIMEOUT),
+    )
+  }
+
+  @Test
+  fun `recognizer network client audio and server errors classify as transient`() {
+    for (error in listOf(
+      SpeechRecognizer.ERROR_NETWORK,
+      SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+      SpeechRecognizer.ERROR_CLIENT,
+      SpeechRecognizer.ERROR_AUDIO,
+      SpeechRecognizer.ERROR_SERVER,
+      SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
+      SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS,
+    )) {
+      assertEquals(
+        SpeechRecognizerHelper.ErrorKind.Transient,
+        SpeechRecognizerHelper.errorKind(error),
+      )
+    }
   }
 
   @Suppress("DEPRECATION")
