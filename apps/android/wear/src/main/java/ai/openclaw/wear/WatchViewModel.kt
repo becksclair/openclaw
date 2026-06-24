@@ -37,6 +37,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.sqrt
 import kotlin.math.roundToInt
 
 internal const val DEFAULT_FINAL_TTS_PLAYBACK_GAIN = 1.5
@@ -45,6 +46,7 @@ internal const val MAX_TTS_PLAYBACK_GAIN = 10.0
 internal const val TTS_PLAYBACK_GAIN_STEP = 0.1
 internal const val ROTARY_CONTROL_MODE_MEDIA_VOLUME = "media_volume"
 internal const val ROTARY_CONTROL_MODE_TTS_GAIN = "tts_gain"
+private const val PCM_16_MONO_BYTES_PER_SAMPLE = 2
 
 internal fun applyFinalTtsPlaybackGain(
   pcm: ByteArray,
@@ -73,6 +75,31 @@ internal fun peakAbsPcm16(pcm: ByteArray): Int {
   }
   return peak
 }
+
+internal fun voiceActivityFromPcm16(
+  pcm: ByteArray,
+  startOffset: Int = 0,
+  endOffset: Int = pcm.size,
+): Float {
+  val start = startOffset.coerceIn(0, pcm.size)
+  val end = endOffset.coerceIn(start, pcm.size)
+  val alignedStart = start + (start % PCM_16_MONO_BYTES_PER_SAMPLE)
+  val alignedEnd = end - ((end - alignedStart) % PCM_16_MONO_BYTES_PER_SAMPLE)
+  if (alignedEnd <= alignedStart) return 0f
+  var sumSquares = 0.0
+  var samples = 0
+  for (offset in alignedStart until alignedEnd step PCM_16_MONO_BYTES_PER_SAMPLE) {
+    val sample = PcmAudio.readPcm16Sample(pcm, offset).toDouble()
+    sumSquares += sample * sample
+    samples++
+  }
+  if (samples == 0) return 0f
+  val rms = sqrt(sumSquares / samples) / Short.MAX_VALUE.toDouble()
+  return sqrt((rms * 6.0).coerceIn(0.0, 1.0)).toFloat()
+}
+
+internal fun voiceActivityFromRecognizerRms(rmsDb: Float): Float =
+  ((rmsDb + 2f) / 12f).coerceIn(0f, 1f)
 
 data class VolumeOverlayState(
   val visible: Boolean = false,
@@ -226,6 +253,7 @@ class WatchViewModel private constructor(
     // compensation across PCM, MP3, and Ogg/Opus responses.
     private const val PROCESSING_TURN_TIMEOUT_MS = 180_000L
     private const val VOLUME_OVERLAY_HIDE_MS = 1_200L
+    private const val PLAYBACK_LEVEL_WINDOW_MS = 80L
     private const val SETTINGS_PREFS_NAME = "openclaw.watch.settings"
     private const val PREF_AGENT_REASONING_LEVEL = "agent_reasoning_level"
     private const val PREF_ROTARY_CONTROL_MODE = "rotary_control_mode"
@@ -264,6 +292,8 @@ class WatchViewModel private constructor(
   val ttsPlaybackGain: StateFlow<Double> = _ttsPlaybackGain
   private val _volumeOverlay = MutableStateFlow(VolumeOverlayState())
   val volumeOverlay: StateFlow<VolumeOverlayState> = _volumeOverlay
+  private val _voiceActivity = MutableStateFlow(0f)
+  val voiceActivity: StateFlow<Float> = _voiceActivity
 
   private val audioCapture: WearAudioCapture = dependencies?.audioCapture ?: AudioCapture(app, viewModelScope)
   private val audioPlayer: WatchAudioPlayback = dependencies?.audioPlayer ?: AudioPlayerPlayback(app, viewModelScope)
@@ -281,6 +311,7 @@ class WatchViewModel private constructor(
   private var assistantStartJob: Job? = null
   private var compressedDecodeJob: Job? = null
   private var volumeOverlayJob: Job? = null
+  private var playbackLevelJob: Job? = null
   private val rotaryAccumulator = RotaryStepAccumulator()
 
   private fun cancelAssistantStartJob() {
@@ -296,6 +327,8 @@ class WatchViewModel private constructor(
     cancelAssistantStartJob()
     compressedDecodeJob?.cancel()
     compressedDecodeJob = null
+    stopPlaybackLevelMeter()
+    _voiceActivity.value = 0f
   }
 
   private val recordingLock = Any()
@@ -473,6 +506,7 @@ class WatchViewModel private constructor(
       audioCapture.start(
         turnId = turnId,
         onChunk = { chunk ->
+          updateVoiceActivityFromPcm(chunk)
           relayClient.sendAudioChunk(turnId, chunk)
         },
         endpointingConfig = DEFAULT_ENDPOINTING_CONFIG,
@@ -563,6 +597,7 @@ class WatchViewModel private constructor(
       while (offset < pcmBytes.size && activeTurnId == turnId) {
         val end = minOf(offset + DEBUG_CHUNK_BYTES, pcmBytes.size)
         val chunk = pcmBytes.copyOfRange(offset, end)
+        updateVoiceActivityFromPcm(chunk)
         relayClient.sendAudioChunk(turnId, chunk)
         offset = end
         val event = detector?.process(chunk)
@@ -599,6 +634,7 @@ class WatchViewModel private constructor(
     Log.d(DEBUG_TURN_TAG, "starting debug pcm playback bytes=${pcmBytes.size}")
     val generation = playbackGeneration.incrementAndGet()
     transitionTo(WatchState.Playing, "Playing debug audio...")
+    startPlaybackLevelMeter(pcmBytes, sampleRateHz = AudioPlayer.SAMPLE_RATE, generation = generation)
     audioPlayer.play(
       pcmBytes,
       onComplete = {
@@ -644,6 +680,7 @@ class WatchViewModel private constructor(
         )
         transitionTo(WatchState.Playing, "Playing debug audio...")
         val playback = playbackGeneration.incrementAndGet()
+        startPlaybackLevelMeter(decoded.pcm48kMono, sampleRateHz = AudioPlayer.PLAYBACK_SAMPLE_RATE, generation = playback)
         audioPlayer.playPcm48k(
           decoded.pcm48kMono,
           onComplete = {
@@ -661,8 +698,10 @@ class WatchViewModel private constructor(
   private fun playPcmResponse(response: PhoneRelayAudioResponse) {
     val generation = playbackGeneration.incrementAndGet()
     transitionTo(WatchState.Playing, "Playing response...")
+    val playbackPcm = applyAndLogFinalTtsPlaybackGain(response.audioBytes, response.format)
+    startPlaybackLevelMeter(playbackPcm, sampleRateHz = AudioPlayer.SAMPLE_RATE, generation = generation)
     audioPlayer.play(
-      applyAndLogFinalTtsPlaybackGain(response.audioBytes, response.format),
+      playbackPcm,
       onComplete = {
         completePlayback(generation)
       },
@@ -707,6 +746,7 @@ class WatchViewModel private constructor(
         val playbackPcm = applyAndLogFinalTtsPlaybackGain(decoded.pcm48kMono, response.format)
         transitionTo(WatchState.Playing, "Playing response...")
         val playback = playbackGeneration.incrementAndGet()
+        startPlaybackLevelMeter(playbackPcm, sampleRateHz = AudioPlayer.PLAYBACK_SAMPLE_RATE, generation = playback)
         audioPlayer.playPcm48k(
           playbackPcm,
           onComplete = {
@@ -801,11 +841,13 @@ class WatchViewModel private constructor(
 
   private fun completePlayback(generation: Int) {
     if (generation != playbackGeneration.get() || _state.value != WatchState.Playing) return
+    stopPlaybackLevelMeter()
     transitionTo(WatchState.Idle, "Tap mic to speak")
   }
 
   private fun failPlayback(generation: Int) {
     if (generation != playbackGeneration.get() || _state.value != WatchState.Playing) return
+    stopPlaybackLevelMeter()
     failTurn("Audio playback unavailable")
   }
 
@@ -819,6 +861,9 @@ class WatchViewModel private constructor(
     }
     _state.value = newState
     _statusText.value = message
+    if (newState != WatchState.Recording && newState != WatchState.Playing) {
+      _voiceActivity.value = 0f
+    }
     Log.d(TAG, "state=$newState msg=$message")
   }
 
@@ -896,11 +941,13 @@ class WatchViewModel private constructor(
     if (!isDictating) return
     when (event) {
       SpeechDictationEvent.Listening ->
-        transitionTo(WatchState.Recording, "Listening...")
+        transitionTo(WatchState.Recording, activeDictationStatus("Listening..."))
       SpeechDictationEvent.SpeechStarted ->
-        transitionTo(WatchState.Recording, "Listening...")
+        transitionTo(WatchState.Recording, activeDictationStatus("Listening..."))
       SpeechDictationEvent.SpeechEnded ->
-        transitionTo(WatchState.Recording, "Processing speech...")
+        transitionTo(WatchState.Recording, activeDictationStatus("Processing speech..."))
+      is SpeechDictationEvent.RmsChanged ->
+        _voiceActivity.value = voiceActivityFromRecognizerRms(event.rmsDb)
       is SpeechDictationEvent.PartialTranscript -> {
         val text = event.text.trim()
         if (text.isNotEmpty()) {
@@ -936,6 +983,9 @@ class WatchViewModel private constructor(
     }
   }
 
+  private fun activeDictationStatus(fallback: String): String =
+    pendingDictationText?.takeIf { it.isNotBlank() } ?: fallback
+
   private fun submitDictationText(text: String) {
     val turnId = relayClient.sendTextTurn(text, reasoningLevel.value)
     if (turnId == null) {
@@ -944,6 +994,38 @@ class WatchViewModel private constructor(
     }
     activeTurnId = turnId
     transitionToProcessing("Processing...")
+  }
+
+  private fun updateVoiceActivityFromPcm(pcm: ByteArray) {
+    _voiceActivity.value = voiceActivityFromPcm16(pcm)
+  }
+
+  private fun startPlaybackLevelMeter(
+    pcm: ByteArray,
+    sampleRateHz: Int,
+    generation: Int,
+  ) {
+    playbackLevelJob?.cancel()
+    playbackLevelJob =
+      viewModelScope.launch {
+        val bytesPerWindow = maxOf(PCM_16_MONO_BYTES_PER_SAMPLE, sampleRateHz * PCM_16_MONO_BYTES_PER_SAMPLE * PLAYBACK_LEVEL_WINDOW_MS.toInt() / 1_000)
+        var offset = 0
+        while (offset < pcm.size && generation == playbackGeneration.get() && _state.value == WatchState.Playing) {
+          val end = minOf(offset + bytesPerWindow, pcm.size)
+          _voiceActivity.value = voiceActivityFromPcm16(pcm, offset, end)
+          offset = end
+          delay(PLAYBACK_LEVEL_WINDOW_MS)
+        }
+        if (generation == playbackGeneration.get()) {
+          _voiceActivity.value = 0f
+        }
+      }
+  }
+
+  private fun stopPlaybackLevelMeter() {
+    playbackLevelJob?.cancel()
+    playbackLevelJob = null
+    _voiceActivity.value = 0f
   }
 
   private fun showRecoverableDictationError(message: String) {

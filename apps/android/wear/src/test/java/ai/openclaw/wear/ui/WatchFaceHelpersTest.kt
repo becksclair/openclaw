@@ -30,6 +30,31 @@ class WatchFaceHelpersTest {
   }
 
   @Test
+  fun `main orb labels follow watch state and permission`() {
+    assertEquals("Allow microphone", mainStatusLabel(WatchViewModel.WatchState.Idle, "Tap mic to speak", hasMicPermission = false))
+    assertEquals("Ready", mainStatusLabel(WatchViewModel.WatchState.Idle, "Tap mic to speak", hasMicPermission = true))
+    assertEquals("Listening...", mainStatusLabel(WatchViewModel.WatchState.Recording, "Listening...", hasMicPermission = true))
+    assertEquals("hello from the watch", mainStatusLabel(WatchViewModel.WatchState.Recording, "hello from the watch", hasMicPermission = true))
+    assertEquals("Thinking...", mainStatusLabel(WatchViewModel.WatchState.Processing, "Processing...", hasMicPermission = true))
+    assertEquals("Speaking...", mainStatusLabel(WatchViewModel.WatchState.Playing, "Playing response...", hasMicPermission = true))
+    assertEquals("No speech", mainStatusLabel(WatchViewModel.WatchState.Error, "No speech", hasMicPermission = true))
+
+    assertEquals(1, mainStatusMaxLines(WatchViewModel.WatchState.Recording, "Listening..."))
+    assertEquals(1, mainStatusMaxLines(WatchViewModel.WatchState.Recording, "Processing speech..."))
+    assertEquals(3, mainStatusMaxLines(WatchViewModel.WatchState.Recording, "hello from the watch"))
+    assertEquals(8.dp, mainStatusHorizontalPadding(WatchViewModel.WatchState.Recording, "Listening..."))
+    assertEquals(36.dp, mainStatusHorizontalPadding(WatchViewModel.WatchState.Recording, "hello from the watch"))
+    assertEquals((-14).dp, mainStatusBottomOffset(WatchViewModel.WatchState.Recording, "hello from the watch"))
+    assertEquals(false, mainActionLabelMovesToTop(WatchViewModel.WatchState.Recording, "Listening..."))
+    assertEquals(true, mainActionLabelMovesToTop(WatchViewModel.WatchState.Recording, "hello from the watch"))
+
+    assertEquals("Tap to allow", mainActionLabel(WatchViewModel.WatchState.Idle, hasMicPermission = false))
+    assertEquals("Tap to speak", mainActionLabel(WatchViewModel.WatchState.Idle, hasMicPermission = true))
+    assertEquals("Tap to cancel", mainActionLabel(WatchViewModel.WatchState.Recording, hasMicPermission = true))
+    assertEquals("Tap to retry", mainActionLabel(WatchViewModel.WatchState.Error, hasMicPermission = true))
+  }
+
+  @Test
   fun `burn-in offset cycles every four ticks`() {
     assertEquals(2.dp, burnInOffsetDp(0))
     assertEquals((-2).dp, burnInOffsetDp(1))
