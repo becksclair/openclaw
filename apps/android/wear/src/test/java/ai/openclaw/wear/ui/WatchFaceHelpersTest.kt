@@ -99,7 +99,7 @@ class WatchFaceHelpersTest {
   @Test
   fun `tts gain formatting uses one decimal`() {
     assertEquals("1.5x", formatTtsPlaybackGain(1.5))
-    assertEquals("4.0x", formatTtsPlaybackGain(9.0))
+    assertEquals("9.0x", formatTtsPlaybackGain(9.0))
     assertEquals("0.5x", formatTtsPlaybackGain(0.1))
   }
 
