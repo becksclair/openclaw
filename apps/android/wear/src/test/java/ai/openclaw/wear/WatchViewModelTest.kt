@@ -72,6 +72,22 @@ class WatchViewModelTest {
   }
 
   @Test
+  fun `voice activity maps pcm and recognizer rms to normalized levels`() {
+    val pcm = ByteArray(4)
+    PcmAudio.writePcm16Sample(pcm, 0, 12_000)
+    PcmAudio.writePcm16Sample(pcm, 2, -12_000)
+
+    assertTrue(voiceActivityFromPcm16(pcm) > 0f)
+    assertEquals(0f, voiceActivityFromPcm16(ByteArray(0)), 0f)
+    assertEquals(0f, voiceActivityFromPcm16(pcm, 0, 0), 0f)
+    PcmAudio.writePcm16Sample(pcm, 0, 0)
+    assertEquals(0f, voiceActivityFromPcm16(pcm, 0, 2), 0f)
+    assertTrue(voiceActivityFromPcm16(pcm, 2, 4) > 0f)
+    assertEquals(0f, voiceActivityFromRecognizerRms(-8f), 0f)
+    assertEquals(1f, voiceActivityFromRecognizerRms(20f), 0f)
+  }
+
+  @Test
   fun `reasoning level defaults to low and persists selected value`() {
     val app = RuntimeEnvironment.getApplication()
     app
@@ -278,6 +294,29 @@ class WatchViewModelTest {
     }
 
   @Test
+  fun `dictation speech state events keep visible partial transcript`() =
+    runTest(dispatcher) {
+      val relay = FakePhoneRelay()
+      val speech = FakeSpeechDictation(available = true)
+      val viewModel = WatchViewModel(Application(), FakeAudioCapture(), relay, speech)
+
+      viewModel.onPermissionGranted()
+      viewModel.onMicButtonDown()
+      speech.emit(SpeechDictationEvent.PartialTranscript("I don't know because my"))
+      speech.emit(SpeechDictationEvent.SpeechEnded)
+      runCurrent()
+
+      assertEquals("I don't know because my", viewModel.statusText.value)
+      assertEquals(WatchViewModel.WatchState.Recording, viewModel.state.value)
+
+      speech.emit(SpeechDictationEvent.Listening)
+      runCurrent()
+
+      assertEquals("I don't know because my", viewModel.statusText.value)
+      assertEquals(WatchViewModel.WatchState.Recording, viewModel.state.value)
+    }
+
+  @Test
   fun `cancel aborts active dictation without sending text`() =
     runTest(dispatcher) {
       val relay = FakePhoneRelay()
@@ -310,6 +349,20 @@ class WatchViewModelTest {
       assertTrue(capture.started)
       assertEquals("turn-1", capture.turnId)
       assertEquals(emptyList<String>(), relay.textTurns)
+    }
+
+  @Test
+  fun `raw pcm capture updates voice activity`() =
+    runTest(dispatcher) {
+      val pcm = ByteArray(4)
+      PcmAudio.writePcm16Sample(pcm, 0, 16_000)
+      PcmAudio.writePcm16Sample(pcm, 2, -16_000)
+      val viewModel = WatchViewModel(Application(), FakeAudioCapture(initialChunk = pcm), FakePhoneRelay(), FakeSpeechDictation(available = false))
+
+      viewModel.onPermissionGranted()
+      viewModel.onMicButtonDown()
+
+      assertTrue(viewModel.voiceActivity.value > 0f)
     }
 
   @Test
@@ -432,6 +485,36 @@ class WatchViewModelTest {
       // Playback is fully local: a disconnect must not cancel it or surface an error.
       assertFalse(WatchViewModel.WatchState.Error == viewModel.state.value)
       assertEquals(0, relay.cancelCount)
+    }
+
+  @Test
+  fun `assistant playback updates voice activity from response pcm`() =
+    runTest(dispatcher) {
+      val relay = FakePhoneRelay()
+      val speech = FakeSpeechDictation(available = true)
+      val playback = FakeWatchAudioPlayback()
+      val viewModel =
+        WatchViewModel(
+          Application(),
+          FakeAudioCapture(),
+          relay,
+          speech,
+          playback,
+          FakeMediaVolumeController(),
+        )
+      val responsePcm = ByteArray(4)
+      PcmAudio.writePcm16Sample(responsePcm, 0, 8_000)
+      PcmAudio.writePcm16Sample(responsePcm, 2, -8_000)
+
+      viewModel.onPermissionGranted()
+      viewModel.onMicButtonDown()
+      speech.emit(SpeechDictationEvent.FinalTranscript("hello sky"))
+      runCurrent()
+      relay.emitAudioResponse(PhoneRelayAudioResponse(turnId = "text-turn-1", audioBytes = responsePcm))
+      runCurrent()
+
+      assertEquals(WatchViewModel.WatchState.Playing, viewModel.state.value)
+      assertTrue(viewModel.voiceActivity.value > 0f)
     }
 
   @Test
@@ -701,7 +784,9 @@ private fun clearWatchSettings(app: Application) =
     .getSharedPreferences("openclaw.watch.settings", Application.MODE_PRIVATE)
     .also { prefs -> prefs.edit().clear().commit() }
 
-private class FakeAudioCapture : WearAudioCapture {
+private class FakeAudioCapture(
+  private val initialChunk: ByteArray = byteArrayOf(1, 2),
+) : WearAudioCapture {
   var endpointingConfig: AudioEndpointingConfig? = null
   var endpointCallback: ((AudioEndpointEvent.Endpoint) -> Unit)? = null
   var started = false
@@ -718,7 +803,7 @@ private class FakeAudioCapture : WearAudioCapture {
     this.turnId = turnId
     this.endpointingConfig = endpointingConfig
     endpointCallback = onEndpoint
-    onChunk(byteArrayOf(1, 2))
+    onChunk(initialChunk)
     return true
   }
 

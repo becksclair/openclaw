@@ -34,6 +34,10 @@ internal sealed interface SpeechDictationEvent {
 
   data object SpeechEnded : SpeechDictationEvent
 
+  data class RmsChanged(
+    val rmsDb: Float,
+  ) : SpeechDictationEvent
+
   data class PartialTranscript(
     val text: String,
   ) : SpeechDictationEvent
@@ -140,7 +144,9 @@ internal class AndroidSpeechDictation(
       onEvent(SpeechDictationEvent.SpeechStarted)
     }
 
-    override fun onRmsChanged(rmsdB: Float) {}
+    override fun onRmsChanged(rmsdB: Float) {
+      onEvent(SpeechDictationEvent.RmsChanged(rmsdB))
+    }
 
     override fun onBufferReceived(buffer: ByteArray?) {}
 
