@@ -29,6 +29,7 @@ class AudioPlayer(
 
   private val activeTrack = AtomicReference<AudioTrack?>(null)
   private val playbackGeneration = AtomicInteger(0)
+
   // Single dedicated thread for blocking AudioTrack HAL teardown so a slow
   // vendor pause()/flush()/stop()/release() never janks the caller (often
   // Main.immediate via viewModelScope).
