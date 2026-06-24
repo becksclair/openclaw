@@ -86,6 +86,12 @@ const mockState = vi.hoisted(() => ({
   lastDispatchCtx: undefined as MsgContext | undefined,
   lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
   lastDispatchImageOrder: undefined as string[] | undefined,
+  lastDispatchReplyOptions: undefined as
+    | {
+        thinkingLevelOverride?: string;
+        fastModeOverride?: unknown;
+      }
+    | undefined,
   lastDispatchUserTurnInput: undefined as unknown,
   modelCatalog: null as ModelCatalogEntry[] | null,
   emittedTranscriptUpdates: [] as Array<{
@@ -252,11 +258,14 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         };
         images?: Array<{ mimeType: string; data: string }>;
         imageOrder?: string[];
+        thinkingLevelOverride?: string;
+        fastModeOverride?: unknown;
       };
     }) => {
       mockState.lastDispatchCtx = params.ctx;
       mockState.lastDispatchImages = params.replyOptions?.images;
       mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
+      mockState.lastDispatchReplyOptions = params.replyOptions;
       const recorder = params.replyOptions?.userTurnTranscriptRecorder;
       mockState.lastDispatchUserTurnInput = recorder?.resolveMessage
         ? await recorder.resolveMessage()
@@ -749,6 +758,7 @@ function createChatContext(): Pick<
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
     logGateway: {
+      info: vi.fn(),
       warn: vi.fn(),
       debug: vi.fn(),
       error: vi.fn(),
@@ -851,6 +861,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.lastDispatchCtx = undefined;
     mockState.lastDispatchImages = undefined;
     mockState.lastDispatchImageOrder = undefined;
+    mockState.lastDispatchReplyOptions = undefined;
     mockState.lastDispatchUserTurnInput = undefined;
     mockState.modelCatalog = null;
     mockState.emittedTranscriptUpdates = [];
@@ -4668,6 +4679,36 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx?.GatewayClientScopes).toStrictEqual([]);
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("/scopecheck");
+  });
+
+  it("passes thinking as a dispatch override without rewriting the command body", async () => {
+    createTranscriptFixture("openclaw-chat-send-thinking-override-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-chat-send-thinking-override",
+      message: "reply with pong",
+      requestParams: {
+        thinking: "low",
+        fastMode: true,
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.Body).toBe("reply with pong");
+    expect(mockState.lastDispatchCtx?.CommandBody).toBe("reply with pong");
+    expect(mockState.lastDispatchCtx?.CommandSource).toBeUndefined();
+    expect(mockState.lastDispatchReplyOptions?.thinkingLevelOverride).toBe("low");
+    expect(mockState.lastDispatchReplyOptions?.fastModeOverride).toBe(true);
+    expect(context.logGateway.info).toHaveBeenCalledWith(
+      expect.stringContaining("chat.send thinking override"),
+    );
+    expect(context.logGateway.info).toHaveBeenCalledWith(expect.stringContaining("thinking=low"));
+    expect(context.logGateway.info).toHaveBeenCalledWith(expect.stringContaining("fastMode=true"));
   });
 
   it("injects ACP system provenance into the agent-visible body", async () => {

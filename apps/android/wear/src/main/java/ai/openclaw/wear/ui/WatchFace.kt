@@ -1,9 +1,11 @@
 package ai.openclaw.wear.ui
 
+import ai.openclaw.common.wear.WearReasoningLevel
 import ai.openclaw.wear.WatchViewModel
 import ai.openclaw.wear.ambient.AmbientDetails
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,6 +22,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.wear.compose.foundation.pager.HorizontalPager
+import androidx.wear.compose.foundation.pager.rememberPagerState
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.CircularProgressIndicator
@@ -42,26 +46,43 @@ fun WatchFace(
   onRequestAssistantRole: () -> Unit = {},
   ambientDetails: AmbientDetails = AmbientDetails(),
 ) {
-  Column(
-    modifier = Modifier.fillMaxSize().padding(16.dp),
-    horizontalAlignment = Alignment.CenterHorizontally,
-    verticalArrangement = Arrangement.Center,
-  ) {
-    if (ambientDetails.isAmbient) {
+  if (ambientDetails.isAmbient) {
+    Column(
+      modifier = Modifier.fillMaxSize().padding(16.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
+    ) {
       val state by viewModel.state.collectAsState()
       val statusText by viewModel.statusText.collectAsState()
       AmbientStatusText(
         text = ambientStatusText(state, statusText),
         ambientDetails = ambientDetails,
       )
-    } else {
-      InteractiveWatchFace(
-        viewModel = viewModel,
-        onRequestMicPermission = onRequestMicPermission,
-        assistantRoleAvailable = assistantRoleAvailable,
-        assistantRoleHeld = assistantRoleHeld,
-        onRequestAssistantRole = onRequestAssistantRole,
-      )
+    }
+    return
+  }
+
+  val pagerState = rememberPagerState(pageCount = { 2 })
+  HorizontalPager(
+    state = pagerState,
+    modifier = Modifier.fillMaxSize(),
+  ) { page ->
+    Column(
+      modifier = Modifier.fillMaxSize().padding(16.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
+    ) {
+      when (page) {
+        0 ->
+          InteractiveWatchFace(
+            viewModel = viewModel,
+            onRequestMicPermission = onRequestMicPermission,
+            assistantRoleAvailable = assistantRoleAvailable,
+            assistantRoleHeld = assistantRoleHeld,
+            onRequestAssistantRole = onRequestAssistantRole,
+          )
+        else -> WatchSettingsPage(viewModel = viewModel)
+      }
     }
   }
 }
@@ -154,6 +175,64 @@ internal fun ambientStatusText(
 
     else -> statusText
   }
+
+internal fun reasoningLevelLabel(level: String): String =
+  when (WearReasoningLevel.normalize(level)) {
+    WearReasoningLevel.OFF -> "Off"
+    WearReasoningLevel.MINIMAL -> "Minimal"
+    WearReasoningLevel.MEDIUM -> "Medium"
+    WearReasoningLevel.HIGH -> "High"
+    else -> "Low"
+  }
+
+internal fun isSelectedReasoningLevel(
+  currentLevel: String,
+  optionLevel: String,
+): Boolean = WearReasoningLevel.normalize(currentLevel) == WearReasoningLevel.normalize(optionLevel)
+
+@Composable
+private fun WatchSettingsPage(viewModel: WatchViewModel) {
+  val currentLevel by viewModel.reasoningLevel.collectAsState()
+  Text(
+    text = "Reasoning",
+    style = MaterialTheme.typography.caption1,
+    textAlign = TextAlign.Center,
+  )
+  Spacer(modifier = Modifier.height(6.dp))
+  WearReasoningLevel.OPTIONS.chunked(2).forEach { rowOptions ->
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+      rowOptions.forEach { option ->
+        ReasoningOptionChip(
+          label = reasoningLevelLabel(option),
+          selected = isSelectedReasoningLevel(currentLevel, option),
+          onClick = { viewModel.setReasoningLevel(option) },
+        )
+      }
+    }
+    Spacer(modifier = Modifier.height(4.dp))
+  }
+}
+
+@Composable
+private fun ReasoningOptionChip(
+  label: String,
+  selected: Boolean,
+  onClick: () -> Unit,
+) {
+  Chip(
+    onClick = onClick,
+    label = {
+      Text(
+        text = label,
+        style = MaterialTheme.typography.caption2,
+        textAlign = TextAlign.Center,
+        color = if (selected) MaterialTheme.colors.secondary else MaterialTheme.colors.onSurface,
+        modifier = Modifier.fillMaxWidth(),
+      )
+    },
+    modifier = Modifier.height(26.dp).width(72.dp),
+  )
+}
 
 @Composable
 private fun AssistantRoleButton(

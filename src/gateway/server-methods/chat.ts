@@ -3940,6 +3940,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         clientRunId,
         ...(chatSendTiming ? { chatSendTiming } : {}),
       });
+      if (p.thinking) {
+        context.logGateway.info(
+          `chat.send thinking override sessionKey=${JSON.stringify(sessionKey)} runId=${clientRunId} agentId=${agentId} provider=${resolvedSessionModel.provider} model=${resolvedSessionModel.model} thinking=${p.thinking} fastMode=${String(p.fastMode ?? false)}`,
+        );
+      }
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,
@@ -3999,10 +4004,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           : Promise.resolve({});
 
       const trimmedMessage = parsedMessage.trim();
-      const injectThinking = Boolean(
-        p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
-      );
-      const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
+      const commandBody = parsedMessage;
       const commandSource =
         !suppressCommandInterpretation && trimmedMessage.startsWith("/") ? "text" : undefined;
       const messageForAgent = systemProvenanceReceipt

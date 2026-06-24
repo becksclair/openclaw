@@ -1,8 +1,8 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.common.wear.WearReasoningLevel
 import ai.openclaw.common.wear.WearRelayProtocol
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
@@ -10,11 +10,11 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -24,70 +24,6 @@ import java.util.Base64
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 class WearSttTtsSessionTest {
-  @Test
-  fun resolveWearFinalAudioWaitMs_usesShortGraceWhenTextCanFallbackToSpeak() {
-    assertEquals(0L, resolveWearFinalAudioWaitMs(finalEventReceived = false, assistantText = null))
-    assertEquals(
-      2_000L,
-      resolveWearFinalAudioWaitMs(finalEventReceived = true, assistantText = "assistant reply"),
-    )
-    assertEquals(15_000L, resolveWearFinalAudioWaitMs(finalEventReceived = true, assistantText = ""))
-  }
-
-  @Test
-  fun shouldUseTalkSpeakForWearAudio_prefersBoostedSpeakWhenAssistantTextExists() {
-    assertTrue(shouldUseTalkSpeakForWearAudio("assistant reply"))
-    assertTrue(shouldUseTalkSpeakForWearAudio("  assistant reply  "))
-    assertFalse(shouldUseTalkSpeakForWearAudio(""))
-    assertFalse(shouldUseTalkSpeakForWearAudio("   "))
-  }
-
-  @Test
-  fun resolveWearAudioToPlay_prefersFinalAudioWithoutCallingTalkSpeak() =
-    runTest {
-      val finalAudio = WearAudioResponse(audioBytes = byteArrayOf(1, 2, 3), format = "pcm_24000")
-      var talkSpeakCalled = false
-
-      val audio =
-        resolveWearAudioToPlay(
-          assistantText = "assistant reply",
-          spokenAudio = finalAudio,
-        ) {
-          talkSpeakCalled = true
-          throw IllegalStateException("talk.speak unavailable")
-        }
-
-      assertSame(finalAudio, audio)
-      assertFalse(talkSpeakCalled)
-    }
-
-  @Test
-  fun resolveWearAudioToPlay_usesTalkSpeakWhenFinalAudioIsMissing() =
-    runTest {
-      val synthesizedAudio = WearAudioResponse(audioBytes = byteArrayOf(4, 5, 6), format = "pcm_24000")
-
-      val audio =
-        resolveWearAudioToPlay(
-          assistantText = "assistant reply",
-          spokenAudio = null,
-        ) {
-          synthesizedAudio
-        }
-
-      assertSame(synthesizedAudio, audio)
-    }
-
-  @Test(expected = CancellationException::class)
-  fun resolveWearAudioToPlay_doesNotSwallowCancellation() =
-    runTest {
-      resolveWearAudioToPlay(
-        assistantText = "assistant reply",
-        spokenAudio = null,
-      ) {
-        throw CancellationException("cancelled")
-      }
-    }
-
   @Test
   fun isOggOpusGatewayAudio_rejectsGenericOggContainers() {
     assertFalse(
@@ -188,12 +124,12 @@ class WearSttTtsSessionTest {
     }
 
   @Test
-  fun startTranscript_usesFinalMp3AudioWithoutTalkSpeak() =
+  fun startTranscript_sendsThinkingAndFastModeAndUsesTalkSpeak() =
     runTest {
       val gateway =
         FakeWearGateway(
-          finalAudioPayloadJson =
-            """{"found":true,"audioBase64":"${Base64.getEncoder().encodeToString(byteArrayOf(9, 8, 7))}","outputFormat":"mp3","mimeType":"audio/mpeg","fileExtension":".mp3"}""",
+          talkSpeakPayloadJson =
+            """{"audioBase64":"${Base64.getEncoder().encodeToString(byteArrayOf(9, 8, 7))}","outputFormat":"mp3","mimeType":"audio/mpeg","fileExtension":".mp3"}""",
         )
       val audioResponses = mutableListOf<WearAudioResponse>()
       val session =
@@ -202,6 +138,7 @@ class WearSttTtsSessionTest {
           gateway = gateway,
           sessionKey = "main",
           responseFormat = WearRelayProtocol.RESPONSE_FORMAT_MP3,
+          requestedReasoningLevel = WearReasoningLevel.HIGH,
           onAudioResponse = { audioResponses += it },
           onStatus = {},
           onError = { error("unexpected error: $it") },
@@ -214,20 +151,22 @@ class WearSttTtsSessionTest {
         "chat",
         """{"runId":"run-1","state":"final","message":{"role":"assistant","content":"hi back"}}""",
       )
-      waitForGatewayMethod(gateway, "chat.finalAudio.get")
+      waitForGatewayMethod(gateway, "talk.speak")
       runCurrent()
 
       assertFalse(gateway.methods.contains("talk.session.create"))
       assertTrue(gateway.methods.contains("chat.send"))
-      assertTrue(gateway.methods.contains("chat.finalAudio.get"))
-      assertFalse(gateway.methods.contains("talk.speak"))
+      assertFalse(gateway.methods.contains("chat.finalAudio.get"))
+      assertTrue(gateway.methods.contains("talk.speak"))
       val chatParams =
         gateway.requests
           .single { it.method == "chat.send" }
           .paramsJson
           .orEmpty()
       val chatRoot = Json.parseToJsonElement(chatParams).jsonObject
-      assertEquals("low", chatRoot["thinking"]?.jsonPrimitive?.content)
+      assertEquals(WearReasoningLevel.HIGH, chatRoot["thinking"]?.jsonPrimitive?.content)
+      assertTrue(chatRoot.getValue("fastMode").jsonPrimitive.boolean)
+      assertFalse(chatRoot.containsKey("deliver"))
       assertEquals(1, audioResponses.size)
       assertEquals(WearRelayProtocol.RESPONSE_FORMAT_MP3, audioResponses.single().format)
       assertEquals(byteArrayOf(9, 8, 7).toList(), audioResponses.single().audioBytes.toList())
@@ -255,7 +194,7 @@ class WearSttTtsSessionTest {
     }
 
   private suspend fun TestScope.speakOutputFormatFor(negotiatedFormat: String): String {
-    val gateway = FakeWearGateway(finalAudioPayloadJson = """{"found":false}""")
+    val gateway = FakeWearGateway()
     val session =
       WearSttTtsSession(
         scope = this,
@@ -282,16 +221,18 @@ class WearSttTtsSessionTest {
         .single { it.method == "talk.speak" }
         .paramsJson
         .orEmpty()
-    return Json.parseToJsonElement(speakParams).jsonObject["outputFormat"]?.jsonPrimitive?.content.orEmpty()
+    return Json
+      .parseToJsonElement(speakParams)
+      .jsonObject["outputFormat"]
+      ?.jsonPrimitive
+      ?.content
+      .orEmpty()
   }
 
   @Test
   fun startTranscript_errorsWhenNoRunScopedTextOrAudioIsAvailable() =
     runTest {
-      // chat final arrives with no assistant text and chat.finalAudio.get reports
-      // no audio: the run-scoped recovery path is exhausted, so the turn must
-      // error instead of speaking another run's history.
-      val gateway = FakeWearGateway(finalAudioPayloadJson = """{"found":false}""")
+      val gateway = FakeWearGateway()
       val errors = mutableListOf<String>()
       val completed = mutableListOf<WearSttTtsSession>()
       val session =
@@ -311,11 +252,11 @@ class WearSttTtsSessionTest {
         "chat",
         """{"runId":"run-1","state":"final","message":{"role":"assistant","content":""}}""",
       )
-      waitForGatewayMethod(gateway, "chat.finalAudio.get")
       runCurrent()
 
       assertEquals(listOf("No assistant response received"), errors)
       assertEquals(listOf(session), completed)
+      assertFalse(gateway.methods.contains("chat.finalAudio.get"))
       assertFalse(gateway.methods.contains("chat.history"))
       assertFalse(gateway.methods.contains("talk.speak"))
     }
@@ -346,7 +287,7 @@ class WearSttTtsSessionTest {
   @Test
   fun startTranscript_abortsPendingChatRunWhenSpeechSynthesisFails() =
     runTest {
-      val gateway = FakeWearGateway(finalAudioPayloadJson = """{"found":false}""", failTalkSpeak = true)
+      val gateway = FakeWearGateway(failTalkSpeak = true)
       val errors = mutableListOf<String>()
       val session =
         WearSttTtsSession(
@@ -526,9 +467,10 @@ private suspend fun waitForGatewayMethodCount(
 }
 
 private class FakeWearGateway(
-  private val finalAudioPayloadJson: String = """{"found":false}""",
   private val failTalkSpeak: Boolean = false,
   private val failFirstTranscriptionClose: Boolean = false,
+  private val talkSpeakPayloadJson: String =
+    """{"audioBase64":"${Base64.getEncoder().encodeToString(byteArrayOf(1, 0, 2, 0))}","outputFormat":"pcm_24000"}""",
 ) : WearGateway {
   val requests = mutableListOf<Request>()
 
@@ -556,7 +498,7 @@ private class FakeWearGateway(
       "chat.send" -> """{"runId":"run-1"}"""
       "talk.speak" -> {
         if (failTalkSpeak) error("synthesis failed")
-        """{"audioBase64":"${Base64.getEncoder().encodeToString(byteArrayOf(1, 0, 2, 0))}","outputFormat":"pcm_24000"}"""
+        talkSpeakPayloadJson
       }
       else -> "{}"
     }
@@ -568,7 +510,7 @@ private class FakeWearGateway(
     timeoutMs: Long,
   ): GatewaySession.RpcResult {
     requests += Request(method = method, paramsJson = paramsJson)
-    return GatewaySession.RpcResult(ok = true, payloadJson = finalAudioPayloadJson, error = null)
+    error("unexpected detailed request: $method")
   }
 
   data class Request(

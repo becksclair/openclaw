@@ -4,6 +4,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.voice.ChatEventText
 import ai.openclaw.audio.AndroidCompressedAudioDecoder
 import ai.openclaw.audio.PcmAudio
+import ai.openclaw.common.wear.WearReasoningLevel
 import ai.openclaw.common.wear.WearRelayProtocol
 import android.os.SystemClock
 import android.util.Log
@@ -29,9 +30,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.coroutineContext
 
-private const val FINAL_AUDIO_WAIT_WITH_TEXT_MS = 2_000L
-private const val FINAL_AUDIO_WAIT_WITHOUT_TEXT_MS = 15_000L
-
 /**
  * One-shot Wear push-to-talk turn that uses the stable STT -> chat -> TTS path.
  */
@@ -39,11 +37,6 @@ private data class ChatFinalEvent(
   val assistantText: String,
   val sessionKey: String?,
   val agentId: String?,
-)
-
-private data class ChatFinalAudioResult(
-  val audio: WearAudioResponse,
-  val spokenText: String?,
 )
 
 internal interface WearGateway {
@@ -81,6 +74,7 @@ internal class WearSttTtsSession(
   private val gateway: WearGateway,
   private val sessionKey: String,
   private val responseFormat: String = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K,
+  requestedReasoningLevel: String = WearReasoningLevel.DEFAULT,
   // Suspends until the response is actually delivered to the watch; the turn is
   // only marked successful after this returns, and a thrown failure fails the turn.
   private val onAudioResponse: suspend (WearAudioResponse) -> Unit,
@@ -93,6 +87,7 @@ internal class WearSttTtsSession(
     session: GatewaySession,
     sessionKey: String,
     responseFormat: String = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K,
+    requestedReasoningLevel: String = WearReasoningLevel.DEFAULT,
     onAudioResponse: suspend (WearAudioResponse) -> Unit,
     onStatus: (String) -> Unit,
     onError: (String) -> Unit,
@@ -102,6 +97,7 @@ internal class WearSttTtsSession(
     gateway = GatewaySessionWearGateway(session),
     sessionKey = sessionKey,
     responseFormat = responseFormat,
+    requestedReasoningLevel = requestedReasoningLevel,
     onAudioResponse = onAudioResponse,
     onStatus = onStatus,
     onError = onError,
@@ -113,15 +109,16 @@ internal class WearSttTtsSession(
     private const val INPUT_SAMPLE_RATE_HZ = 24_000
     private const val TRANSCRIPTION_SAMPLE_RATE_HZ = 8_000
     private const val MAX_APPEND_AUDIO_BYTES = 128 * 1024
+
     // Covers the gateway's 60s transcription finalize budget plus RTT.
     private const val TRANSCRIPTION_TIMEOUT_MS = 65_000L
     private const val CHAT_TIMEOUT_MS = 120_000L
-    private const val FINAL_AUDIO_TIMEOUT_MS = 30_000L
     private const val SPEAK_TIMEOUT_MS = 120_000L
     private const val WATCH_OUTPUT_SAMPLE_RATE_HZ = 24_000
   }
 
   private val json = Json { ignoreUnknownKeys = true }
+  private val reasoningLevel = WearReasoningLevel.normalize(requestedReasoningLevel)
 
   @Volatile private var transcriptionSessionId: String? = null
 
@@ -197,47 +194,17 @@ internal class WearSttTtsSession(
               "received=${finalEvent != null} textChars=${finalEventText?.length ?: 0}",
             )
 
-            phase = "fetching final speech"
-            onStatus("Preparing speech...")
-            val finalAudioWaitMs =
-              resolveWearFinalAudioWaitMs(
-                finalEventReceived = finalEvent != null,
-                assistantText = finalEventText,
-              )
-            val finalAudioResult = fetchFinalAudio(runId, finalEvent, finalAudioWaitMs)
-            var spokenAudio = finalAudioResult?.audio
-            val finalAudioSpokenText = finalAudioResult?.spokenText?.trim()?.takeIf { it.isNotEmpty() }
-            logTurnLatency(
-              "final-audio",
-              turnStartedAtMs,
-              "found=${spokenAudio != null} format=${spokenAudio?.format ?: "-"} bytes=${spokenAudio?.audioBytes?.size ?: 0}",
-            )
-
-            val assistantText =
-              (finalEventText?.takeIf { it.isNotEmpty() } ?: finalAudioSpokenText).orEmpty()
+            val assistantText = finalEventText?.takeIf { it.isNotEmpty() }.orEmpty()
             if (assistantText.isEmpty()) {
-              if (spokenAudio == null) {
-                onError("No assistant response received")
-                return@launch
-              }
-              Log.d(TAG, "assistant text missing; using final audio artifact")
-            } else {
-              Log.d(TAG, "assistant text ok chars=${assistantText.length}")
+              onError("No assistant response received")
+              return@launch
             }
+            Log.d(TAG, "assistant text ok chars=${assistantText.length}")
 
-            val audioToPlay =
-              resolveWearAudioToPlay(
-                assistantText = assistantText,
-                spokenAudio = spokenAudio,
-              ) { text ->
-                coroutineContext.ensureActive()
-                phase = "synthesizing speech"
-                onStatus("Synthesizing speech...")
-                speakAssistantText(text)
-              } ?: run {
-                onError("No assistant response received")
-                return@launch
-              }
+            coroutineContext.ensureActive()
+            phase = "synthesizing speech"
+            onStatus("Synthesizing speech...")
+            val audioToPlay = speakAssistantText(assistantText)
             if (audioToPlay.audioBytes.isEmpty()) {
               onError("Speech returned empty audio")
               return@launch
@@ -441,8 +408,8 @@ internal class WearSttTtsSession(
         buildJsonObject {
           put("sessionKey", JsonPrimitive(sessionKey.ifBlank { "main" }))
           put("message", JsonPrimitive(transcript))
-          put("deliver", JsonPrimitive(true))
-          put("thinking", JsonPrimitive("low"))
+          put("thinking", JsonPrimitive(reasoningLevel))
+          put("fastMode", JsonPrimitive(true))
           put("timeoutMs", JsonPrimitive(30_000))
           put("idempotencyKey", JsonPrimitive(runId))
         }.toString(),
@@ -459,96 +426,6 @@ internal class WearSttTtsSession(
       }
     }
     return parsedRunId
-  }
-
-  private suspend fun fetchFinalAudio(
-    runId: String,
-    finalEvent: ChatFinalEvent?,
-    waitMs: Long,
-  ): ChatFinalAudioResult? {
-    val finalAudioSessionKey = finalEvent?.sessionKey ?: sessionKey.ifBlank { "main" }
-    val finalAudioAgentId = finalEvent?.agentId
-    val response =
-      try {
-        gateway.requestDetailed(
-          method = "chat.finalAudio.get",
-          paramsJson =
-            buildJsonObject {
-              put("sessionKey", JsonPrimitive(finalAudioSessionKey))
-              if (!finalAudioAgentId.isNullOrBlank()) {
-                put("agentId", JsonPrimitive(finalAudioAgentId))
-              }
-              put("runId", JsonPrimitive(runId))
-              put("waitMs", JsonPrimitive(waitMs))
-            }.toString(),
-          timeoutMs = FINAL_AUDIO_TIMEOUT_MS,
-        )
-      } catch (err: CancellationException) {
-        throw err
-      } catch (err: Throwable) {
-        Log.d(TAG, "chat.finalAudio.get unavailable: ${err.message ?: err::class.java.simpleName}")
-        return null
-      }
-    if (!response.ok) {
-      Log.d(TAG, "chat.finalAudio.get failed: ${response.error?.message ?: "request failed"}")
-      return null
-    }
-    val root =
-      runCatching { json.parseToJsonElement(response.payloadJson ?: "").asObjectOrNull() }
-        .getOrNull()
-        ?: return null
-    if (root["found"].asBooleanOrNull() != true) {
-      Log.d(TAG, "chat.finalAudio.get no audio reason=${root["unavailableReason"].asStringOrNull() ?: "unknown"}")
-      return null
-    }
-    val audioBase64 = root["audioBase64"].asStringOrNull() ?: return null
-    val audioBytes =
-      try {
-        Base64.getDecoder().decode(audioBase64)
-      } catch (err: Throwable) {
-        Log.d(TAG, "chat.finalAudio.get audio decode failed: ${err.message ?: err::class.java.simpleName}")
-        return null
-      }
-    val outputFormat = root["outputFormat"].asStringOrNull()
-    val mimeType = root["mimeType"].asStringOrNull()
-    val fileExtension = root["fileExtension"].asStringOrNull()
-    val spokenText = root["spokenText"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-    Log.d(TAG, "chat.finalAudio.get ok bytes=${audioBytes.size} format=${outputFormat ?: mimeType ?: fileExtension ?: "unknown"}")
-    if (responseFormat == WearRelayProtocol.RESPONSE_FORMAT_MP3 && isMp3GatewayAudio(outputFormat, mimeType, fileExtension)) {
-      return ChatFinalAudioResult(
-        audio = WearAudioResponse(audioBytes = audioBytes, format = WearRelayProtocol.RESPONSE_FORMAT_MP3),
-        spokenText = spokenText,
-      )
-    }
-    if (responseFormat == WearRelayProtocol.RESPONSE_FORMAT_OGG_OPUS && isOggOpusGatewayAudio(outputFormat, mimeType, fileExtension)) {
-      return ChatFinalAudioResult(
-        audio = WearAudioResponse(audioBytes = audioBytes, format = WearRelayProtocol.RESPONSE_FORMAT_OGG_OPUS),
-        spokenText = spokenText,
-      )
-    }
-    val decodedAudio =
-      try {
-        decodeGatewayAudio(
-          audioBytes = audioBytes,
-          outputFormat = outputFormat,
-          mimeType = mimeType,
-          fileExtension = fileExtension,
-          errorContext = "chat.finalAudio.get audio",
-        )
-      } catch (err: CancellationException) {
-        throw err
-      } catch (err: Throwable) {
-        Log.d(TAG, "chat.finalAudio.get unsupported audio: ${err.message ?: err::class.java.simpleName}")
-        return null
-      }
-    return ChatFinalAudioResult(
-      audio =
-        WearAudioResponse(
-          audioBytes = decodedAudio,
-          format = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K,
-        ),
-      spokenText = spokenText,
-    )
   }
 
   private suspend fun speakAssistantText(text: String): WearAudioResponse {
@@ -809,33 +686,4 @@ internal fun isMp3GatewayAudio(
     normalizedMime == "audio/mpeg" ||
     normalizedMime == "audio/mp3" ||
     normalizedExtension == ".mp3"
-}
-
-internal fun resolveWearFinalAudioWaitMs(
-  finalEventReceived: Boolean,
-  assistantText: String?,
-): Long =
-  when {
-    !finalEventReceived -> 0L
-    assistantText.isNullOrEmpty() -> FINAL_AUDIO_WAIT_WITHOUT_TEXT_MS
-    else -> FINAL_AUDIO_WAIT_WITH_TEXT_MS
-  }
-
-internal fun shouldUseTalkSpeakForWearAudio(assistantText: String): Boolean = assistantText.trim().isNotEmpty()
-
-internal suspend fun resolveWearAudioToPlay(
-  assistantText: String,
-  spokenAudio: WearAudioResponse?,
-  speakAssistantText: suspend (String) -> WearAudioResponse,
-): WearAudioResponse? {
-  if (spokenAudio?.audioBytes?.isNotEmpty() == true) return spokenAudio
-  if (!shouldUseTalkSpeakForWearAudio(assistantText)) return spokenAudio
-  return try {
-    val synthesizedAudio = speakAssistantText(assistantText)
-    if (synthesizedAudio.audioBytes.isNotEmpty() || spokenAudio == null) synthesizedAudio else spokenAudio
-  } catch (err: CancellationException) {
-    throw err
-  } catch (err: Throwable) {
-    spokenAudio ?: throw err
-  }
 }

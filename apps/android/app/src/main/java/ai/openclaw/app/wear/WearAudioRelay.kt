@@ -1,6 +1,7 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.common.wear.WearReasoningLevel
 import ai.openclaw.common.wear.WearRelayAudioDonePayload
 import ai.openclaw.common.wear.WearRelayErrorPayload
 import ai.openclaw.common.wear.WearRelayProtocol
@@ -66,6 +67,7 @@ class WearAudioRelay internal constructor(
   private val json = Json { ignoreUnknownKeys = true }
 
   private val listenerRegistrationLock = Any()
+
   // Inbound audio is keyed by chunkIndex, not appended in arrival order: the
   // Wearable Data Layer does not guarantee message ordering, so a benign reorder
   // (e.g. chunk 1 before chunk 0) must buffer and fill in, never fail the turn.
@@ -91,6 +93,8 @@ class WearAudioRelay internal constructor(
   @Volatile private var activeWatchTurnId: String? = null
 
   @Volatile private var activeResponseFormat: String = WearRelayProtocol.RESPONSE_FORMAT_PCM_24K
+
+  @Volatile private var activeReasoningLevel: String = WearReasoningLevel.DEFAULT
 
   @Volatile private var activeTargetSessionKey: String? = null
 
@@ -144,6 +148,9 @@ class WearAudioRelay internal constructor(
     val recordingGeneration: Long
     synchronized(turnStateLock) {
       if (isRecording) {
+        if (activeWatchTurnId != null && isActiveWatchNode(sourceNodeId) && isActiveWatchTurn(turnId)) {
+          updateActiveStartPayloadMetadata(startPayload)
+        }
         return
       }
       // A late/stale chunk for an already-finished turn must not auto-start a
@@ -159,6 +166,7 @@ class WearAudioRelay internal constructor(
         return
       }
       if (activeWatchTurnId != null && isActiveWatchNode(sourceNodeId) && isActiveWatchTurn(turnId)) {
+        updateActiveStartPayloadMetadata(startPayload)
         return
       }
       turnCounter.incrementAndGet()
@@ -168,6 +176,7 @@ class WearAudioRelay internal constructor(
       activeWatchTurnId = turnId
       isRecording = true
       activeResponseFormat = chooseResponseFormat(startPayload)
+      activeReasoningLevel = WearReasoningLevel.normalize(startPayload?.reasoningLevel)
       activeTargetSessionKey = wearTargetSessionKeyProvider()
       audioChunks.clear()
       currentTurnId = turnId
@@ -182,6 +191,12 @@ class WearAudioRelay internal constructor(
     sendStatus("Recording...", currentTurnId)
   }
 
+  private fun updateActiveStartPayloadMetadata(startPayload: WearRelayStartPayload?) {
+    if (startPayload == null) return
+    activeResponseFormat = chooseResponseFormat(startPayload)
+    activeReasoningLevel = WearReasoningLevel.normalize(startPayload.reasoningLevel)
+  }
+
   private fun reapStaleRecording(recordingGeneration: Long) {
     val staleTurnId: String?
     synchronized(turnStateLock) {
@@ -194,6 +209,7 @@ class WearAudioRelay internal constructor(
       activeWatchNodeId = null
       activeWatchTurnId = null
       activeTargetSessionKey = null
+      activeReasoningLevel = WearReasoningLevel.DEFAULT
       audioChunks.clear()
       // Block a chunk arriving just after lease expiry from reviving this turn.
       if (staleTurnId != null) rememberCompletedTurnId(staleTurnId)
@@ -214,6 +230,7 @@ class WearAudioRelay internal constructor(
     val watchTurnId: String
     val targetNodeId: String?
     val responseFormat: String
+    val reasoningLevel: String
     val targetSessionKey: String
     synchronized(turnStateLock) {
       if (activeWatchTurnId != null && !isActiveWatchTurn(turnId)) {
@@ -233,11 +250,13 @@ class WearAudioRelay internal constructor(
       activeWatchTurnId = turnId
       isRecording = false
       activeResponseFormat = chooseResponseFormat(textPayload?.acceptedResponseFormats.orEmpty())
+      activeReasoningLevel = WearReasoningLevel.normalize(textPayload?.reasoningLevel)
       activeTargetSessionKey = wearTargetSessionKeyProvider()
       counterTurnId = turnCounter.get()
       watchTurnId = turnId
       targetNodeId = activeWatchNodeId
       responseFormat = activeResponseFormat
+      reasoningLevel = activeReasoningLevel
       targetSessionKey = activeTargetSessionKey.orEmpty()
       audioChunks.clear()
       rememberCompletedTurnId(turnId)
@@ -257,6 +276,7 @@ class WearAudioRelay internal constructor(
         createResponseSession(
           targetSessionKey = targetSessionKey,
           responseFormat = responseFormat,
+          reasoningLevel = reasoningLevel,
           targetNodeId = targetNodeId,
           watchTurnId = watchTurnId,
           counterTurnId = counterTurnId,
@@ -332,6 +352,7 @@ class WearAudioRelay internal constructor(
     val watchTurnId: String
     val targetNodeId: String?
     val responseFormat: String
+    val reasoningLevel: String
     val targetSessionKey: String
     val capturedFrames: List<ByteArray>?
     synchronized(turnStateLock) {
@@ -345,6 +366,7 @@ class WearAudioRelay internal constructor(
       watchTurnId = turnId
       targetNodeId = activeWatchNodeId
       responseFormat = activeResponseFormat
+      reasoningLevel = activeReasoningLevel
       targetSessionKey = activeTargetSessionKey.orEmpty()
       val chunkCount = audioChunks.size
       val maxIndex = audioChunks.keys.maxOrNull()
@@ -391,6 +413,7 @@ class WearAudioRelay internal constructor(
         createResponseSession(
           targetSessionKey = targetSessionKey,
           responseFormat = responseFormat,
+          reasoningLevel = reasoningLevel,
           targetNodeId = targetNodeId,
           watchTurnId = watchTurnId,
           counterTurnId = counterTurnId,
@@ -413,6 +436,7 @@ class WearAudioRelay internal constructor(
   private fun createResponseSession(
     targetSessionKey: String,
     responseFormat: String,
+    reasoningLevel: String,
     targetNodeId: String?,
     watchTurnId: String,
     counterTurnId: Long,
@@ -423,6 +447,7 @@ class WearAudioRelay internal constructor(
       gateway = gateway,
       sessionKey = targetSessionKey,
       responseFormat = responseFormat,
+      requestedReasoningLevel = reasoningLevel,
       onAudioResponse = { audioResponse ->
         val active = synchronized(turnStateLock) { isActiveSession() }
         if (active) {
@@ -455,6 +480,7 @@ class WearAudioRelay internal constructor(
               activeWatchTurnId = null
             }
             activeTargetSessionKey = null
+            activeReasoningLevel = WearReasoningLevel.DEFAULT
             // Remember the finished turn so a late/stale chunk for it cannot
             // auto-start a fresh gateway run.
             rememberCompletedTurnId(watchTurnId)
@@ -487,6 +513,7 @@ class WearAudioRelay internal constructor(
       activeWatchNodeId = null
       activeWatchTurnId = null
       activeTargetSessionKey = null
+      activeReasoningLevel = WearReasoningLevel.DEFAULT
       audioChunks.clear()
       // A cancelled turn is finished; block a late chunk from reviving it.
       if (cancelledTurnId != null) rememberCompletedTurnId(cancelledTurnId)
@@ -519,6 +546,7 @@ class WearAudioRelay internal constructor(
     activeWatchNodeId = null
     activeWatchTurnId = null
     activeTargetSessionKey = null
+    activeReasoningLevel = WearReasoningLevel.DEFAULT
   }
 
   private fun isCurrentTurn(turnId: Long): Boolean = turnCounter.get() == turnId
@@ -531,6 +559,7 @@ class WearAudioRelay internal constructor(
       activeWatchNodeId = null
       activeWatchTurnId = null
       activeTargetSessionKey = null
+      activeReasoningLevel = WearReasoningLevel.DEFAULT
       // Block a late/stale chunk from auto-starting a fresh run for a turn that
       // already finished.
       if (completedTurnId != null) rememberCompletedTurnId(completedTurnId)
