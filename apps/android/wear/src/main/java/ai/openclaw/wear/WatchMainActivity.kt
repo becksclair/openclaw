@@ -23,6 +23,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
@@ -103,7 +104,11 @@ class WatchMainActivity : ComponentActivity() {
     setContent {
       val assistantRoleStatus by assistantRoleStatusState
       val ambientDetails by ambientDetailsState
-      KeepScreenOn(window)
+      val watchState by viewModel.state.collectAsState()
+      KeepScreenOn(
+        window = window,
+        enabled = shouldKeepScreenFullyAwake(watchState),
+      )
       OpenClawWearTheme {
         WatchFace(
           viewModel = viewModel,
@@ -356,10 +361,30 @@ class WatchMainActivity : ComponentActivity() {
   }
 }
 
+internal fun shouldKeepScreenFullyAwake(state: WatchViewModel.WatchState): Boolean =
+  when (state) {
+    WatchViewModel.WatchState.Processing,
+    WatchViewModel.WatchState.Playing,
+    -> false
+
+    WatchViewModel.WatchState.Idle,
+    WatchViewModel.WatchState.CheckingPhone,
+    WatchViewModel.WatchState.Recording,
+    WatchViewModel.WatchState.Error,
+    -> true
+  }
+
 @Composable
-private fun KeepScreenOn(window: Window) {
-  DisposableEffect(window) {
-    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+private fun KeepScreenOn(
+  window: Window,
+  enabled: Boolean,
+) {
+  DisposableEffect(window, enabled) {
+    if (enabled) {
+      window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    } else {
+      window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
     onDispose {
       window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
