@@ -1,5 +1,7 @@
 package ai.openclaw.wear
 
+import ai.openclaw.audio.PcmAudio
+import ai.openclaw.common.wear.WearReasoningLevel
 import ai.openclaw.common.wear.WearRelayProtocol
 import ai.openclaw.wear.audio.AudioCapture
 import ai.openclaw.wear.audio.AudioEndpointDetector
@@ -17,6 +19,7 @@ import ai.openclaw.wear.speech.DictationErrorKind
 import ai.openclaw.wear.speech.SpeechDictationEvent
 import ai.openclaw.wear.speech.WatchSpeechDictation
 import android.app.Application
+import android.content.SharedPreferences
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -29,6 +32,20 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.abs
+
+internal const val FINAL_TTS_PLAYBACK_GAIN = 1.5
+
+internal fun applyFinalTtsPlaybackGain(pcm: ByteArray): ByteArray = PcmAudio.applyPcm16VolumeGain(pcm, FINAL_TTS_PLAYBACK_GAIN)
+
+internal fun peakAbsPcm16(pcm: ByteArray): Int {
+  var peak = 0
+  val sampleBytes = pcm.size - (pcm.size % 2)
+  for (offset in 0 until sampleBytes step 2) {
+    peak = maxOf(peak, abs(PcmAudio.readPcm16Sample(pcm, offset).toLong()).coerceAtMost(Short.MAX_VALUE.toLong()).toInt())
+  }
+  return peak
+}
 
 class WatchViewModel private constructor(
   app: Application,
@@ -56,11 +73,12 @@ class WatchViewModel private constructor(
     private const val PHONE_CONNECTION_WAIT_TIMEOUT_MS = 10_000L
     private const val DEBUG_PHONE_CONNECTION_POLL_INTERVAL_MS = 500L
 
-    // Boost applied to the final MP3 TTS file before it is played on the watch speaker.
-    // Value chosen empirically for loudness on watch speakers. Note this does not avoid
-    // clipping: at 1.2x, 16-bit PCM peaks above ~27306 hard-clip to the +/-32767 range.
-    private const val FINAL_MP3_AUDIO_GAIN = 1.2
+    // Boost final TTS PCM at the watch playback boundary so provider artifacts
+    // stay unchanged on the wire while the watch speaker gets local loudness
+    // compensation across PCM, MP3, and Ogg/Opus responses.
     private const val PROCESSING_TURN_TIMEOUT_MS = 180_000L
+    private const val SETTINGS_PREFS_NAME = "openclaw.watch.settings"
+    private const val PREF_AGENT_REASONING_LEVEL = "agent_reasoning_level"
     internal val DEFAULT_ENDPOINTING_CONFIG = AudioEndpointingConfig(endSilenceMs = 1_200)
     private val ALLOWED_DEBUG_STATES = setOf(WatchState.Idle, WatchState.CheckingPhone)
   }
@@ -100,6 +118,11 @@ class WatchViewModel private constructor(
 
   private val _hasMicPermission = MutableStateFlow(false)
   val hasMicPermission: StateFlow<Boolean> = _hasMicPermission
+
+  private val settingsPrefs: SharedPreferences? =
+    runCatching { app.getSharedPreferences(SETTINGS_PREFS_NAME, Application.MODE_PRIVATE) }.getOrNull()
+  private val _reasoningLevel = MutableStateFlow(WearReasoningLevel.normalize(settingsPrefs?.getString(PREF_AGENT_REASONING_LEVEL, null)))
+  val reasoningLevel: StateFlow<String> = _reasoningLevel
 
   private val audioCapture: WearAudioCapture = dependencies?.audioCapture ?: AudioCapture(app, viewModelScope)
   private val audioPlayer = AudioPlayer(app, viewModelScope)
@@ -206,6 +229,12 @@ class WatchViewModel private constructor(
     _statusText.value = "Microphone permission required"
   }
 
+  fun setReasoningLevel(level: String) {
+    val normalized = WearReasoningLevel.normalize(level)
+    _reasoningLevel.value = normalized
+    settingsPrefs?.edit()?.putString(PREF_AGENT_REASONING_LEVEL, normalized)?.apply()
+  }
+
   fun onMicButtonDown() {
     if (_state.value != WatchState.Idle) return
     startUserVoiceTurn()
@@ -273,7 +302,7 @@ class WatchViewModel private constructor(
 
   private fun startRawAudioTurn() {
     isRecording = true
-    val turnId = relayClient.sendStartRecording()
+    val turnId = relayClient.sendStartRecording(reasoningLevel.value)
     if (turnId == null) {
       isRecording = false
       transitionTo(WatchState.Idle, "Phone not connected")
@@ -354,7 +383,7 @@ class WatchViewModel private constructor(
         return@launch
       }
       val turnId =
-        relayClient.sendStartRecording() ?: run {
+        relayClient.sendStartRecording(reasoningLevel.value) ?: run {
           transitionTo(WatchState.Idle, "Phone not connected")
           Log.w(DEBUG_TURN_TAG, "$debugKind aborted: no relay phone node")
           return@launch
@@ -473,7 +502,7 @@ class WatchViewModel private constructor(
     val generation = playbackGeneration.incrementAndGet()
     transitionTo(WatchState.Playing, "Playing response...")
     audioPlayer.play(
-      response.audioBytes,
+      applyAndLogFinalTtsPlaybackGain(response.audioBytes, response.format),
       onComplete = {
         completePlayback(generation)
       },
@@ -498,14 +527,9 @@ class WatchViewModel private constructor(
             WearRelayProtocol.RESPONSE_FORMAT_MP3 -> ".mp3"
             else -> ".opus"
           }
-        val volumeGain =
-          when (response.format) {
-            WearRelayProtocol.RESPONSE_FORMAT_MP3 -> FINAL_MP3_AUDIO_GAIN
-            else -> 1.0
-          }
         val decoded =
           try {
-            compressedAudioDecoder.decodeToPcm48kMono(response.audioBytes, extension, volumeGain)
+            compressedAudioDecoder.decodeToPcm48kMono(response.audioBytes, extension)
           } catch (err: Throwable) {
             if (err is CancellationException) throw err
             Log.w(DEBUG_TURN_TAG, "response decode failed: ${err.message}")
@@ -520,10 +544,11 @@ class WatchViewModel private constructor(
           DEBUG_TURN_TAG,
           "response decoded format=${response.format} inputBytes=${response.audioBytes.size} pcmBytes=${decoded.pcm48kMono.size} sourceRate=${decoded.sourceSampleRateHz} sourceChannels=${decoded.sourceChannels} decodeMs=$decodeMs",
         )
+        val playbackPcm = applyAndLogFinalTtsPlaybackGain(decoded.pcm48kMono, response.format)
         transitionTo(WatchState.Playing, "Playing response...")
         val playback = playbackGeneration.incrementAndGet()
         audioPlayer.playPcm48k(
-          decoded.pcm48kMono,
+          playbackPcm,
           onComplete = {
             completePlayback(playback)
           },
@@ -534,6 +559,18 @@ class WatchViewModel private constructor(
         )
       }
     trackCompressedDecodeJob(decodeJob)
+  }
+
+  private fun applyAndLogFinalTtsPlaybackGain(
+    pcm: ByteArray,
+    format: String,
+  ): ByteArray {
+    val boosted = applyFinalTtsPlaybackGain(pcm)
+    Log.d(
+      DEBUG_TURN_TAG,
+      "final tts playback gain format=$format gain=$FINAL_TTS_PLAYBACK_GAIN bytes=${pcm.size} peakBefore=${peakAbsPcm16(pcm)} peakAfter=${peakAbsPcm16(boosted)}",
+    )
+    return boosted
   }
 
   private fun trackCompressedDecodeJob(decodeJob: Job) {
@@ -683,7 +720,7 @@ class WatchViewModel private constructor(
   }
 
   private fun submitDictationText(text: String) {
-    val turnId = relayClient.sendTextTurn(text)
+    val turnId = relayClient.sendTextTurn(text, reasoningLevel.value)
     if (turnId == null) {
       transitionTo(WatchState.Idle, "Phone not connected")
       return

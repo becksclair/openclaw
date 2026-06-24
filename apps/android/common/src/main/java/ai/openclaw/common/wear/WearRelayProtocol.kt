@@ -80,6 +80,22 @@ object WearRelayProtocol {
   }
 }
 
+object WearReasoningLevel {
+  const val OFF = "off"
+  const val MINIMAL = "minimal"
+  const val LOW = "low"
+  const val MEDIUM = "medium"
+  const val HIGH = "high"
+  const val DEFAULT = LOW
+
+  val OPTIONS = listOf(OFF, MINIMAL, LOW, MEDIUM, HIGH)
+
+  fun normalize(level: String?): String {
+    val candidate = level?.trim()?.lowercase()
+    return if (candidate in OPTIONS) candidate.orEmpty() else DEFAULT
+  }
+}
+
 data class WatchMessagePath(
   val path: String,
   val turnId: String,
@@ -89,12 +105,14 @@ data class WatchMessagePath(
 @Serializable
 data class WearRelayStartPayload(
   val acceptedResponseFormats: List<String> = emptyList(),
+  val reasoningLevel: String? = null,
 )
 
 @Serializable
 data class WearRelayTextPayload(
   val text: String,
   val acceptedResponseFormats: List<String> = emptyList(),
+  val reasoningLevel: String? = null,
 )
 
 @Serializable

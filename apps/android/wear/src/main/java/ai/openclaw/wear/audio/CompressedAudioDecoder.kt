@@ -20,7 +20,6 @@ class CompressedAudioDecoder {
   suspend fun decodeToPcm48kMono(
     audioBytes: ByteArray,
     fileExtension: String,
-    volumeGain: Double = 1.0,
   ): DecodedPcm {
     val decoded =
       AndroidCompressedAudioDecoder.decodeToPcmMono(
@@ -31,7 +30,7 @@ class CompressedAudioDecoder {
         errorContext = "compressed debug audio",
       )
     return DecodedPcm(
-      pcm48kMono = PcmAudio.applyPcm16VolumeGain(decoded.pcmMono, volumeGain),
+      pcm48kMono = decoded.pcmMono,
       sourceSampleRateHz = decoded.sourceSampleRateHz,
       sourceChannels = decoded.sourceChannels,
     )

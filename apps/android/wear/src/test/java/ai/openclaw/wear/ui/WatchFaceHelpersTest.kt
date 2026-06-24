@@ -1,5 +1,6 @@
 package ai.openclaw.wear.ui
 
+import ai.openclaw.common.wear.WearReasoningLevel
 import ai.openclaw.wear.WatchViewModel
 import ai.openclaw.wear.ambient.AmbientDetails
 import ai.openclaw.wear.ambient.enterAmbientDetails
@@ -60,6 +61,22 @@ class WatchFaceHelpersTest {
         ),
       ),
     )
+  }
+
+  @Test
+  fun `reasoning labels match selectable options`() {
+    assertEquals("Off", reasoningLevelLabel(WearReasoningLevel.OFF))
+    assertEquals("Minimal", reasoningLevelLabel(WearReasoningLevel.MINIMAL))
+    assertEquals("Low", reasoningLevelLabel(WearReasoningLevel.LOW))
+    assertEquals("Medium", reasoningLevelLabel(WearReasoningLevel.MEDIUM))
+    assertEquals("High", reasoningLevelLabel(WearReasoningLevel.HIGH))
+  }
+
+  @Test
+  fun `reasoning selected-state uses normalized values`() {
+    assertEquals(true, isSelectedReasoningLevel("HIGH", WearReasoningLevel.HIGH))
+    assertEquals(false, isSelectedReasoningLevel(WearReasoningLevel.LOW, WearReasoningLevel.HIGH))
+    assertEquals(true, isSelectedReasoningLevel("invalid", WearReasoningLevel.LOW))
   }
 
   @Test

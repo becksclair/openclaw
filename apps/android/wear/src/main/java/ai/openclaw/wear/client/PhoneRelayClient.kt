@@ -48,9 +48,12 @@ internal interface WearPhoneRelay {
 
   fun isPhoneConnected(): Boolean
 
-  fun sendStartRecording(): String?
+  fun sendStartRecording(reasoningLevel: String): String?
 
-  fun sendTextTurn(text: String): String?
+  fun sendTextTurn(
+    text: String,
+    reasoningLevel: String,
+  ): String?
 
   fun sendEndRecording(turnId: String?)
 
@@ -139,18 +142,22 @@ internal class PhoneRelayClient(
 
   override fun isPhoneConnected(): Boolean = _phoneConnected.value
 
-  override fun sendStartRecording(): String? {
+  override fun sendStartRecording(reasoningLevel: String): String? {
     val payload =
       json
         .encodeToString(
           WearRelayStartPayload(
             acceptedResponseFormats = WearRelayProtocol.ACCEPTED_RESPONSE_FORMATS,
+            reasoningLevel = reasoningLevel,
           ),
         ).toByteArray()
     return beginTurn(WearRelayProtocol.PATH_START, payload)
   }
 
-  override fun sendTextTurn(text: String): String? {
+  override fun sendTextTurn(
+    text: String,
+    reasoningLevel: String,
+  ): String? {
     val trimmed = text.trim()
     if (trimmed.isEmpty()) return null
     val payload =
@@ -159,6 +166,7 @@ internal class PhoneRelayClient(
           WearRelayTextPayload(
             text = trimmed,
             acceptedResponseFormats = WearRelayProtocol.ACCEPTED_RESPONSE_FORMATS,
+            reasoningLevel = reasoningLevel,
           ),
         ).toByteArray()
     return beginTurn(WearRelayProtocol.PATH_TEXT, payload)

@@ -1,5 +1,7 @@
 package ai.openclaw.wear
 
+import ai.openclaw.audio.PcmAudio
+import ai.openclaw.common.wear.WearReasoningLevel
 import ai.openclaw.wear.audio.AudioEndpointEvent
 import ai.openclaw.wear.audio.AudioEndpointReason
 import ai.openclaw.wear.audio.AudioEndpointingConfig
@@ -31,6 +33,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -59,12 +62,62 @@ class WatchViewModelTest {
   }
 
   @Test
+  fun `final tts playback gain boosts pcm before playback`() {
+    val pcm = ByteArray(4)
+    PcmAudio.writePcm16Sample(pcm, 0, 100)
+    PcmAudio.writePcm16Sample(pcm, 2, -100)
+
+    val boosted = applyFinalTtsPlaybackGain(pcm)
+
+    assertEquals(150, PcmAudio.readPcm16Sample(boosted, 0))
+    assertEquals(-150, PcmAudio.readPcm16Sample(boosted, 2))
+    assertEquals(150, peakAbsPcm16(boosted))
+  }
+
+  @Test
+  fun `pcm peak meter handles full scale negative sample`() {
+    val pcm = ByteArray(2)
+    PcmAudio.writePcm16Sample(pcm, 0, Short.MIN_VALUE.toInt())
+
+    assertEquals(Short.MAX_VALUE.toInt(), peakAbsPcm16(pcm))
+  }
+
+  @Test
+  fun `reasoning level defaults to low and persists selected value`() {
+    val app = RuntimeEnvironment.getApplication()
+    app
+      .getSharedPreferences("openclaw.watch.settings", Application.MODE_PRIVATE)
+      .edit()
+      .clear()
+      .commit()
+    val firstViewModel = WatchViewModel(app, FakeAudioCapture(), FakePhoneRelay())
+
+    assertEquals(WearReasoningLevel.LOW, firstViewModel.reasoningLevel.value)
+
+    firstViewModel.setReasoningLevel(WearReasoningLevel.HIGH)
+    val secondViewModel = WatchViewModel(app, FakeAudioCapture(), FakePhoneRelay())
+
+    assertEquals(WearReasoningLevel.HIGH, firstViewModel.reasoningLevel.value)
+    assertEquals(WearReasoningLevel.HIGH, secondViewModel.reasoningLevel.value)
+  }
+
+  @Test
+  fun `invalid reasoning level normalizes to low`() {
+    val viewModel = WatchViewModel(Application(), FakeAudioCapture(), FakePhoneRelay())
+
+    viewModel.setReasoningLevel("unsupported")
+
+    assertEquals(WearReasoningLevel.LOW, viewModel.reasoningLevel.value)
+  }
+
+  @Test
   fun `auto endpoint sends end once and transitions to processing`() =
     runTest(dispatcher) {
       val capture = FakeAudioCapture()
       val relay = FakePhoneRelay()
       val viewModel = WatchViewModel(Application(), capture, relay)
 
+      viewModel.setReasoningLevel(WearReasoningLevel.MEDIUM)
       viewModel.onPermissionGranted()
       viewModel.onMicButtonDown()
       assertNotNull(capture.endpointingConfig)
@@ -73,6 +126,7 @@ class WatchViewModelTest {
       capture.endpointCallback?.invoke(endpoint())
 
       assertEquals(listOf("turn-1"), relay.endTurnIds)
+      assertEquals(listOf(WearReasoningLevel.MEDIUM), relay.startReasoningLevels)
       assertEquals(WatchViewModel.WatchState.Processing, viewModel.state.value)
     }
 
@@ -84,6 +138,7 @@ class WatchViewModelTest {
       val speech = FakeSpeechDictation(available = true)
       val viewModel = WatchViewModel(Application(), capture, relay, speech)
 
+      viewModel.setReasoningLevel(WearReasoningLevel.HIGH)
       viewModel.onPermissionGranted()
       viewModel.onMicButtonDown()
       speech.emit(SpeechDictationEvent.PartialTranscript("hello"))
@@ -94,6 +149,7 @@ class WatchViewModelTest {
 
       assertFalse(capture.started)
       assertEquals(listOf("hello sky"), relay.textTurns)
+      assertEquals(listOf(WearReasoningLevel.HIGH), relay.textReasoningLevels)
       assertEquals(1, speech.destroyCount)
       assertEquals(WatchViewModel.WatchState.Processing, viewModel.state.value)
     }
@@ -529,6 +585,8 @@ private class FakePhoneRelay(
 
   val endTurnIds = mutableListOf<String?>()
   val textTurns = mutableListOf<String>()
+  val startReasoningLevels = mutableListOf<String>()
+  val textReasoningLevels = mutableListOf<String>()
   var cancelCount = 0
 
   override fun isPhoneConnected(): Boolean = connectedFlow.value
@@ -549,10 +607,17 @@ private class FakePhoneRelay(
     mutableAudioResponses.tryEmit(response)
   }
 
-  override fun sendStartRecording(): String? = "turn-1"
+  override fun sendStartRecording(reasoningLevel: String): String? {
+    startReasoningLevels += reasoningLevel
+    return "turn-1"
+  }
 
-  override fun sendTextTurn(text: String): String? {
+  override fun sendTextTurn(
+    text: String,
+    reasoningLevel: String,
+  ): String? {
     textTurns += text
+    textReasoningLevels += reasoningLevel
     return "text-turn-1"
   }
 
