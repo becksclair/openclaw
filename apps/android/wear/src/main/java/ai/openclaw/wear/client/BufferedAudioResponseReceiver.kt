@@ -19,6 +19,7 @@ internal class BufferedAudioResponseReceiver(
   companion object {
     private const val TAG = "OpenClawWearRelay"
     private const val MAX_AUDIO_ACCUMULATOR_BYTES = 50 * 1024 * 1024
+
     // Abort only after this long with no forward progress (no accepted chunk and
     // no done). Sized for chunked MP3 over the Data Layer, where late chunks are
     // healthy; a fixed post-done deadline would reject slow-but-live streams.

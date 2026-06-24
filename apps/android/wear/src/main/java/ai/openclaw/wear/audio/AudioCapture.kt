@@ -47,6 +47,7 @@ class AudioCapture(
     private const val CHUNK_INTERVAL_MS = 200L
     private const val BYTES_PER_SAMPLE = 2
     private const val MILLIS_PER_SECOND = 1_000
+
     // Bounded backoff for a quiet/slow HAL returning 0-byte reads; start
     // sleeping after a couple of zero reads and bail if it never recovers.
     private const val ZERO_READ_BACKOFF_THRESHOLD = 2
@@ -55,6 +56,7 @@ class AudioCapture(
   }
 
   private val recorderRef = AtomicReference<WearAudioRecord?>(null)
+
   // Single dedicated thread for blocking AudioRecord HAL teardown so a slow
   // vendor stop()/release() never janks the caller (often Main.immediate).
   private val audioDispatcher = Dispatchers.IO.limitedParallelism(1)
