@@ -51,17 +51,6 @@ class WatchViewModelTest {
   }
 
   @Test
-  fun `active turn states keep the watch screen awake`() {
-    assertFalse(WatchViewModel.WatchState.Idle.keepsScreenAwake)
-    assertTrue(WatchViewModel.WatchState.CheckingPhone.keepsScreenAwake)
-    assertTrue(WatchViewModel.WatchState.Recording.keepsScreenAwake)
-    // Remote Processing has no local activity, so the screen may sleep.
-    assertFalse(WatchViewModel.WatchState.Processing.keepsScreenAwake)
-    assertTrue(WatchViewModel.WatchState.Playing.keepsScreenAwake)
-    assertFalse(WatchViewModel.WatchState.Error.keepsScreenAwake)
-  }
-
-  @Test
   fun `final tts playback gain boosts pcm before playback`() {
     val pcm = ByteArray(4)
     PcmAudio.writePcm16Sample(pcm, 0, 100)
@@ -128,7 +117,7 @@ class WatchViewModelTest {
     val persistedViewModel = WatchViewModel(app, FakeAudioCapture(), FakePhoneRelay())
     assertEquals(2.2, persistedViewModel.ttsPlaybackGain.value, 0.0)
 
-    prefs.edit().putLong("tts_playback_gain", 9.0.toRawBits()).commit()
+    prefs.edit().putLong("tts_playback_gain", 20.0.toRawBits()).commit()
     val clampedHighViewModel = WatchViewModel(app, FakeAudioCapture(), FakePhoneRelay())
     assertEquals(MAX_TTS_PLAYBACK_GAIN, clampedHighViewModel.ttsPlaybackGain.value, 0.0)
 
@@ -572,7 +561,7 @@ class WatchViewModelTest {
 
       assertEquals(MAX_TTS_PLAYBACK_GAIN, viewModel.ttsPlaybackGain.value, 0.0)
       assertEquals("TTS gain", viewModel.volumeOverlay.value.title)
-      assertEquals("4.0x", viewModel.volumeOverlay.value.value)
+      assertEquals("10.0x", viewModel.volumeOverlay.value.value)
     }
 
   @Test

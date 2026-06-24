@@ -41,7 +41,7 @@ import kotlin.math.roundToInt
 
 internal const val DEFAULT_FINAL_TTS_PLAYBACK_GAIN = 1.5
 internal const val MIN_TTS_PLAYBACK_GAIN = 0.5
-internal const val MAX_TTS_PLAYBACK_GAIN = 4.0
+internal const val MAX_TTS_PLAYBACK_GAIN = 10.0
 internal const val TTS_PLAYBACK_GAIN_STEP = 0.1
 internal const val ROTARY_CONTROL_MODE_MEDIA_VOLUME = "media_volume"
 internal const val ROTARY_CONTROL_MODE_TTS_GAIN = "tts_gain"
@@ -243,22 +243,6 @@ class WatchViewModel private constructor(
     Error,
     ;
 
-    val keepsScreenAwake: Boolean
-      get() =
-        when (this) {
-          // Keep the screen on while the watch is capturing audio or playing a
-          // response. Remote Processing has no local activity, so let the screen
-          // sleep rather than burning battery waiting on the phone.
-          Recording,
-          CheckingPhone,
-          Playing,
-          -> true
-
-          Idle,
-          Processing,
-          Error,
-          -> false
-        }
   }
 
   private val _state = MutableStateFlow(WatchState.Idle)
