@@ -67,7 +67,7 @@ class WatchViewModelTest {
     PcmAudio.writePcm16Sample(pcm, 0, 100)
     PcmAudio.writePcm16Sample(pcm, 2, -100)
 
-    val boosted = applyFinalTtsPlaybackGain(pcm)
+    val boosted = applyFinalTtsPlaybackGain(pcm, DEFAULT_FINAL_TTS_PLAYBACK_GAIN)
 
     assertEquals(150, PcmAudio.readPcm16Sample(boosted, 0))
     assertEquals(-150, PcmAudio.readPcm16Sample(boosted, 2))
@@ -99,6 +99,42 @@ class WatchViewModelTest {
 
     assertEquals(WearReasoningLevel.HIGH, firstViewModel.reasoningLevel.value)
     assertEquals(WearReasoningLevel.HIGH, secondViewModel.reasoningLevel.value)
+  }
+
+  @Test
+  fun `rotary mode defaults to media volume and persists selected mode`() {
+    val app = RuntimeEnvironment.getApplication()
+    clearWatchSettings(app)
+    val firstViewModel = WatchViewModel(app, FakeAudioCapture(), FakePhoneRelay())
+
+    assertEquals(ROTARY_CONTROL_MODE_MEDIA_VOLUME, firstViewModel.rotaryControlMode.value)
+
+    firstViewModel.setRotaryControlMode(ROTARY_CONTROL_MODE_TTS_GAIN)
+    val secondViewModel = WatchViewModel(app, FakeAudioCapture(), FakePhoneRelay())
+
+    assertEquals(ROTARY_CONTROL_MODE_TTS_GAIN, firstViewModel.rotaryControlMode.value)
+    assertEquals(ROTARY_CONTROL_MODE_TTS_GAIN, secondViewModel.rotaryControlMode.value)
+  }
+
+  @Test
+  fun `tts playback gain defaults persists and clamps stored values`() {
+    val app = RuntimeEnvironment.getApplication()
+    val prefs = clearWatchSettings(app)
+
+    val defaultViewModel = WatchViewModel(app, FakeAudioCapture(), FakePhoneRelay())
+    assertEquals(DEFAULT_FINAL_TTS_PLAYBACK_GAIN, defaultViewModel.ttsPlaybackGain.value, 0.0)
+
+    prefs.edit().putLong("tts_playback_gain", 2.2.toRawBits()).commit()
+    val persistedViewModel = WatchViewModel(app, FakeAudioCapture(), FakePhoneRelay())
+    assertEquals(2.2, persistedViewModel.ttsPlaybackGain.value, 0.0)
+
+    prefs.edit().putLong("tts_playback_gain", 9.0.toRawBits()).commit()
+    val clampedHighViewModel = WatchViewModel(app, FakeAudioCapture(), FakePhoneRelay())
+    assertEquals(MAX_TTS_PLAYBACK_GAIN, clampedHighViewModel.ttsPlaybackGain.value, 0.0)
+
+    prefs.edit().putLong("tts_playback_gain", 0.1.toRawBits()).commit()
+    val clampedLowViewModel = WatchViewModel(app, FakeAudioCapture(), FakePhoneRelay())
+    assertEquals(MIN_TTS_PLAYBACK_GAIN, clampedLowViewModel.ttsPlaybackGain.value, 0.0)
   }
 
   @Test
@@ -410,6 +446,136 @@ class WatchViewModelTest {
     }
 
   @Test
+  fun `persisted gain changes assistant pcm boost before playback`() =
+    runTest(dispatcher) {
+      val app = RuntimeEnvironment.getApplication()
+      clearWatchSettings(app).edit().putLong("tts_playback_gain", 2.0.toRawBits()).commit()
+      val relay = FakePhoneRelay()
+      val speech = FakeSpeechDictation(available = true)
+      val playback = FakeWatchAudioPlayback()
+      val viewModel =
+        WatchViewModel(
+          app,
+          FakeAudioCapture(),
+          relay,
+          speech,
+          playback,
+          FakeMediaVolumeController(),
+        )
+      val pcm = ByteArray(2)
+      PcmAudio.writePcm16Sample(pcm, 0, 100)
+
+      viewModel.onPermissionGranted()
+      viewModel.onMicButtonDown()
+      speech.emit(SpeechDictationEvent.FinalTranscript("hello sky"))
+      runCurrent()
+      relay.emitAudioResponse(PhoneRelayAudioResponse(turnId = "text-turn-1", audioBytes = pcm))
+      runCurrent()
+
+      assertEquals(200, PcmAudio.readPcm16Sample(playback.playedPcm24k.single(), 0))
+      assertEquals(WatchViewModel.WatchState.Playing, viewModel.state.value)
+    }
+
+  @Test
+  fun `media mode rotary adjusts fake media volume and overlays readback`() =
+    runTest(dispatcher) {
+      val volume = FakeMediaVolumeController(MediaVolumeState(min = 0, current = 10, max = 15))
+      val viewModel =
+        WatchViewModel(
+          Application(),
+          FakeAudioCapture(),
+          FakePhoneRelay(),
+          UnavailableTestSpeechDictation,
+          FakeWatchAudioPlayback(),
+          volume,
+        )
+
+      assertTrue(viewModel.onRotaryVolumeDelta(48f))
+      runCurrent()
+
+      assertEquals(listOf(1), volume.adjustments)
+      assertEquals("Media volume", viewModel.volumeOverlay.value.title)
+      assertEquals("73%", viewModel.volumeOverlay.value.value)
+      assertEquals("11 / 15", viewModel.volumeOverlay.value.detail)
+
+      advanceTimeBy(1_201)
+      runCurrent()
+      assertFalse(viewModel.volumeOverlay.value.visible)
+    }
+
+  @Test
+  fun `media mode rotary shows unavailable overlay when volume cannot change`() =
+    runTest(dispatcher) {
+      val viewModel =
+        WatchViewModel(
+          Application(),
+          FakeAudioCapture(),
+          FakePhoneRelay(),
+          UnavailableTestSpeechDictation,
+          FakeWatchAudioPlayback(),
+          FakeMediaVolumeController(state = null),
+        )
+
+      assertFalse(viewModel.onRotaryVolumeDelta(47f))
+      assertFalse(viewModel.onRotaryVolumeDelta(1f))
+      runCurrent()
+
+      assertEquals("Media volume unavailable", viewModel.volumeOverlay.value.title)
+      assertEquals("", viewModel.volumeOverlay.value.value)
+    }
+
+  @Test
+  fun `gain mode rotary changes persisted gain and overlays new gain`() =
+    runTest(dispatcher) {
+      val app = RuntimeEnvironment.getApplication()
+      clearWatchSettings(app)
+      val viewModel =
+        WatchViewModel(
+          app,
+          FakeAudioCapture(),
+          FakePhoneRelay(),
+          UnavailableTestSpeechDictation,
+          FakeWatchAudioPlayback(),
+          FakeMediaVolumeController(),
+        )
+
+      viewModel.setRotaryControlMode(ROTARY_CONTROL_MODE_TTS_GAIN)
+      assertTrue(viewModel.onRotaryVolumeDelta(48f))
+      runCurrent()
+      val secondViewModel = WatchViewModel(app, FakeAudioCapture(), FakePhoneRelay())
+
+      assertEquals(1.6, viewModel.ttsPlaybackGain.value, 0.0)
+      assertEquals(1.6, secondViewModel.ttsPlaybackGain.value, 0.0)
+      assertEquals("TTS gain", viewModel.volumeOverlay.value.title)
+      assertEquals("1.6x", viewModel.volumeOverlay.value.value)
+      assertEquals("Default 1.5x", viewModel.volumeOverlay.value.detail)
+    }
+
+  @Test
+  fun `gain mode rotary reports no adjustment at clamp boundary`() =
+    runTest(dispatcher) {
+      val app = RuntimeEnvironment.getApplication()
+      clearWatchSettings(app).edit().putLong("tts_playback_gain", MAX_TTS_PLAYBACK_GAIN.toRawBits()).commit()
+      val viewModel =
+        WatchViewModel(
+          app,
+          FakeAudioCapture(),
+          FakePhoneRelay(),
+          UnavailableTestSpeechDictation,
+          FakeWatchAudioPlayback(),
+          FakeMediaVolumeController(),
+        )
+
+      viewModel.setRotaryControlMode(ROTARY_CONTROL_MODE_TTS_GAIN)
+      assertFalse(viewModel.onRotaryVolumeDelta(48f))
+      runCurrent()
+
+      assertEquals(MAX_TTS_PLAYBACK_GAIN, viewModel.ttsPlaybackGain.value, 0.0)
+      assertEquals("TTS gain", viewModel.volumeOverlay.value.title)
+      assertEquals("4.0x", viewModel.volumeOverlay.value.value)
+    }
+
+  @Test
   fun `transient dictation error does not submit truncated partial`() =
     runTest(dispatcher) {
       val capture = FakeAudioCapture()
@@ -541,6 +707,11 @@ class WatchViewModelTest {
     )
 }
 
+private fun clearWatchSettings(app: Application) =
+  app
+    .getSharedPreferences("openclaw.watch.settings", Application.MODE_PRIVATE)
+    .also { prefs -> prefs.edit().clear().commit() }
+
 private class FakeAudioCapture : WearAudioCapture {
   var endpointingConfig: AudioEndpointingConfig? = null
   var endpointCallback: ((AudioEndpointEvent.Endpoint) -> Unit)? = null
@@ -665,5 +836,61 @@ private class FakeSpeechDictation(
 
   fun emit(event: SpeechDictationEvent) {
     onEvent?.invoke(event)
+  }
+}
+
+private object UnavailableTestSpeechDictation : WatchSpeechDictation {
+  override fun isAvailable(): Boolean = false
+
+  override fun start(onEvent: (SpeechDictationEvent) -> Unit): Boolean = false
+
+  override fun stopListening() {}
+
+  override fun cancel() {}
+
+  override fun destroy() {}
+}
+
+private class FakeWatchAudioPlayback : WatchAudioPlayback {
+  val playedPcm24k = mutableListOf<ByteArray>()
+  val playedPcm48k = mutableListOf<ByteArray>()
+  var stopCount = 0
+
+  override fun play(
+    pcmBytes: ByteArray,
+    onComplete: () -> Unit,
+    onError: () -> Unit,
+    debugTurnId: String?,
+  ) {
+    playedPcm24k += pcmBytes
+  }
+
+  override fun playPcm48k(
+    pcmBytes: ByteArray,
+    onComplete: () -> Unit,
+    onError: () -> Unit,
+    debugTurnId: String?,
+  ) {
+    playedPcm48k += pcmBytes
+  }
+
+  override fun stop() {
+    stopCount++
+  }
+}
+
+private class FakeMediaVolumeController(
+  private var state: MediaVolumeState? = MediaVolumeState(min = 0, current = 7, max = 15),
+) : MediaVolumeController {
+  val adjustments = mutableListOf<Int>()
+
+  override fun readState(): MediaVolumeState? = state
+
+  override fun adjustBy(steps: Int): MediaVolumeState? {
+    adjustments += steps
+    val currentState = state ?: return null
+    val updated = currentState.copy(current = (currentState.current + steps).coerceIn(currentState.min, currentState.max))
+    state = updated
+    return updated
   }
 }

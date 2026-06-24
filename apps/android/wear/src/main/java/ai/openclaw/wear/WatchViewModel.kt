@@ -19,7 +19,10 @@ import ai.openclaw.wear.speech.DictationErrorKind
 import ai.openclaw.wear.speech.SpeechDictationEvent
 import ai.openclaw.wear.speech.WatchSpeechDictation
 import android.app.Application
+import android.content.Context
 import android.content.SharedPreferences
+import android.media.AudioManager
+import android.os.Build
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -32,11 +35,35 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
-internal const val FINAL_TTS_PLAYBACK_GAIN = 1.5
+internal const val DEFAULT_FINAL_TTS_PLAYBACK_GAIN = 1.5
+internal const val MIN_TTS_PLAYBACK_GAIN = 0.5
+internal const val MAX_TTS_PLAYBACK_GAIN = 4.0
+internal const val TTS_PLAYBACK_GAIN_STEP = 0.1
+internal const val ROTARY_CONTROL_MODE_MEDIA_VOLUME = "media_volume"
+internal const val ROTARY_CONTROL_MODE_TTS_GAIN = "tts_gain"
 
-internal fun applyFinalTtsPlaybackGain(pcm: ByteArray): ByteArray = PcmAudio.applyPcm16VolumeGain(pcm, FINAL_TTS_PLAYBACK_GAIN)
+internal fun applyFinalTtsPlaybackGain(
+  pcm: ByteArray,
+  gain: Double,
+): ByteArray = PcmAudio.applyPcm16VolumeGain(pcm, gain)
+
+internal fun clampTtsPlaybackGain(gain: Double): Double =
+  gain
+    .takeIf { it.isFinite() }
+    ?.coerceIn(MIN_TTS_PLAYBACK_GAIN, MAX_TTS_PLAYBACK_GAIN)
+    ?: DEFAULT_FINAL_TTS_PLAYBACK_GAIN
+
+internal fun adjustTtsPlaybackGain(
+  gain: Double,
+  steps: Int,
+): Double {
+  val stepped = ((gain + steps * TTS_PLAYBACK_GAIN_STEP) * 10.0).roundToInt() / 10.0
+  return clampTtsPlaybackGain(stepped)
+}
 
 internal fun peakAbsPcm16(pcm: ByteArray): Int {
   var peak = 0
@@ -45,6 +72,118 @@ internal fun peakAbsPcm16(pcm: ByteArray): Int {
     peak = maxOf(peak, abs(PcmAudio.readPcm16Sample(pcm, offset).toLong()).coerceAtMost(Short.MAX_VALUE.toLong()).toInt())
   }
   return peak
+}
+
+data class VolumeOverlayState(
+  val visible: Boolean = false,
+  val title: String = "",
+  val value: String = "",
+  val detail: String = "",
+)
+
+internal data class MediaVolumeState(
+  val min: Int,
+  val current: Int,
+  val max: Int,
+) {
+  val percent: Int
+    get() {
+      val range = max - min
+      if (range <= 0) return 0
+      return (((current - min).toDouble() / range) * 100.0).roundToInt().coerceIn(0, 100)
+    }
+}
+
+internal interface MediaVolumeController {
+  fun readState(): MediaVolumeState?
+
+  fun adjustBy(steps: Int): MediaVolumeState?
+}
+
+private class AndroidMediaVolumeController(context: Context) : MediaVolumeController {
+  private val context = context
+
+  private fun audioManager(): AudioManager? =
+    runCatching { context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager }.getOrNull()
+
+  override fun readState(): MediaVolumeState? {
+    val manager = audioManager() ?: return null
+    if (manager.isVolumeFixed) return null
+    val max = manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+    val min = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) manager.getStreamMinVolume(AudioManager.STREAM_MUSIC) else 0
+    val current = manager.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(min, max)
+    if (max <= min) return null
+    return MediaVolumeState(min = min, current = current, max = max)
+  }
+
+  override fun adjustBy(steps: Int): MediaVolumeState? {
+    val manager = audioManager() ?: return null
+    val state = readState() ?: return null
+    val target = (state.current + steps).coerceIn(state.min, state.max)
+    manager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+    return readState() ?: state.copy(current = target)
+  }
+}
+
+internal interface WatchAudioPlayback {
+  fun play(
+    pcmBytes: ByteArray,
+    onComplete: () -> Unit,
+    onError: () -> Unit = onComplete,
+    debugTurnId: String? = null,
+  )
+
+  fun playPcm48k(
+    pcmBytes: ByteArray,
+    onComplete: () -> Unit,
+    onError: () -> Unit = onComplete,
+    debugTurnId: String? = null,
+  )
+
+  fun stop()
+}
+
+private class AudioPlayerPlayback(
+  context: Context,
+  scope: kotlinx.coroutines.CoroutineScope,
+) : WatchAudioPlayback {
+  private val player = AudioPlayer(context, scope)
+
+  override fun play(
+    pcmBytes: ByteArray,
+    onComplete: () -> Unit,
+    onError: () -> Unit,
+    debugTurnId: String?,
+  ) = player.play(pcmBytes, onComplete = onComplete, onError = onError, debugTurnId = debugTurnId)
+
+  override fun playPcm48k(
+    pcmBytes: ByteArray,
+    onComplete: () -> Unit,
+    onError: () -> Unit,
+    debugTurnId: String?,
+  ) = player.playPcm48k(pcmBytes, onComplete = onComplete, onError = onError, debugTurnId = debugTurnId)
+
+  override fun stop() = player.stop()
+}
+
+internal class RotaryStepAccumulator(
+  private val pixelsPerStep: Float = 48f,
+  private val maxStepsPerEvent: Int = 3,
+) {
+  private var remainder = 0f
+
+  fun consume(verticalScrollPixels: Float): Int {
+    remainder += verticalScrollPixels
+    val rawSteps = (remainder / pixelsPerStep).toInt()
+    if (rawSteps == 0) return 0
+    val steps = rawSteps.coerceIn(-maxStepsPerEvent, maxStepsPerEvent)
+    remainder -= steps * pixelsPerStep
+    return steps
+  }
+
+  fun reset() {
+    remainder = 0f
+  }
 }
 
 class WatchViewModel private constructor(
@@ -66,6 +205,15 @@ class WatchViewModel private constructor(
     speechDictation: WatchSpeechDictation,
   ) : this(app, Dependencies(audioCapture, relayClient, speechDictation))
 
+  internal constructor(
+    app: Application,
+    audioCapture: WearAudioCapture,
+    relayClient: WearPhoneRelay,
+    speechDictation: WatchSpeechDictation,
+    audioPlayer: WatchAudioPlayback,
+    mediaVolumeController: MediaVolumeController,
+  ) : this(app, Dependencies(audioCapture, relayClient, speechDictation, audioPlayer, mediaVolumeController))
+
   companion object {
     private const val TAG = WatchApp.TAG
     private const val DEBUG_TURN_TAG = "OpenClawWearDebugTurn"
@@ -77,8 +225,11 @@ class WatchViewModel private constructor(
     // stay unchanged on the wire while the watch speaker gets local loudness
     // compensation across PCM, MP3, and Ogg/Opus responses.
     private const val PROCESSING_TURN_TIMEOUT_MS = 180_000L
+    private const val VOLUME_OVERLAY_HIDE_MS = 1_200L
     private const val SETTINGS_PREFS_NAME = "openclaw.watch.settings"
     private const val PREF_AGENT_REASONING_LEVEL = "agent_reasoning_level"
+    private const val PREF_ROTARY_CONTROL_MODE = "rotary_control_mode"
+    internal const val PREF_TTS_PLAYBACK_GAIN = "tts_playback_gain"
     internal val DEFAULT_ENDPOINTING_CONFIG = AudioEndpointingConfig(endSilenceMs = 1_200)
     private val ALLOWED_DEBUG_STATES = setOf(WatchState.Idle, WatchState.CheckingPhone)
   }
@@ -123,9 +274,16 @@ class WatchViewModel private constructor(
     runCatching { app.getSharedPreferences(SETTINGS_PREFS_NAME, Application.MODE_PRIVATE) }.getOrNull()
   private val _reasoningLevel = MutableStateFlow(WearReasoningLevel.normalize(settingsPrefs?.getString(PREF_AGENT_REASONING_LEVEL, null)))
   val reasoningLevel: StateFlow<String> = _reasoningLevel
+  private val _rotaryControlMode = MutableStateFlow(normalizeRotaryControlMode(settingsPrefs?.getString(PREF_ROTARY_CONTROL_MODE, null)))
+  val rotaryControlMode: StateFlow<String> = _rotaryControlMode
+  private val _ttsPlaybackGain = MutableStateFlow(readPersistedTtsPlaybackGain(settingsPrefs))
+  val ttsPlaybackGain: StateFlow<Double> = _ttsPlaybackGain
+  private val _volumeOverlay = MutableStateFlow(VolumeOverlayState())
+  val volumeOverlay: StateFlow<VolumeOverlayState> = _volumeOverlay
 
   private val audioCapture: WearAudioCapture = dependencies?.audioCapture ?: AudioCapture(app, viewModelScope)
-  private val audioPlayer = AudioPlayer(app, viewModelScope)
+  private val audioPlayer: WatchAudioPlayback = dependencies?.audioPlayer ?: AudioPlayerPlayback(app, viewModelScope)
+  private val mediaVolumeController: MediaVolumeController = dependencies?.mediaVolumeController ?: AndroidMediaVolumeController(app)
   private val compressedAudioDecoder = CompressedAudioDecoder()
   private val relayClient: WearPhoneRelay = dependencies?.relayClient ?: PhoneRelayClient(app, viewModelScope)
   private val speechDictation: WatchSpeechDictation = dependencies?.speechDictation ?: AndroidSpeechDictation(app)
@@ -138,6 +296,8 @@ class WatchViewModel private constructor(
   private var processingWatchdogJob: Job? = null
   private var assistantStartJob: Job? = null
   private var compressedDecodeJob: Job? = null
+  private var volumeOverlayJob: Job? = null
+  private val rotaryAccumulator = RotaryStepAccumulator()
 
   private fun cancelAssistantStartJob() {
     assistantStartJob?.cancel()
@@ -233,6 +393,22 @@ class WatchViewModel private constructor(
     val normalized = WearReasoningLevel.normalize(level)
     _reasoningLevel.value = normalized
     settingsPrefs?.edit()?.putString(PREF_AGENT_REASONING_LEVEL, normalized)?.apply()
+  }
+
+  fun setRotaryControlMode(mode: String) {
+    val normalized = normalizeRotaryControlMode(mode)
+    rotaryAccumulator.reset()
+    _rotaryControlMode.value = normalized
+    settingsPrefs?.edit()?.putString(PREF_ROTARY_CONTROL_MODE, normalized)?.apply()
+  }
+
+  fun onRotaryVolumeDelta(verticalScrollPixels: Float): Boolean {
+    val steps = rotaryAccumulator.consume(verticalScrollPixels)
+    if (steps == 0) return false
+    return when (_rotaryControlMode.value) {
+      ROTARY_CONTROL_MODE_TTS_GAIN -> adjustTtsGainBy(steps)
+      else -> adjustMediaVolumeBy(steps)
+    }
   }
 
   fun onMicButtonDown() {
@@ -565,12 +741,69 @@ class WatchViewModel private constructor(
     pcm: ByteArray,
     format: String,
   ): ByteArray {
-    val boosted = applyFinalTtsPlaybackGain(pcm)
+    val gain = readCurrentTtsPlaybackGain()
+    val boosted = applyFinalTtsPlaybackGain(pcm, gain)
     Log.d(
       DEBUG_TURN_TAG,
-      "final tts playback gain format=$format gain=$FINAL_TTS_PLAYBACK_GAIN bytes=${pcm.size} peakBefore=${peakAbsPcm16(pcm)} peakAfter=${peakAbsPcm16(boosted)}",
+      "final tts playback gain format=$format gain=$gain bytes=${pcm.size} peakBefore=${peakAbsPcm16(pcm)} peakAfter=${peakAbsPcm16(boosted)}",
     )
     return boosted
+  }
+
+  private fun adjustMediaVolumeBy(steps: Int): Boolean {
+    val volume = mediaVolumeController.adjustBy(steps)
+    if (volume == null) {
+      showVolumeOverlay(VolumeOverlayState(visible = true, title = "Media volume unavailable"))
+      return false
+    }
+    showVolumeOverlay(
+      VolumeOverlayState(
+        visible = true,
+        title = "Media volume",
+        value = "${volume.percent}%",
+        detail = "${volume.current} / ${volume.max}",
+      ),
+    )
+    return true
+  }
+
+  private fun adjustTtsGainBy(steps: Int): Boolean {
+    val current = readCurrentTtsPlaybackGain()
+    val adjusted = adjustTtsPlaybackGain(current, steps)
+    persistTtsPlaybackGain(adjusted)
+    showVolumeOverlay(
+      VolumeOverlayState(
+        visible = true,
+        title = "TTS gain",
+        value = formatTtsPlaybackGain(adjusted),
+        detail = "Default ${formatTtsPlaybackGain(DEFAULT_FINAL_TTS_PLAYBACK_GAIN)}",
+      ),
+    )
+    return adjusted != current
+  }
+
+  private fun showVolumeOverlay(overlay: VolumeOverlayState) {
+    _volumeOverlay.value = overlay
+    volumeOverlayJob?.cancel()
+    volumeOverlayJob =
+      viewModelScope.launch {
+        delay(VOLUME_OVERLAY_HIDE_MS)
+        if (_volumeOverlay.value == overlay) {
+          _volumeOverlay.value = VolumeOverlayState()
+        }
+      }
+  }
+
+  private fun readCurrentTtsPlaybackGain(): Double {
+    val gain = readPersistedTtsPlaybackGain(settingsPrefs)
+    _ttsPlaybackGain.value = gain
+    return gain
+  }
+
+  private fun persistTtsPlaybackGain(gain: Double) {
+    val clamped = clampTtsPlaybackGain(gain)
+    _ttsPlaybackGain.value = clamped
+    settingsPrefs?.edit()?.putLong(PREF_TTS_PLAYBACK_GAIN, clamped.toRawBits())?.apply()
   }
 
   private fun trackCompressedDecodeJob(decodeJob: Job) {
@@ -743,6 +976,33 @@ class WatchViewModel private constructor(
     val audioCapture: WearAudioCapture,
     val relayClient: WearPhoneRelay,
     val speechDictation: WatchSpeechDictation,
+    val audioPlayer: WatchAudioPlayback? = null,
+    val mediaVolumeController: MediaVolumeController? = null,
+  )
+}
+
+internal fun normalizeRotaryControlMode(mode: String?): String =
+  when (mode) {
+    ROTARY_CONTROL_MODE_TTS_GAIN -> ROTARY_CONTROL_MODE_TTS_GAIN
+    else -> ROTARY_CONTROL_MODE_MEDIA_VOLUME
+  }
+
+internal fun formatTtsPlaybackGain(gain: Double): String = String.format(Locale.US, "%.1fx", clampTtsPlaybackGain(gain))
+
+private fun readPersistedTtsPlaybackGain(settingsPrefs: SharedPreferences?): Double {
+  val value =
+    settingsPrefs
+      ?.all
+      ?.get(WatchViewModel.PREF_TTS_PLAYBACK_GAIN)
+      ?: return DEFAULT_FINAL_TTS_PLAYBACK_GAIN
+  return clampTtsPlaybackGain(
+    when (value) {
+      is Long -> Double.fromBits(value)
+      is Float -> value.toDouble()
+      is String -> value.toDoubleOrNull() ?: DEFAULT_FINAL_TTS_PLAYBACK_GAIN
+      is Int -> value.toDouble()
+      else -> DEFAULT_FINAL_TTS_PLAYBACK_GAIN
+    },
   )
 }
 
