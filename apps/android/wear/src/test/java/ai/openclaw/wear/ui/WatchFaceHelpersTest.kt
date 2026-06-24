@@ -1,11 +1,15 @@
 package ai.openclaw.wear.ui
 
 import ai.openclaw.common.wear.WearReasoningLevel
+import ai.openclaw.wear.ROTARY_CONTROL_MODE_MEDIA_VOLUME
+import ai.openclaw.wear.ROTARY_CONTROL_MODE_TTS_GAIN
+import ai.openclaw.wear.RotaryStepAccumulator
 import ai.openclaw.wear.WatchViewModel
 import ai.openclaw.wear.ambient.AmbientDetails
 import ai.openclaw.wear.ambient.enterAmbientDetails
 import ai.openclaw.wear.ambient.exitAmbientDetails
 import ai.openclaw.wear.ambient.withAmbientTickUpdate
+import ai.openclaw.wear.formatTtsPlaybackGain
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -77,6 +81,37 @@ class WatchFaceHelpersTest {
     assertEquals(true, isSelectedReasoningLevel("HIGH", WearReasoningLevel.HIGH))
     assertEquals(false, isSelectedReasoningLevel(WearReasoningLevel.LOW, WearReasoningLevel.HIGH))
     assertEquals(true, isSelectedReasoningLevel("invalid", WearReasoningLevel.LOW))
+  }
+
+  @Test
+  fun `rotary control labels match settings chips`() {
+    assertEquals("Media", rotaryControlModeLabel(ROTARY_CONTROL_MODE_MEDIA_VOLUME))
+    assertEquals("TTS gain", rotaryControlModeLabel(ROTARY_CONTROL_MODE_TTS_GAIN))
+    assertEquals("Media", rotaryControlModeLabel("invalid"))
+  }
+
+  @Test
+  fun `rotary selected-state compares current mode`() {
+    assertEquals(true, isSelectedRotaryControlMode(ROTARY_CONTROL_MODE_MEDIA_VOLUME, ROTARY_CONTROL_MODE_MEDIA_VOLUME))
+    assertEquals(false, isSelectedRotaryControlMode(ROTARY_CONTROL_MODE_MEDIA_VOLUME, ROTARY_CONTROL_MODE_TTS_GAIN))
+  }
+
+  @Test
+  fun `tts gain formatting uses one decimal`() {
+    assertEquals("1.5x", formatTtsPlaybackGain(1.5))
+    assertEquals("4.0x", formatTtsPlaybackGain(9.0))
+    assertEquals("0.5x", formatTtsPlaybackGain(0.1))
+  }
+
+  @Test
+  fun `rotary accumulator thresholds deltas and caps each event`() {
+    val accumulator = RotaryStepAccumulator()
+
+    assertEquals(0, accumulator.consume(47f))
+    assertEquals(1, accumulator.consume(1f))
+    assertEquals(3, accumulator.consume(240f))
+    assertEquals(2, accumulator.consume(0f))
+    assertEquals(-1, accumulator.consume(-48f))
   }
 
   @Test

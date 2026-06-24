@@ -1,9 +1,19 @@
 package ai.openclaw.wear.ui
 
 import ai.openclaw.common.wear.WearReasoningLevel
+import ai.openclaw.wear.ROTARY_CONTROL_MODE_MEDIA_VOLUME
+import ai.openclaw.wear.ROTARY_CONTROL_MODE_TTS_GAIN
+import ai.openclaw.wear.VolumeOverlayState
 import ai.openclaw.wear.WatchViewModel
+import ai.openclaw.wear.formatTtsPlaybackGain
 import ai.openclaw.wear.ambient.AmbientDetails
+import android.view.HapticFeedbackConstants
+import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,11 +24,19 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -63,27 +81,58 @@ fun WatchFace(
   }
 
   val pagerState = rememberPagerState(pageCount = { 2 })
-  HorizontalPager(
-    state = pagerState,
+  val mainFocusRequester = remember { FocusRequester() }
+  val settingsFocusRequester = remember { FocusRequester() }
+  LaunchedEffect(pagerState.currentPage) {
+    when (pagerState.currentPage) {
+      0 -> mainFocusRequester.requestFocus()
+      else -> settingsFocusRequester.requestFocus()
+    }
+  }
+  Box(
     modifier = Modifier.fillMaxSize(),
-  ) { page ->
-    Column(
-      modifier = Modifier.fillMaxSize().padding(16.dp),
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.Center,
-    ) {
+  ) {
+    HorizontalPager(
+      state = pagerState,
+      modifier = Modifier.fillMaxSize(),
+    ) { page ->
       when (page) {
-        0 ->
-          InteractiveWatchFace(
+        0 -> {
+          val view = LocalView.current
+          Column(
+            modifier =
+              Modifier
+                .fillMaxSize()
+                .focusRequester(mainFocusRequester)
+                .onRotaryScrollEvent { event ->
+                  if (viewModel.onRotaryVolumeDelta(event.verticalScrollPixels)) {
+                    view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                  }
+                  true
+                }
+                .focusable()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+          ) {
+            InteractiveWatchFace(
+              viewModel = viewModel,
+              onRequestMicPermission = onRequestMicPermission,
+              assistantRoleAvailable = assistantRoleAvailable,
+              assistantRoleHeld = assistantRoleHeld,
+              onRequestAssistantRole = onRequestAssistantRole,
+            )
+          }
+        }
+        else ->
+          WatchSettingsPage(
             viewModel = viewModel,
-            onRequestMicPermission = onRequestMicPermission,
-            assistantRoleAvailable = assistantRoleAvailable,
-            assistantRoleHeld = assistantRoleHeld,
-            onRequestAssistantRole = onRequestAssistantRole,
+            focusRequester = settingsFocusRequester,
           )
-        else -> WatchSettingsPage(viewModel = viewModel)
       }
     }
+    val overlay by viewModel.volumeOverlay.collectAsState()
+    VolumeOverlay(overlay = overlay, modifier = Modifier.align(Alignment.Center))
   }
 }
 
@@ -190,26 +239,81 @@ internal fun isSelectedReasoningLevel(
   optionLevel: String,
 ): Boolean = WearReasoningLevel.normalize(currentLevel) == WearReasoningLevel.normalize(optionLevel)
 
+internal fun rotaryControlModeLabel(mode: String): String =
+  when (mode) {
+    ROTARY_CONTROL_MODE_TTS_GAIN -> "TTS gain"
+    else -> "Media"
+  }
+
+internal fun isSelectedRotaryControlMode(
+  currentMode: String,
+  optionMode: String,
+): Boolean = currentMode == optionMode
+
 @Composable
-private fun WatchSettingsPage(viewModel: WatchViewModel) {
+private fun WatchSettingsPage(
+  viewModel: WatchViewModel,
+  focusRequester: FocusRequester,
+) {
   val currentLevel by viewModel.reasoningLevel.collectAsState()
-  Text(
-    text = "Reasoning",
-    style = MaterialTheme.typography.caption1,
-    textAlign = TextAlign.Center,
-  )
-  Spacer(modifier = Modifier.height(6.dp))
-  WearReasoningLevel.OPTIONS.chunked(2).forEach { rowOptions ->
+  val rotaryControlMode by viewModel.rotaryControlMode.collectAsState()
+  val ttsPlaybackGain by viewModel.ttsPlaybackGain.collectAsState()
+  val scrollState = rememberScrollState()
+  Column(
+    modifier =
+      Modifier
+        .fillMaxSize()
+        .focusRequester(focusRequester)
+        .onRotaryScrollEvent { event ->
+          scrollState.dispatchRawDelta(event.verticalScrollPixels)
+          true
+        }
+        .focusable()
+        .verticalScroll(scrollState)
+        .padding(horizontal = 16.dp, vertical = 12.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+  ) {
+    Text(
+      text = "Reasoning",
+      style = MaterialTheme.typography.caption1,
+      textAlign = TextAlign.Center,
+    )
+    Spacer(modifier = Modifier.height(6.dp))
+    WearReasoningLevel.OPTIONS.chunked(2).forEach { rowOptions ->
+      Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        rowOptions.forEach { option ->
+          ReasoningOptionChip(
+            label = reasoningLevelLabel(option),
+            selected = isSelectedReasoningLevel(currentLevel, option),
+            onClick = { viewModel.setReasoningLevel(option) },
+          )
+        }
+      }
+      Spacer(modifier = Modifier.height(4.dp))
+    }
+    Spacer(modifier = Modifier.height(6.dp))
+    Text(
+      text = "Ring control",
+      style = MaterialTheme.typography.caption1,
+      textAlign = TextAlign.Center,
+    )
+    Spacer(modifier = Modifier.height(6.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-      rowOptions.forEach { option ->
+      listOf(ROTARY_CONTROL_MODE_MEDIA_VOLUME, ROTARY_CONTROL_MODE_TTS_GAIN).forEach { mode ->
         ReasoningOptionChip(
-          label = reasoningLevelLabel(option),
-          selected = isSelectedReasoningLevel(currentLevel, option),
-          onClick = { viewModel.setReasoningLevel(option) },
+          label = rotaryControlModeLabel(mode),
+          selected = isSelectedRotaryControlMode(rotaryControlMode, mode),
+          onClick = { viewModel.setRotaryControlMode(mode) },
         )
       }
     }
     Spacer(modifier = Modifier.height(4.dp))
+    Text(
+      text = formatTtsPlaybackGain(ttsPlaybackGain),
+      style = MaterialTheme.typography.caption2,
+      textAlign = TextAlign.Center,
+      color = MaterialTheme.colors.onSurface.copy(alpha = 0.7f),
+    )
   }
 }
 
@@ -304,6 +408,53 @@ private fun StatusText(text: String) {
     style = MaterialTheme.typography.caption2,
     textAlign = TextAlign.Center,
   )
+}
+
+@Composable
+private fun VolumeOverlay(
+  overlay: VolumeOverlayState,
+  modifier: Modifier = Modifier,
+) {
+  if (!overlay.visible) return
+  Box(
+    modifier =
+      modifier
+        .size(128.dp)
+        .background(MaterialTheme.colors.surface.copy(alpha = 0.92f), CircleShape)
+        .padding(14.dp),
+    contentAlignment = Alignment.Center,
+  ) {
+    Column(
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
+    ) {
+      Text(
+        text = overlay.title,
+        style = MaterialTheme.typography.caption2,
+        textAlign = TextAlign.Center,
+        color = MaterialTheme.colors.onSurface,
+      )
+      if (overlay.value.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+          text = overlay.value,
+          style = MaterialTheme.typography.title2,
+          textAlign = TextAlign.Center,
+          color = MaterialTheme.colors.secondary,
+        )
+      }
+      if (overlay.detail.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+          text = overlay.detail,
+          style = MaterialTheme.typography.caption2,
+          textAlign = TextAlign.Center,
+          color = MaterialTheme.colors.onSurface,
+          modifier = Modifier.alpha(0.72f),
+        )
+      }
+    }
+  }
 }
 
 @Composable
