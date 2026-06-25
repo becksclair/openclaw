@@ -1100,6 +1100,28 @@ Rebase notes:
 - After Docker build/test proof passes, deploy or restart the live Gateway only when explicitly requested and only after noting any live-session risk.
 - Keep Bex-owned custom extensions separate: push and install those repos when the replay depends on them, but do not push, fork, or republish third-party plugins unless Bex explicitly asks for that plugin.
 
+### Systemd EnvironmentFile shell-safe value quoting
+
+Carry behavior: the generated systemd `EnvironmentFile` single-quotes any value outside a conservative shell-safe set (`SHELL_SAFE_ENV_VALUE = /^[A-Za-z0-9_./:@%+=,-]*$/`) so the file stays safe to `source` in a POSIX shell and so an operator's manual quoting survives re-stage. systemd's own `EnvironmentFile` parser preserves unquoted internal spaces, so this is a shell-safety + operator-intent guarantee, not a systemd-correctness fix. Both systemd and OpenClaw's `parseEnvironmentFileLine` reader strip the surrounding single quotes, so the round-trip value is unchanged. Plain values (ports, JWT-only tokens, `-`/`_`/`.` keys) stay unquoted, so byte output for existing files is unchanged.
+
+Primary seam files:
+
+- `src/daemon/systemd.ts`
+- `src/daemon/systemd.test.ts`
+
+Primary seam tests:
+
+- `node scripts/run-vitest.mjs src/daemon/systemd.test.ts`
+
+Rebase notes:
+
+- Quoting is write-side only: the `quoteSystemdEnvFileValue` helper sits directly above `writeSystemdGatewayEnvironmentFile`, and the wrapper is applied at the `${key}=${quoteSystemdEnvFileValue(value)}` content build. If upstream rewrites that `${key}=${value}` join, re-apply the wrapper there.
+- Do not add a reader-side decode. `parseEnvironmentFileLine` already strips both `'...'` and `"..."`; it is shared with the unit `Environment=` read path, so leave it untouched.
+- Keep the helper local to `systemd.ts`; do not unify it with `shellQuoteArg` (`service-layout.ts`) or `shellSingleQuote` (`launchd.ts`) unless upstream introduces a shared env-quoting utility. A single-file seam rebases cleanly.
+- Keys are never quoted (validated via `normalizeSystemdEnvironmentKey`).
+- A literal single quote in a value does not round-trip through `parseEnvironmentFileLine` (it does not decode `'\''`); acceptable because real tokens/keys/secrets do not contain single quotes.
+- The `#88274` operator-secret test now expects the literal-`$` value single-quoted (`LOWERCASE_LITERAL_API_KEY='$ecret123'`); the value is still preserved, just shell-safe.
+
 ## Narrow validation set
 
 - `pnpm test src/plugins/bundled-plugin-metadata.test.ts test/scripts/tracked-bundled-plugin-dirs.test.ts`
