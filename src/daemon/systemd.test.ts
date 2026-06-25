@@ -1205,6 +1205,66 @@ describe("stageSystemdService", () => {
     });
   });
 
+  it("single-quotes env-file values that contain whitespace", async () => {
+    await withStageFixture(async ({ env, stateDir, unitPath, envFilePath }) => {
+      await fs.writeFile(
+        path.join(stateDir, ".env"),
+        "PROXY_AUTHORIZATION=Bearer abc123\n",
+        "utf8",
+      );
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          PROXY_AUTHORIZATION: "Bearer abc123",
+          OPENCLAW_GATEWAY_PORT: "18789",
+        },
+      });
+
+      const [unit, envFile] = await Promise.all([
+        fs.readFile(unitPath, "utf8"),
+        fs.readFile(envFilePath, "utf8"),
+      ]);
+
+      // Space-containing value is single-quoted so the file stays safe to `source` in a shell.
+      expect(envFile).toBe("PROXY_AUTHORIZATION='Bearer abc123'\n");
+      expect(unit).toContain(`EnvironmentFile=-${envFilePath}`);
+      expect(unit).not.toContain("Bearer abc123");
+    });
+  });
+
+  it("preserves an operator's manually quoted env-file value across re-stage", async () => {
+    await withStageFixture(async ({ env, envFilePath }) => {
+      // Operator hand-added a space-containing secret and quoted it for shell safety.
+      await fs.writeFile(envFilePath, "PROXY_AUTHORIZATION='Bearer abc123'\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_GATEWAY_PORT: "18789",
+        },
+      });
+
+      // Re-stage round-trips the value through the reader and re-quotes it, instead of
+      // clobbering the operator's quotes back to a shell-unsafe raw line.
+      const envFile = await fs.readFile(envFilePath, "utf8");
+      expect(envFile).toBe("PROXY_AUTHORIZATION='Bearer abc123'\n");
+    });
+  });
+
   it("writes node file-backed managed values to the node env file instead of the unit", async () => {
     await withStageFixture(async ({ env, stateDir, unitPath, envFilePath, nodeEnvFilePath }) => {
       await fs.rm(stateDir, { recursive: true, force: true });
@@ -1633,7 +1693,8 @@ describe("stageSystemdService", () => {
       const envFile = await fs.readFile(envFilePath, "utf8");
       expect(envFile).toContain("ANTHROPIC_API_KEY=sk-ant-operator-secret");
       expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
-      expect(envFile).toContain("LOWERCASE_LITERAL_API_KEY=$ecret123");
+      // Literal $ is preserved but single-quoted so it cannot expand under shell `source`.
+      expect(envFile).toContain("LOWERCASE_LITERAL_API_KEY='$ecret123'");
       expect(envFile).not.toContain("LLM_API_KEY");
     });
   });

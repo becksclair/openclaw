@@ -914,6 +914,20 @@ async function writeSystemdUnit({
   return { unitPath, backedUp };
 }
 
+// systemd EnvironmentFile values are written raw. Single-quote anything outside this
+// shell-safe set so the file is safe to `source` in a POSIX shell and so an operator's manual
+// quoting survives re-stage. systemd's EnvironmentFile parser and our own
+// parseEnvironmentFileLine both strip the surrounding single quotes, so the round-trip value
+// is unchanged. A literal single quote cannot round-trip our reader (it does not decode '\''
+// escapes), but real tokens/keys/secrets do not contain single quotes.
+const SHELL_SAFE_ENV_VALUE = /^[A-Za-z0-9_./:@%+=,-]*$/;
+function quoteSystemdEnvFileValue(value: string): string {
+  if (SHELL_SAFE_ENV_VALUE.test(value)) {
+    return value;
+  }
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 async function writeSystemdGatewayEnvironmentFile(params: {
   stateDir: string;
   dotenvVars: Record<string, string>;
@@ -995,7 +1009,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   }
 
   const content = Object.entries(merged)
-    .map(([key, value]) => `${key}=${value}`)
+    .map(([key, value]) => `${key}=${quoteSystemdEnvFileValue(value)}`)
     .join("\n");
   await fs.mkdir(path.dirname(envFilePath), { recursive: true });
   await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
