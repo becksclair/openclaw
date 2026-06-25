@@ -847,7 +847,9 @@ function collectToolTelemetry(params: {
 
 function extractInternalSourceReplyPayload(params: {
   details: unknown;
-  result: AgentToolResult<unknown> | undefined;
+  // Forwarded only to filterToolResultMediaUrls (which accepts unknown); the sanitized raw
+  // result is typed unknown upstream, so widen here instead of asserting an AgentToolResult shape.
+  result: unknown;
   toolName: string;
 }): MessagingToolSourceReplyPayload | undefined {
   const { details } = params;

@@ -5,8 +5,8 @@ import ai.openclaw.wear.ROTARY_CONTROL_MODE_MEDIA_VOLUME
 import ai.openclaw.wear.ROTARY_CONTROL_MODE_TTS_GAIN
 import ai.openclaw.wear.VolumeOverlayState
 import ai.openclaw.wear.WatchViewModel
-import ai.openclaw.wear.formatTtsPlaybackGain
 import ai.openclaw.wear.ambient.AmbientDetails
+import ai.openclaw.wear.formatTtsPlaybackGain
 import android.os.SystemClock
 import android.view.HapticFeedbackConstants
 import androidx.activity.compose.BackHandler
@@ -30,8 +30,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -46,10 +44,12 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -76,11 +76,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.wear.compose.foundation.pager.HorizontalPager
 import androidx.wear.compose.foundation.pager.rememberPagerState
 import androidx.wear.compose.material.Chip
@@ -189,8 +189,7 @@ fun WatchFace(
                     view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                   }
                   true
-                }
-                .focusable()
+                }.focusable()
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
@@ -401,9 +400,9 @@ internal fun mainStatusMaxLines(
     3
   } else if (
     state == WatchViewModel.WatchState.Recording &&
-      statusText.isNotBlank() &&
-      statusText != "Listening..." &&
-      statusText != "Processing speech..."
+    statusText.isNotBlank() &&
+    statusText != "Listening..." &&
+    statusText != "Processing speech..."
   ) {
     2
   } else {
@@ -426,9 +425,9 @@ internal fun mainActionLabelMovesToTop(
 ): Boolean =
   if (
     state == WatchViewModel.WatchState.Recording &&
-      statusText.isNotBlank() &&
-      statusText != "Listening..." &&
-      statusText != "Processing speech..."
+    statusText.isNotBlank() &&
+    statusText != "Listening..." &&
+    statusText != "Processing speech..."
   ) {
     true
   } else {
@@ -469,7 +468,7 @@ private fun VoiceOrb(
       infiniteRepeatable(
         animation = tween(durationMillis = 1_800, easing = FastOutSlowInEasing),
         repeatMode = RepeatMode.Reverse,
-    ),
+      ),
     label = "orb-breathe",
   )
   val wobblePhase by breathing.animateFloat(
@@ -479,7 +478,7 @@ private fun VoiceOrb(
       infiniteRepeatable(
         animation = tween(durationMillis = 4_200, easing = LinearEasing),
         repeatMode = RepeatMode.Restart,
-    ),
+      ),
     label = "orb-wobble",
   )
   val ringPhase by breathing.animateFloat(
@@ -489,7 +488,7 @@ private fun VoiceOrb(
       infiniteRepeatable(
         animation = tween(durationMillis = 15_200, easing = LinearEasing),
         repeatMode = RepeatMode.Restart,
-    ),
+      ),
     label = "orb-rings",
   )
   val fireflyPhase by breathing.animateFloat(
@@ -499,7 +498,7 @@ private fun VoiceOrb(
       infiniteRepeatable(
         animation = tween(durationMillis = 18_000, easing = LinearEasing),
         repeatMode = RepeatMode.Restart,
-    ),
+      ),
     label = "orb-fireflies",
   )
   val basePulse =
@@ -521,7 +520,7 @@ private fun VoiceOrb(
     }
     if (
       energyPulse >= ORB_SPEECH_WAVE_THRESHOLD &&
-        now - lastSpeechWaveAtMillis >= ORB_SPEECH_WAVE_COOLDOWN_MS
+      now - lastSpeechWaveAtMillis >= ORB_SPEECH_WAVE_COOLDOWN_MS
     ) {
       speechWaves.add(
         OrbSpeechWave(
@@ -541,12 +540,13 @@ private fun VoiceOrb(
     val orbBasis = size.width.coerceAtMost(size.height * 0.89f)
     val radius = orbBasis * (0.27f + basePulse * 0.018f)
     val glowRadius = orbBasis * (0.72f + basePulse * 0.08f)
-    val wobblePath = orbWobblePath(
-      center = center,
-      radius = radius,
-      phase = wobblePhase,
-      intensity = 0.018f + basePulse * 0.018f,
-    )
+    val wobblePath =
+      orbWobblePath(
+        center = center,
+        radius = radius,
+        phase = wobblePhase,
+        intensity = 0.018f + basePulse * 0.018f,
+      )
     drawCircle(
       brush =
         Brush.radialGradient(
@@ -677,12 +677,13 @@ private fun DrawScope.drawOrbGlowStroke(
   basePulse: Float,
   errorTint: Boolean,
 ) {
-  val path = orbWobblePath(
-    center = Offset(center.x - radius * 0.07f, center.y + radius * 0.08f),
-    radius = radius,
-    phase = phase,
-    intensity = 0.018f + basePulse * 0.018f,
-  )
+  val path =
+    orbWobblePath(
+      center = Offset(center.x - radius * 0.07f, center.y + radius * 0.08f),
+      radius = radius,
+      phase = phase,
+      intensity = 0.018f + basePulse * 0.018f,
+    )
   val outerColor = if (errorTint) Color(0xFFFF9CB0) else Color(0xFF8CEFFF)
   val innerColor = if (errorTint) Color(0xFFFF557A) else Color(0xFF315CFF)
   drawPath(
@@ -795,12 +796,13 @@ private fun DrawScope.drawOrbSpeechHaloPulse(
   val plasmaCore = if (errorTint) Color(0xFFFFE1E8) else Color(0xFFE6FF78)
   val plasmaFog = if (errorTint) Color(0xFFFFC1CE) else Color(0xFF79FF68)
   val waveRadius = radius * (0.98f + progress * 1.42f)
-  val path = orbWobblePath(
-    center = center,
-    radius = waveRadius,
-    phase = progress,
-    intensity = 0.025f + wave.strength * 0.018f,
-  )
+  val path =
+    orbWobblePath(
+      center = center,
+      radius = waveRadius,
+      phase = progress,
+      intensity = 0.025f + wave.strength * 0.018f,
+    )
   drawCircle(
     brush =
       Brush.radialGradient(
@@ -857,16 +859,18 @@ private fun DrawScope.drawOrbSpeechFilaments(
   repeat(12) { index ->
     val seed = index + 1f
     val angle = seed * 2.17f + progress * 0.22f * if (index % 2 == 0) 1f else -1f
-    val cloudCenter = Offset(
-      x = center.x + cos(angle) * radius * (0.28f + progress * 0.46f + 0.08f * sin(seed)),
-      y = center.y + sin(angle + seed * 0.31f) * radius * (0.22f + progress * 0.36f),
-    )
+    val cloudCenter =
+      Offset(
+        x = center.x + cos(angle) * radius * (0.28f + progress * 0.46f + 0.08f * sin(seed)),
+        y = center.y + sin(angle + seed * 0.31f) * radius * (0.22f + progress * 0.36f),
+      )
     val cloudRadius = radius * (0.52f + progress * 0.42f + 0.08f * sin(seed * 1.8f))
-    val cloudColor = when (index % 4) {
-      0 -> accentColor
-      1 -> fogColor
-      else -> filamentColor
-    }
+    val cloudColor =
+      when (index % 4) {
+        0 -> accentColor
+        1 -> fogColor
+        else -> filamentColor
+      }
     drawCircle(
       brush =
         Brush.radialGradient(
@@ -891,26 +895,31 @@ private fun DrawScope.drawOrbSpeechFilaments(
     val midRadius = radius * (0.9f + progress * (0.68f + 0.14f * sin(seed * 2.1f)))
     val endRadius = radius * (1.14f + progress * (1.2f + 0.16f * sin(seed * 2.3f)))
     val curl = radius * (0.3f + 0.1f * cos(seed * 1.4f)) * (0.45f + progress * 0.7f)
-    val start = Offset(
-      x = center.x + cos(angle) * startRadius,
-      y = center.y + sin(angle) * startRadius,
-    )
-    val mid = Offset(
-      x = center.x + cos(angle + sin(seed) * 0.38f) * midRadius,
-      y = center.y + sin(angle + cos(seed) * 0.26f) * midRadius,
-    )
-    val end = Offset(
-      x = center.x + cos(angle + sin(seed) * 0.42f) * endRadius,
-      y = center.y + sin(angle + cos(seed) * 0.36f) * endRadius,
-    )
-    val controlOne = Offset(
-      x = center.x + cos(angle + 0.72f) * (radius + curl),
-      y = center.y + sin(angle + 0.72f) * (radius * 0.78f + curl),
-    )
-    val controlTwo = Offset(
-      x = center.x + cos(angle - 0.62f) * (endRadius - curl * 0.25f),
-      y = center.y + sin(angle - 0.62f) * (endRadius * 0.78f),
-    )
+    val start =
+      Offset(
+        x = center.x + cos(angle) * startRadius,
+        y = center.y + sin(angle) * startRadius,
+      )
+    val mid =
+      Offset(
+        x = center.x + cos(angle + sin(seed) * 0.38f) * midRadius,
+        y = center.y + sin(angle + cos(seed) * 0.26f) * midRadius,
+      )
+    val end =
+      Offset(
+        x = center.x + cos(angle + sin(seed) * 0.42f) * endRadius,
+        y = center.y + sin(angle + cos(seed) * 0.36f) * endRadius,
+      )
+    val controlOne =
+      Offset(
+        x = center.x + cos(angle + 0.72f) * (radius + curl),
+        y = center.y + sin(angle + 0.72f) * (radius * 0.78f + curl),
+      )
+    val controlTwo =
+      Offset(
+        x = center.x + cos(angle - 0.62f) * (endRadius - curl * 0.25f),
+        y = center.y + sin(angle - 0.62f) * (endRadius * 0.78f),
+      )
     val filamentPath =
       Path().apply {
         moveTo(start.x, start.y)
@@ -925,11 +934,12 @@ private fun DrawScope.drawOrbSpeechFilaments(
     )
     drawPath(
       path = filamentPath,
-      color = if (index % 3 == 0) {
-        accentColor.copy(alpha = filamentAlpha * 0.42f)
-      } else {
-        filamentColor.copy(alpha = filamentAlpha * 0.46f)
-      },
+      color =
+        if (index % 3 == 0) {
+          accentColor.copy(alpha = filamentAlpha * 0.42f)
+        } else {
+          filamentColor.copy(alpha = filamentAlpha * 0.46f)
+        },
       style = Stroke(width = (0.35f + 0.45f * (1f - progress)).dp.toPx(), cap = StrokeCap.Round),
     )
   }
@@ -937,17 +947,19 @@ private fun DrawScope.drawOrbSpeechFilaments(
     val seed = index + 3f
     val angle = seed * 2.399f + progress * 0.2f * if (index % 2 == 0) 1f else -1f
     val sparkleRadius = radius * (0.48f + progress * (1.45f + 0.18f * sin(seed)) + 0.28f * abs(sin(seed * 0.73f)))
-    val dotCenter = Offset(
-      x = center.x + cos(angle) * sparkleRadius,
-      y = center.y + sin(angle + cos(seed) * 0.18f) * sparkleRadius * (0.8f + 0.16f * sin(seed)),
-    )
+    val dotCenter =
+      Offset(
+        x = center.x + cos(angle) * sparkleRadius,
+        y = center.y + sin(angle + cos(seed) * 0.18f) * sparkleRadius * (0.8f + 0.16f * sin(seed)),
+      )
     val sparkleAlpha = (alpha * (0.12f + 0.1f * sin(seed * 1.9f + progress * TWO_PI))).coerceIn(0f, 0.18f)
     if (sparkleAlpha <= 0.008f) return@repeat
-    val sparkleColor = when (index % 5) {
-      0 -> accentColor
-      1 -> fogColor
-      else -> filamentColor
-    }
+    val sparkleColor =
+      when (index % 5) {
+        0 -> accentColor
+        1 -> fogColor
+        else -> filamentColor
+      }
     val sparkleSize = (0.62f + (index % 5) * 0.18f).dp.toPx()
     drawCircle(
       brush =
@@ -1125,9 +1137,11 @@ private fun WatchSettingsPage(
   var lastScrollValue by remember { mutableStateOf(scrollState.value) }
   val currentPane = paneStack.last()
   val canPopPane = paneStack.size > 1
+
   fun pushPane(pane: SettingsPane) {
     paneStack = paneStack + pane
   }
+
   fun popPane() {
     if (paneStack.size > 1) {
       paneStack = paneStack.dropLast(1)
@@ -1161,12 +1175,10 @@ private fun WatchSettingsPage(
         .settingsBackSwipe(
           enabled = canPopPane,
           onBack = ::popPane,
-        )
-        .onRotaryScrollEvent { event ->
+        ).onRotaryScrollEvent { event ->
           scrollState.dispatchRawDelta(event.verticalScrollPixels)
           true
-        }
-        .focusable(),
+        }.focusable(),
   ) {
     Column(
       modifier =
@@ -1252,11 +1264,14 @@ private fun SettingsScrollIndicator(
     val contentHeightPx = viewportHeightPx + maxScroll
     val visibleFraction = (viewportHeightPx / contentHeightPx).coerceIn(0.24f, 0.92f)
     val diameter = size.minDimension - trackStroke - 4.dp.toPx()
-    val topLeft = androidx.compose.ui.geometry.Offset(
-      x = (size.width - diameter) / 2f,
-      y = (size.height - diameter) / 2f,
-    )
-    val arcSize = androidx.compose.ui.geometry.Size(diameter, diameter)
+    val topLeft =
+      androidx.compose.ui.geometry.Offset(
+        x = (size.width - diameter) / 2f,
+        y = (size.height - diameter) / 2f,
+      )
+    val arcSize =
+      androidx.compose.ui.geometry
+        .Size(diameter, diameter)
     val trackStartAngle = -23f
     val trackSweepAngle = 46f
     val thumbSweepAngle = trackSweepAngle * visibleFraction
@@ -1411,10 +1426,11 @@ private fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
           drawRoundRect(
             color = SettingsGroupBorderColor,
             style = Stroke(width = 1.dp.toPx()),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(28.dp.toPx()),
+            cornerRadius =
+              androidx.compose.ui.geometry
+                .CornerRadius(28.dp.toPx()),
           )
-        }
-        .padding(vertical = 4.dp),
+        }.padding(vertical = 4.dp),
     content = content,
   )
 }

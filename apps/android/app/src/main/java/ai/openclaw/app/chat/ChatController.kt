@@ -660,7 +660,7 @@ class ChatController internal constructor(
       val currentSessionKey = _sessionKey.value
       val currentGeneration = historyLoadGeneration.get()
       val historyJson =
-        session.request(
+        requestGateway(
           "chat.history",
           buildJsonObject { put("sessionKey", JsonPrimitive(currentSessionKey)) }.toString(),
         )

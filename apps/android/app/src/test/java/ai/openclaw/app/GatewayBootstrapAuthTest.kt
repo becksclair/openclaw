@@ -17,7 +17,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -32,45 +31,54 @@ import java.util.UUID
 class GatewayBootstrapAuthTest {
   @Test
   fun connectsOperatorSessionWhenOnlyBootstrapAuthExists() {
-    assertTrue(
+    // Blank token/password/stored normalize to absent, so a bootstrap-only gateway still connects via the bootstrap token.
+    val expected = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null)
+    assertEquals(
+      expected,
       resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = "", bootstrapToken = "bootstrap-1", password = ""),
         storedOperatorToken = "",
-      ) != null,
+      ),
     )
-    assertTrue(
+    assertEquals(
+      expected,
       resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
-      ) != null,
+      ),
     )
   }
 
   @Test
   fun connectsOperatorSessionWhenSharedPasswordOrStoredAuthExists() {
-    assertTrue(
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
       resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
-      ) != null,
+      ),
     )
-    assertTrue(
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = "shared-password"),
       resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = "shared-password"),
         storedOperatorToken = null,
-      ) != null,
+      ),
     )
-    assertTrue(
+    // Stored operator token resolves to the no-auth handoff shape (connect proceeds via the stored token elsewhere).
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = null),
       resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = "stored-token",
-      ) != null,
+      ),
     )
-    assertTrue(
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = null),
       resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "", password = null),
         storedOperatorToken = null,
-      ) != null,
+      ),
     )
   }
 

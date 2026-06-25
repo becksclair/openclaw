@@ -1730,8 +1730,9 @@ class TalkModeManager internal constructor(
     val message = buildRealtimeConsultPrompt(argsJson)
     val startedAt = System.currentTimeMillis().toDouble() / 1000.0
     val targetSessionKey = normalizeSessionKey(mainSessionKey)
-    val runId = sendChat(message, session, targetSessionKey)
-    val ok = waitForChatFinal(runId)
+    val ack = sendChat(message, session, targetSessionKey)
+    val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
+    val ok = if (ack.isTerminalSuccess) true else waitForChatFinal(runId)
     return consumeRunText(runId)
       ?: waitForAssistantText(session, startedAt, if (ok) 12_000 else 25_000, targetSessionKey)
       ?: "OpenClaw finished with no text."

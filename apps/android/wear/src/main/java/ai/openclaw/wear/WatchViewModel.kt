@@ -34,11 +34,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
-import kotlin.math.sqrt
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 internal const val DEFAULT_FINAL_TTS_PLAYBACK_GAIN = 1.5
 internal const val MIN_TTS_PLAYBACK_GAIN = 0.5
@@ -98,8 +98,7 @@ internal fun voiceActivityFromPcm16(
   return sqrt((rms * 6.0).coerceIn(0.0, 1.0)).toFloat()
 }
 
-internal fun voiceActivityFromRecognizerRms(rmsDb: Float): Float =
-  ((rmsDb + 2f) / 12f).coerceIn(0f, 1f)
+internal fun voiceActivityFromRecognizerRms(rmsDb: Float): Float = ((rmsDb + 2f) / 12f).coerceIn(0f, 1f)
 
 data class VolumeOverlayState(
   val visible: Boolean = false,
@@ -127,11 +126,12 @@ internal interface MediaVolumeController {
   fun adjustBy(steps: Int): MediaVolumeState?
 }
 
-private class AndroidMediaVolumeController(context: Context) : MediaVolumeController {
+private class AndroidMediaVolumeController(
+  context: Context,
+) : MediaVolumeController {
   private val context = context
 
-  private fun audioManager(): AudioManager? =
-    runCatching { context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager }.getOrNull()
+  private fun audioManager(): AudioManager? = runCatching { context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager }.getOrNull()
 
   override fun readState(): MediaVolumeState? {
     val manager = audioManager() ?: return null
@@ -269,8 +269,6 @@ class WatchViewModel private constructor(
     Processing,
     Playing,
     Error,
-    ;
-
   }
 
   private val _state = MutableStateFlow(WatchState.Idle)
@@ -983,8 +981,7 @@ class WatchViewModel private constructor(
     }
   }
 
-  private fun activeDictationStatus(fallback: String): String =
-    pendingDictationText?.takeIf { it.isNotBlank() } ?: fallback
+  private fun activeDictationStatus(fallback: String): String = pendingDictationText?.takeIf { it.isNotBlank() } ?: fallback
 
   private fun submitDictationText(text: String) {
     val turnId = relayClient.sendTextTurn(text, reasoningLevel.value)
