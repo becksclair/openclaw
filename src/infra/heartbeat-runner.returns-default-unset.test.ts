@@ -230,11 +230,12 @@ function expectReplyCall(
 function replyBody(
   replySpy: ReturnType<typeof vi.fn>,
   index = 0,
-): { Body?: string; Provider?: string } {
+): { Body?: string; Provider?: string; SessionKey?: string } {
   const call = replySpy.mock.calls[index];
   return requireRecord(call?.[0], `reply call ${index} body`) as {
     Body?: string;
     Provider?: string;
+    SessionKey?: string;
   };
 }
 
@@ -1742,7 +1743,7 @@ tasks:
       agents: {
         defaults: {
           workspace: workspaceDir,
-          heartbeat: { every: "5m", target: "none" },
+          heartbeat: { every: "5m", target: "none", isolatedSession: true },
         },
       },
       session: { store: storePath },
@@ -1765,6 +1766,14 @@ tasks:
         contextKey: "notification:notif-1",
       },
     );
+    enqueueSystemEvent("Exec completed (deploy, code 0) :: deployed successfully", {
+      sessionKey,
+      contextKey: "exec:deploy",
+    });
+    enqueueSystemEvent("Notification posted: unrelated plugin summary", {
+      sessionKey,
+      contextKey: "plugin:not-a-notification",
+    });
 
     const replySpy = vi.fn().mockResolvedValue({ text: "No user notification needed" });
     const sendWhatsApp = vi
@@ -1788,10 +1797,19 @@ tasks:
     expect(replySpy).toHaveBeenCalledTimes(1);
     expect(sendWhatsApp).not.toHaveBeenCalled();
     const calledCtx = replyBody(replySpy);
-    expect(calledCtx.Provider).toBe("heartbeat");
-    expect(calledCtx.Body).toContain("Read HEARTBEAT.md");
+    expect(calledCtx.Provider).toBe("notifications-event");
+    expect(calledCtx.SessionKey).toBe(`${sessionKey}:heartbeat`);
+    expect(calledCtx.Body).toContain("A paired Android notification event woke this heartbeat");
+    expect(calledCtx.Body).toContain(
+      "Notification posted (node=node-n1 key=notif-1 package=com.example.chat): Message - Ping",
+    );
+    expect(calledCtx.Body).not.toContain("Exec completed (deploy, code 0)");
+    expect(calledCtx.Body).not.toContain("Notification posted: unrelated plugin summary");
     expect(calledCtx.Body).not.toContain("Check queued notifications");
-    expect(peekSystemEventEntries(sessionKey)).toStrictEqual([]);
+    expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toStrictEqual([
+      "Exec completed (deploy, code 0) :: deployed successfully",
+      "Notification posted: unrelated plugin summary",
+    ]);
     replySpy.mockReset();
   });
 

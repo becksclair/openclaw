@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -15,6 +16,7 @@ import {
 } from "../infra/event-session-routing.js";
 import { updatePairedNodeMetadata } from "../infra/node-pairing.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
@@ -249,6 +251,32 @@ function compactNotificationEventText(raw: string) {
   }
   const safe = Math.max(1, MAX_NOTIFICATION_EVENT_TEXT_CHARS - 1);
   return `${normalized.slice(0, safe)}…`;
+}
+
+type NotificationEventSessionTarget = {
+  sessionKey: string;
+  agentId?: string;
+};
+
+function resolveNotificationEventSessionTarget(params: {
+  cfg: OpenClawConfig;
+  explicitSessionKey?: string | null;
+}): NotificationEventSessionTarget {
+  const fallbackSessionKey = resolveMainSessionKey(params.cfg);
+  const sessionKeyRaw = normalizeOptionalString(params.explicitSessionKey) ?? fallbackSessionKey;
+  const loaded = loadSessionEntry(sessionKeyRaw);
+  if (sessionKeyRaw === fallbackSessionKey) {
+    return { sessionKey: fallbackSessionKey };
+  }
+  if (loaded.canonicalKey === "global") {
+    const parsed = parseAgentSessionKey(sessionKeyRaw);
+    return parsed
+      ? { sessionKey: loaded.canonicalKey, agentId: parsed.agentId }
+      : { sessionKey: loaded.canonicalKey };
+  }
+  return {
+    sessionKey: loaded.canonicalKey,
+  };
 }
 
 type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
@@ -629,8 +657,11 @@ export const handleNodeEvent = async (
         return undefined;
       }
       const key = sanitizeInboundSystemTags(keyRaw);
-      const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
-      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
+      const cfg = getRuntimeConfig();
+      const sessionTarget = resolveNotificationEventSessionTarget({
+        cfg,
+        explicitSessionKey: normalizeOptionalString(obj.sessionKey),
+      });
       const packageNameRaw = normalizeOptionalString(obj.packageName);
       const packageName = packageNameRaw ? sanitizeInboundSystemTags(packageNameRaw) : null;
       const title = compactNotificationEventText(
@@ -652,17 +683,34 @@ export const handleNodeEvent = async (
         }
       }
 
+      const eventRouting = resolveEventSessionRoutingPolicy({
+        cfg,
+        sessionKey: sessionTarget.sessionKey,
+      });
+      const eventSessionKey = resolveEventSessionKeyForPolicy(
+        sessionTarget.sessionKey,
+        eventRouting,
+      );
       const queued = enqueueSystemEvent(summary, {
-        sessionKey,
+        sessionKey: eventSessionKey,
         contextKey: `notification:${keyRaw}`,
       });
       if (queued) {
-        requestHeartbeat({
+        const notificationWakeOptions = {
           source: "notifications-event",
-          intent: "event",
+          intent: "immediate",
           reason: "notifications-event",
-          sessionKey,
-        });
+        } as const;
+        const wakeOptions = scopedHeartbeatWakeOptionsForPolicy(
+          sessionTarget.sessionKey,
+          notificationWakeOptions,
+          eventRouting,
+        );
+        requestHeartbeat(
+          sessionTarget.agentId && eventSessionKey === "global"
+            ? { ...wakeOptions, agentId: sessionTarget.agentId, sessionKey: eventSessionKey }
+            : wakeOptions,
+        );
       }
       return undefined;
     }
