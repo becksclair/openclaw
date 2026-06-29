@@ -5,6 +5,7 @@ import {
   buildExecEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
+  isIgnorableNotificationSystemEvent,
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 
@@ -175,6 +176,30 @@ describe("heartbeat event classification", () => {
     { value: "exec finished: ok", expected: true },
   ])("classifies relayable exec completion events for %j", ({ value, expected }) => {
     expect(isRelayableExecCompletionEvent(value)).toBe(expected);
+  });
+
+  it.each([
+    {
+      value:
+        "Notification posted (node=abc key=-1|com.android.systemui|2114586810|charging_state|10049 package=com.android.systemui): Charging (23 m until 90%) - 52% (23 m until 90%) Charging will stop at 90% to protect your battery.",
+      expected: true,
+    },
+    {
+      value:
+        "Notification removed (node=abc key=-1|com.android.systemui|2114586810|charging_state|10049 package=com.android.systemui): Charging (23 m until 90%) - 52%",
+      expected: true,
+    },
+    {
+      value: "Notification posted (node=abc key=msg package=com.whatsapp): Esther - Are you awake?",
+      expected: false,
+    },
+    {
+      value:
+        "Notification posted (node=abc key=-1|com.android.systemui|vpn package=com.android.systemui): VPN is active",
+      expected: false,
+    },
+  ])("classifies ignorable notification system events for %j", ({ value, expected }) => {
+    expect(isIgnorableNotificationSystemEvent(value)).toBe(expected);
   });
 });
 

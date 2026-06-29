@@ -939,6 +939,7 @@ describe("voice transcript events", () => {
 
 describe("notifications changed events", () => {
   beforeEach(() => {
+    resetNodeEventDeduplicationForTests();
     enqueueSystemEventMock.mockClear();
     requestHeartbeatMock.mockClear();
     loadConfigMock.mockClear();
@@ -1123,6 +1124,65 @@ describe("notifications changed events", () => {
     });
   });
 
+  it("does not dedupe posted notification wakes across explicit agents in global scope", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { mainKey: "main", scope: "global" },
+      agents: {
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+    });
+    loadSessionEntryMock
+      .mockReturnValueOnce({
+        ...buildSessionLookup("agent:main:main"),
+        canonicalKey: "global",
+      })
+      .mockReturnValueOnce({
+        ...buildSessionLookup("agent:work:main"),
+        canonicalKey: "global",
+      });
+    const ctx = buildCtx();
+    const payload = {
+      change: "posted",
+      packageName: "com.example.chat",
+      title: "Message",
+      text: "Same text",
+    };
+
+    await handleNodeEvent(ctx, "node-global", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        ...payload,
+        key: "notif-main",
+        sessionKey: "agent:main:main",
+      }),
+    });
+    await handleNodeEvent(ctx, "node-global", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        ...payload,
+        key: "notif-work",
+        sessionKey: "agent:work:main",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(2);
+    expect(requestHeartbeatMock).toHaveBeenNthCalledWith(1, {
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "notifications-event",
+      agentId: "main",
+      sessionKey: "global",
+    });
+    expect(requestHeartbeatMock).toHaveBeenNthCalledWith(2, {
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "notifications-event",
+      agentId: "work",
+      sessionKey: "global",
+    });
+  });
+
   it("ignores notifications.changed payloads missing required fields", async () => {
     const ctx = buildCtx();
     await handleNodeEvent(ctx, "node-n3", {
@@ -1180,6 +1240,122 @@ describe("notifications changed events", () => {
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not repeatedly wake heartbeat for consecutive notification summary reposts", async () => {
+    enqueueSystemEventMock.mockReset();
+    enqueueSystemEventMock.mockReturnValue(true);
+    const ctx = buildCtx();
+    const firstPayload = JSON.stringify({
+      change: "posted",
+      key: "codex-status-1",
+      packageName: "com.openai.chatgpt",
+      title: "Remote",
+      text: "Codex is working",
+    });
+    const secondPayload = JSON.stringify({
+      change: "posted",
+      key: "codex-status-2",
+      packageName: "com.openai.chatgpt",
+      title: "Remote",
+      text: "Codex is working",
+    });
+    const differentPayload = JSON.stringify({
+      change: "posted",
+      key: "chat-message",
+      packageName: "com.example.chat",
+      title: "Bex",
+      text: "Ping",
+    });
+    const repeatedAfterDifferentPayload = JSON.stringify({
+      change: "posted",
+      key: "codex-status-3",
+      packageName: "com.openai.chatgpt",
+      title: "Remote",
+      text: "Codex is working",
+    });
+
+    await handleNodeEvent(ctx, "node-codex", {
+      event: "notifications.changed",
+      payloadJSON: firstPayload,
+    });
+    await handleNodeEvent(ctx, "node-codex", {
+      event: "notifications.changed",
+      payloadJSON: secondPayload,
+    });
+    await handleNodeEvent(ctx, "node-codex", {
+      event: "notifications.changed",
+      payloadJSON: differentPayload,
+    });
+    await handleNodeEvent(ctx, "node-codex", {
+      event: "notifications.changed",
+      payloadJSON: repeatedAfterDifferentPayload,
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(4);
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("wakes heartbeat for consecutive distinct notification removals", async () => {
+    enqueueSystemEventMock.mockReset();
+    enqueueSystemEventMock.mockReturnValue(true);
+    const ctx = buildCtx();
+
+    await handleNodeEvent(ctx, "node-chat", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "removed",
+        key: "msg-1",
+        packageName: "com.example.chat",
+      }),
+    });
+    await handleNodeEvent(ctx, "node-chat", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "removed",
+        key: "msg-2",
+        packageName: "com.example.chat",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("resets posted summary wake dedupe after a notification removal", async () => {
+    enqueueSystemEventMock.mockReset();
+    enqueueSystemEventMock.mockReturnValue(true);
+    const ctx = buildCtx();
+    const postedPayload = {
+      change: "posted",
+      key: "msg-1",
+      packageName: "com.example.chat",
+      title: "Message",
+      text: "Ping",
+    };
+
+    await handleNodeEvent(ctx, "node-chat", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify(postedPayload),
+    });
+    await handleNodeEvent(ctx, "node-chat", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "removed",
+        key: "msg-1",
+        packageName: "com.example.chat",
+      }),
+    });
+    await handleNodeEvent(ctx, "node-chat", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        ...postedPayload,
+        key: "msg-2",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(3);
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(3);
   });
 
   it("suppresses exec notifyOnExit events when payload opts out", async () => {

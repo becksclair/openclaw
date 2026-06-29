@@ -1755,7 +1755,6 @@ tasks:
         [sessionKey]: {
           sessionId: "sid",
           updatedAt: nowMs,
-          heartbeatTaskState: { "notification-policy": nowMs },
         },
       }),
     );
@@ -1806,6 +1805,88 @@ tasks:
     expect(calledCtx.Body).not.toContain("Exec completed (deploy, code 0)");
     expect(calledCtx.Body).not.toContain("Notification posted: unrelated plugin summary");
     expect(calledCtx.Body).not.toContain("Check queued notifications");
+    expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toStrictEqual([
+      "Exec completed (deploy, code 0) :: deployed successfully",
+      "Notification posted: unrelated plugin summary",
+    ]);
+    replySpy.mockReset();
+  });
+
+  it("skips ignored notification-only wakes without draining unrelated queued events", async () => {
+    const tmpDir = await createCaseDir("openclaw-hb-ignored-notification-wake");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "HEARTBEAT.md"),
+      `# HEARTBEAT.md
+
+tasks:
+  - name: notification-policy
+    interval: 1h
+    prompt: Check queued notifications and decide whether Bex needs a message.
+`,
+      "utf-8",
+    );
+
+    const nowMs = 2_000_000;
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          heartbeat: { every: "5m", target: "none", isolatedSession: true },
+        },
+      },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: nowMs,
+          heartbeatTaskState: { "notification-policy": nowMs },
+        },
+      }),
+    );
+    enqueueSystemEvent(
+      "Notification posted (node=abc key=-1|com.android.systemui|2114586810|charging_state|10049 package=com.android.systemui): Charging (23 m until 90%) - 52% (23 m until 90%) Charging will stop at 90% to protect your battery.",
+      {
+        sessionKey,
+        contextKey: "notification:charging",
+      },
+    );
+    enqueueSystemEvent("Exec completed (deploy, code 0) :: deployed successfully", {
+      sessionKey,
+      contextKey: "exec:deploy",
+    });
+    enqueueSystemEvent("Notification posted: unrelated plugin summary", {
+      sessionKey,
+      contextKey: "plugin:not-a-notification",
+    });
+
+    const replySpy = vi.fn().mockResolvedValue({ text: "No user notification needed" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      source: "notifications-event",
+      intent: "event",
+      reason: "notifications-event",
+      deps: createHeartbeatDeps(sendWhatsApp, {
+        getReplyFromConfig: replySpy,
+        nowMs,
+      }),
+    });
+
+    expect(res).toStrictEqual({ status: "skipped", reason: "no-tasks-due" });
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendWhatsApp).not.toHaveBeenCalled();
     expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toStrictEqual([
       "Exec completed (deploy, code 0) :: deployed successfully",
       "Notification posted: unrelated plugin summary",
