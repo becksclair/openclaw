@@ -25,7 +25,6 @@ import {
   readEmbeddedGatewayToken,
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
-import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import { readManagedServiceEnvKeysFromEnvironment } from "../daemon/service-managed-env.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../daemon/service.js";
 import {
@@ -429,13 +428,9 @@ export async function maybeRepairGatewayServiceConfig(
   if (serviceWrapperPath) {
     note(`Gateway service invokes ${OPENCLAW_WRAPPER_ENV_KEY}: ${serviceWrapperPath}`, "Gateway");
   }
-  const serviceLayout = await summarizeGatewayServiceLayout(command);
-  const sourceCheckoutWarning = serviceLayout?.entrypointSourceCheckout
-    ? [
-        `Gateway service entrypoint resolves to a source checkout: ${serviceLayout.packageRootReal ?? serviceLayout.packageRoot ?? serviceLayout.entrypointReal ?? serviceLayout.entrypoint}.`,
-        "Run `openclaw doctor --fix` from the intended package install, or reinstall the gateway service with `openclaw gateway install --force`.",
-      ].join("\n")
-    : null;
+  // Fork: the gateway service intentionally runs from a source checkout; never
+  // nag the operator with the packaged-install source-checkout warning.
+  const sourceCheckoutWarning = null;
 
   const tokenRefConfigured = Boolean(
     resolveSecretInputRef({

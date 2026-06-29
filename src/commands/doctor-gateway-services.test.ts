@@ -1008,7 +1008,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     });
   });
 
-  it("warns when the gateway service entrypoint resolves to a source checkout", async () => {
+  it("does not warn when the gateway service entrypoint resolves to a source checkout", async () => {
     await withEnvAsync({}, async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-service-layout-"));
       try {
@@ -1029,7 +1029,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
         await runRepair({ gateway: {} });
 
-        expectNoteContaining("resolves to a source checkout", "Gateway service config");
+        expectNoNoteContaining("resolves to a source checkout", "Gateway service config");
         expect(mocks.install).not.toHaveBeenCalled();
       } finally {
         await fs.rm(root, { recursive: true, force: true });
