@@ -174,6 +174,21 @@ export function isNotificationSystemEvent(evt: string): boolean {
   return /^Notification (posted|removed)\b/i.test(evt.trimStart());
 }
 
+export function isIgnorableNotificationSystemEvent(evt: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(evt);
+  if (!isNotificationSystemEvent(evt) || !normalized) {
+    return false;
+  }
+  if (!normalized.includes("package=com.android.systemui")) {
+    return false;
+  }
+  return (
+    normalized.includes("charging_state") ||
+    normalized.includes("charging will stop at 90%") ||
+    /^notification (posted|removed)\b[\s\S]*\bcharging\b[\s\S]*\buntil 90%\b/.test(normalized)
+  );
+}
+
 export function buildNotificationEventPrompt(
   pendingEvents: string[],
   opts?: { useHeartbeatResponseTool?: boolean },

@@ -55,11 +55,17 @@ const VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS = 1500;
 const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
 const EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
 const MAX_RECENT_EXEC_FINISHED_RUNS = 2000;
+const NOTIFICATION_WAKE_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
+const MAX_RECENT_NOTIFICATION_WAKE_SESSIONS = 2000;
 const NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS = 60_000;
 const MAX_RECENT_NODE_PRESENCE_KEYS = 1024;
 
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
 const recentExecFinishedRuns = new Map<string, number>();
+const recentNotificationWakeBySession = new Map<
+  string,
+  { fingerprint: string | null; ts: number }
+>();
 const recentNodePresencePersistAt = new Map<string, number>();
 
 export type NodeEventHandleResult = {
@@ -73,6 +79,31 @@ type NodeAgentCommandInput = Parameters<typeof agentCommandFromIngress>[0];
 
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
+}
+
+function shouldSuppressConsecutiveNotificationWake(
+  sessionKey: string,
+  fingerprint: string | null,
+  now = Date.now(),
+): boolean {
+  const previous = recentNotificationWakeBySession.get(sessionKey);
+  recentNotificationWakeBySession.set(sessionKey, { fingerprint, ts: now });
+
+  for (const [key, entry] of recentNotificationWakeBySession) {
+    if (
+      now - entry.ts > NOTIFICATION_WAKE_DEDUPE_WINDOW_MS ||
+      recentNotificationWakeBySession.size > MAX_RECENT_NOTIFICATION_WAKE_SESSIONS
+    ) {
+      recentNotificationWakeBySession.delete(key);
+    }
+  }
+
+  return (
+    fingerprint !== null &&
+    previous !== undefined &&
+    previous.fingerprint === fingerprint &&
+    now - previous.ts <= NOTIFICATION_WAKE_DEDUPE_WINDOW_MS
+  );
 }
 
 function dispatchNodeAgentCommand(
@@ -222,6 +253,7 @@ function pruneBoundedTimestampMap(
 export function resetNodeEventDeduplicationForTests() {
   recentVoiceTranscripts.clear();
   recentExecFinishedRuns.clear();
+  recentNotificationWakeBySession.clear();
   recentNodePresencePersistAt.clear();
 }
 
@@ -676,10 +708,16 @@ export const handleNodeEvent = async (
         summary += ` package=${packageName}`;
       }
       summary += ")";
+      let wakeDedupeFingerprint: string | null = null;
       if (change === "posted") {
         const messageParts = [title, text].filter(Boolean);
         if (messageParts.length > 0) {
           summary += `: ${messageParts.join(" - ")}`;
+          wakeDedupeFingerprint = `Notification ${change} (node=${nodeId}`;
+          if (packageName) {
+            wakeDedupeFingerprint += ` package=${packageName}`;
+          }
+          wakeDedupeFingerprint += `): ${messageParts.join(" - ")}`;
         }
       }
 
@@ -696,6 +734,15 @@ export const handleNodeEvent = async (
         contextKey: `notification:${keyRaw}`,
       });
       if (queued) {
+        const wakeDedupeSessionKey =
+          sessionTarget.agentId && eventSessionKey === "global"
+            ? `${eventSessionKey}\u0000agent:${sessionTarget.agentId}`
+            : eventSessionKey;
+        if (
+          shouldSuppressConsecutiveNotificationWake(wakeDedupeSessionKey, wakeDedupeFingerprint)
+        ) {
+          return undefined;
+        }
         const notificationWakeOptions = {
           source: "notifications-event",
           intent: "immediate",

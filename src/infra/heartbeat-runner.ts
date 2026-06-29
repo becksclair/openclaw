@@ -118,6 +118,7 @@ import {
   buildNotificationEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
+  isIgnorableNotificationSystemEvent,
   isNotificationSystemEvent,
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
@@ -1114,13 +1115,24 @@ type HeartbeatPromptResolution = {
   hasRelayableExecCompletion: boolean;
   hasCronEvents: boolean;
   hasNotificationEvents: boolean;
+  hasIgnorableNotificationEvents: boolean;
   hasDueCommitments: boolean;
   usesHeartbeatResponseTool: boolean;
 };
 
 function isNotificationSystemEventEntry(event: SystemEvent): boolean {
   return (
-    event.contextKey?.startsWith("notification:") === true && isNotificationSystemEvent(event.text)
+    event.contextKey?.startsWith("notification:") === true &&
+    isNotificationSystemEvent(event.text) &&
+    !isIgnorableNotificationSystemEvent(event.text)
+  );
+}
+
+function isIgnorableNotificationSystemEventEntry(event: SystemEvent): boolean {
+  return (
+    event.contextKey?.startsWith("notification:") === true &&
+    isNotificationSystemEvent(event.text) &&
+    isIgnorableNotificationSystemEvent(event.text)
   );
 }
 
@@ -1228,6 +1240,12 @@ function resolveHeartbeatRunPrompt(params: {
     params.preflight.isNotificationEventWake && params.preflight.shouldInspectPendingEvents
       ? pendingEventEntries.filter(isNotificationSystemEventEntry).map((event) => event.text)
       : [];
+  const ignorableNotificationEvents =
+    params.preflight.isNotificationEventWake && params.preflight.shouldInspectPendingEvents
+      ? pendingEventEntries
+          .filter(isIgnorableNotificationSystemEventEntry)
+          .map((event) => event.text)
+      : [];
   const execEvents =
     params.preflight.shouldInspectPendingEvents && !params.preflight.isNotificationEventWake
       ? pendingEventEntries
@@ -1239,6 +1257,24 @@ function resolveHeartbeatRunPrompt(params: {
     params.canRelayToUser && execEvents.some((event) => isRelayableExecCompletionEvent(event));
   const hasCronEvents = cronEvents.length > 0;
   const hasNotificationEvents = notificationEvents.length > 0;
+  const hasIgnorableNotificationEvents = ignorableNotificationEvents.length > 0;
+  if (
+    params.preflight.isNotificationEventWake &&
+    params.preflight.shouldInspectPendingEvents &&
+    !hasNotificationEvents
+  ) {
+    return {
+      prompt: null,
+      hasExecCompletion: false,
+      hasRelayableExecCompletion: false,
+      hasCronEvents: false,
+      hasNotificationEvents: false,
+      hasIgnorableNotificationEvents,
+      hasDueCommitments: false,
+      usesHeartbeatResponseTool: false,
+    };
+  }
+
   const commitmentPrompt = buildCommitmentHeartbeatPrompt({
     commitments: params.preflight.dueCommitments,
     useHeartbeatResponseTool: false,
@@ -1265,6 +1301,7 @@ ${completionInstruction}`;
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
         hasNotificationEvents: false,
+        hasIgnorableNotificationEvents: false,
         hasDueCommitments: false,
         usesHeartbeatResponseTool: params.useHeartbeatResponseTool,
       };
@@ -1276,6 +1313,7 @@ ${completionInstruction}`;
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
         hasNotificationEvents: false,
+        hasIgnorableNotificationEvents: false,
         hasDueCommitments,
         usesHeartbeatResponseTool: false,
       };
@@ -1286,11 +1324,11 @@ ${completionInstruction}`;
       hasRelayableExecCompletion: false,
       hasCronEvents: false,
       hasNotificationEvents: false,
+      hasIgnorableNotificationEvents: false,
       hasDueCommitments: false,
       usesHeartbeatResponseTool: false,
     };
   }
-
   const baseUsesHeartbeatResponseTool = params.useHeartbeatResponseTool && !commitmentPrompt;
   const basePrompt = hasExecCompletion
     ? buildExecEventPrompt(execEvents, {
@@ -1324,6 +1362,7 @@ ${completionInstruction}`;
     hasRelayableExecCompletion,
     hasCronEvents,
     hasNotificationEvents,
+    hasIgnorableNotificationEvents,
     hasDueCommitments,
     usesHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
   };
@@ -1334,6 +1373,7 @@ function selectSystemEventsConsumedByHeartbeat(params: {
   hasExecCompletion: boolean;
   hasCronEvents: boolean;
   hasNotificationEvents: boolean;
+  hasIgnorableNotificationEvents: boolean;
 }): SystemEvent[] {
   const { preflight } = params;
   if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
@@ -1350,7 +1390,13 @@ function selectSystemEventsConsumedByHeartbeat(params: {
     );
   }
   if (params.hasNotificationEvents) {
-    return preflight.pendingEventEntries.filter(isNotificationSystemEventEntry);
+    return preflight.pendingEventEntries.filter(
+      (event) =>
+        isNotificationSystemEventEntry(event) || isIgnorableNotificationSystemEventEntry(event),
+    );
+  }
+  if (preflight.isNotificationEventWake && params.hasIgnorableNotificationEvents) {
+    return preflight.pendingEventEntries.filter(isIgnorableNotificationSystemEventEntry);
   }
   return preflight.pendingEventEntries;
 }
@@ -1594,6 +1640,7 @@ export async function runHeartbeatOnce(opts: {
     hasRelayableExecCompletion,
     hasCronEvents,
     hasNotificationEvents,
+    hasIgnorableNotificationEvents,
     hasDueCommitments,
     usesHeartbeatResponseTool,
   } = resolveHeartbeatRunPrompt({
@@ -1615,6 +1662,7 @@ export async function runHeartbeatOnce(opts: {
     hasExecCompletion,
     hasCronEvents,
     hasNotificationEvents,
+    hasIgnorableNotificationEvents,
   });
 
   // If no tasks are due, skip heartbeat entirely
@@ -1622,7 +1670,9 @@ export async function runHeartbeatOnce(opts: {
     // Wake-triggered events should stay queued when the run short-circuits:
     // no reply turn ran, so there is nothing that actually consumed that wake payload.
     const shouldConsumeInspectedEvents =
-      !preflight.isWakePayload && preflight.shouldInspectPendingEvents;
+      (!preflight.isWakePayload ||
+        (preflight.isNotificationEventWake && hasIgnorableNotificationEvents)) &&
+      preflight.shouldInspectPendingEvents;
     if (shouldConsumeInspectedEvents && inspectedSystemEventsToConsume.length > 0) {
       consumeSelectedSystemEventEntries(sessionKey, inspectedSystemEventsToConsume);
     }
