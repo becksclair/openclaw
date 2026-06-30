@@ -2811,6 +2811,92 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
+  it("suppresses plugin hooks, middleware, and legacy extensions for hidden tools", async () => {
+    const beforeToolCall = vi.fn(async () => ({ params: { mode: "safe" } }));
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: beforeToolCall },
+        { hookName: "after_tool_call", handler: afterToolCall },
+      ]),
+    );
+    const registry = createEmptyPluginRegistry();
+    const middleware = vi.fn(
+      async (event: { result: AgentToolResult<unknown>; toolName: string }) => ({
+        result: {
+          ...event.result,
+          content: [{ type: "text" as const, text: `${event.toolName} compacted` }],
+        },
+      }),
+    );
+    const factory = vi.fn(
+      async (codex: {
+        on: (
+          event: "tool_result",
+          handler: (event: unknown) => Promise<{ result: AgentToolResult<unknown> }>,
+        ) => void;
+      }) => {
+        codex.on("tool_result", async (event) => {
+          const eventRecord = requireRecord(event, "legacy event");
+          return {
+            result: {
+              ...(eventRecord.result as AgentToolResult<unknown>),
+              content: [{ type: "text" as const, text: "legacy compacted" }],
+            },
+          };
+        });
+      },
+    );
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    registry.codexAppServerExtensionFactories.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawFactory: factory,
+      factory,
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const execute = vi.fn(async () => textToolResult("raw output", { ok: true }));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: new AbortController().signal,
+      suppressPluginHooks: true,
+      hookContext: {
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: "agent:agent-1:session-1",
+        runId: "run-1",
+      },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "pwd" },
+    });
+
+    expect(result).toEqual(expectInputText("raw output"));
+    expectExecuteCall(execute, { callId: "call-1", args: { command: "pwd" } });
+    expect(beforeToolCall).not.toHaveBeenCalled();
+    expect(middleware).not.toHaveBeenCalled();
+    expect(factory).not.toHaveBeenCalled();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(afterToolCall).not.toHaveBeenCalled();
+  });
+
   it("does not execute dynamic tools blocked by before_tool_call", async () => {
     const beforeToolCall = vi.fn(async () => ({
       block: true,

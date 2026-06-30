@@ -68,7 +68,7 @@ export type CodexAppServerThreadBinding = {
   serviceTier?: CodexServiceTier;
   networkProxyProfileName?: string;
   networkProxyConfigFingerprint?: string;
-  baseInstructionsSource?: "agent-file" | "external-thread";
+  baseInstructionsSource?: "agent-file" | "runtime-profile" | "external-thread";
   baseInstructionsFingerprint?: string;
   dynamicToolsFingerprint?: string;
   dynamicToolsContainDeferred?: boolean;
@@ -308,7 +308,9 @@ export async function writeCodexAppServerBinding(
 function readBaseInstructionsSource(
   value: unknown,
 ): CodexAppServerThreadBinding["baseInstructionsSource"] {
-  return value === "agent-file" || value === "external-thread" ? value : undefined;
+  return value === "agent-file" || value === "runtime-profile" || value === "external-thread"
+    ? value
+    : undefined;
 }
 
 function readContextEngineBinding(value: unknown): CodexAppServerContextEngineBinding | undefined {

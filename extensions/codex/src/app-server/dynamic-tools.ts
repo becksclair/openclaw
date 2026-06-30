@@ -373,19 +373,20 @@ export function createCodexDynamicToolBridge(params: {
   registeredTools?: AnyAgentTool[];
   signal: AbortSignal;
   hookContext?: CodexDynamicToolHookContext;
+  suppressPluginHooks?: boolean;
   loading?: CodexDynamicToolsLoading;
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
+  const hooksEnabled = params.suppressPluginHooks !== true;
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
   const toolResultMaxChars = resolveCodexDynamicToolResultMaxChars(params.hookContext);
   const availableProjection = projectCodexDynamicTools(params.tools);
   const registeredProjection = params.registeredTools
     ? projectCodexDynamicTools(params.registeredTools)
     : availableProjection;
-  const wrappedAvailableProjection = wrapProjectedCodexDynamicTools(
-    availableProjection.tools,
-    params.hookContext,
-  );
+  const wrappedAvailableProjection = hooksEnabled
+    ? wrapProjectedCodexDynamicTools(availableProjection.tools, params.hookContext)
+    : { tools: availableProjection.tools, quarantinedTools: [] };
   const availableTools = wrappedAvailableProjection.tools;
   const quarantinedAvailableToolNames = new Set(
     [...availableProjection.quarantinedTools, ...wrappedAvailableProjection.quarantinedTools].map(
@@ -416,10 +417,12 @@ export function createCodexDynamicToolBridge(params: {
     quarantinedTools,
     toolTrustedLocalMedia: false,
   };
-  const middlewareRunner = createAgentToolResultMiddlewareRunner({
-    runtime: "codex",
-    ...toolResultHookContext,
-  });
+  const middlewareRunner = hooksEnabled
+    ? createAgentToolResultMiddlewareRunner({
+        runtime: "codex",
+        ...toolResultHookContext,
+      })
+    : undefined;
   const isReplaySafeToolInstance = (tool: AnyAgentTool): boolean => {
     const pluginMeta = getPluginToolMeta(tool);
     if (pluginMeta) {
@@ -427,8 +430,9 @@ export function createCodexDynamicToolBridge(params: {
     }
     return getChannelAgentToolMeta(tool as never) === undefined;
   };
-  const legacyExtensionRunner =
-    createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
+  const legacyExtensionRunner = hooksEnabled
+    ? createCodexAppServerToolResultExtensionRunner(toolResultHookContext)
+    : undefined;
   const directToolNames = new Set([
     ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
     ...(params.directToolNames ?? []),
@@ -520,37 +524,43 @@ export function createCodexDynamicToolBridge(params: {
         );
         const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isCodexToolResultError(rawResult);
-        const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
-          threadId: call.threadId,
-          turnId: call.turnId,
-          toolCallId: call.callId,
-          toolName,
-          args: structuredClone(executedArgs),
-          isError: rawIsError,
-          result: rawResult,
-        });
-        const result = await legacyExtensionRunner.applyToolResultExtensions({
-          threadId: call.threadId,
-          turnId: call.turnId,
-          toolCallId: call.callId,
-          toolName,
-          args: structuredClone(executedArgs),
-          result: middlewareResult,
-        });
+        const middlewareResult = middlewareRunner
+          ? await middlewareRunner.applyToolResultMiddleware({
+              threadId: call.threadId,
+              turnId: call.turnId,
+              toolCallId: call.callId,
+              toolName,
+              args: structuredClone(executedArgs),
+              isError: rawIsError,
+              result: rawResult,
+            })
+          : rawResult;
+        const result = legacyExtensionRunner
+          ? await legacyExtensionRunner.applyToolResultExtensions({
+              threadId: call.threadId,
+              turnId: call.turnId,
+              toolCallId: call.callId,
+              toolName,
+              args: structuredClone(executedArgs),
+              result: middlewareResult,
+            })
+          : middlewareResult;
         const resultIsError = rawIsError || isCodexToolResultError(result);
         notifyAgentToolResult(options?.onAgentToolResult, toolName, result, resultIsError);
-        void runAgentHarnessAfterToolCallHook({
-          toolName,
-          toolCallId: call.callId,
-          runId: toolResultHookContext.runId,
-          agentId: toolResultHookContext.agentId,
-          sessionId: toolResultHookContext.sessionId,
-          sessionKey: toolResultHookContext.sessionKey,
-          channelId: toolResultHookContext.channelId,
-          startArgs: executedArgs,
-          result,
-          startedAt,
-        });
+        if (hooksEnabled) {
+          void runAgentHarnessAfterToolCallHook({
+            toolName,
+            toolCallId: call.callId,
+            runId: toolResultHookContext.runId,
+            agentId: toolResultHookContext.agentId,
+            sessionId: toolResultHookContext.sessionId,
+            sessionKey: toolResultHookContext.sessionKey,
+            channelId: toolResultHookContext.channelId,
+            startArgs: executedArgs,
+            result,
+            startedAt,
+          });
+        }
         finalizeToolTerminalPresentation({
           toolCallId: call.callId,
           runId: toolResultHookContext.runId,
@@ -676,18 +686,20 @@ export function createCodexDynamicToolBridge(params: {
           telemetry,
           isError: true,
         });
-        void runAgentHarnessAfterToolCallHook({
-          toolName,
-          toolCallId: call.callId,
-          runId: toolResultHookContext.runId,
-          agentId: toolResultHookContext.agentId,
-          sessionId: toolResultHookContext.sessionId,
-          sessionKey: toolResultHookContext.sessionKey,
-          channelId: toolResultHookContext.channelId,
-          startArgs: executedArgs,
-          error: errorMessage,
-          startedAt,
-        });
+        if (hooksEnabled) {
+          void runAgentHarnessAfterToolCallHook({
+            toolName,
+            toolCallId: call.callId,
+            runId: toolResultHookContext.runId,
+            agentId: toolResultHookContext.agentId,
+            sessionId: toolResultHookContext.sessionId,
+            sessionKey: toolResultHookContext.sessionKey,
+            channelId: toolResultHookContext.channelId,
+            startArgs: executedArgs,
+            error: errorMessage,
+            startedAt,
+          });
+        }
         const replaySafe =
           !didStartExecution ||
           executionPrevented ||
