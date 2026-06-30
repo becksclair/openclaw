@@ -15,16 +15,6 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.access(targetPath);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected missing path ${targetPath}`);
-}
-
 const hoisted = vi.hoisted(() => {
   const sessionStore: Record<string, Record<string, unknown>> = {
     "agent:main:main": {
@@ -218,16 +208,19 @@ describe("active-memory plugin", () => {
     );
   };
   const writeUsableMemoryTranscript = async (sessionFile: string, text: string) => {
-    await writeTranscriptJsonl(sessionFile, [
-      {
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    await fs.appendFile(
+      sessionFile,
+      `${JSON.stringify({
         message: {
           role: "toolResult",
           toolName: "memory_search",
           details: { results: [{ text }] },
           content: [{ type: "text", text: JSON.stringify({ results: [{ text }] }) }],
         },
-      },
-    ]);
+      })}\n`,
+      "utf8",
+    );
   };
   const waitForAbort = async (abortSignal?: AbortSignal): Promise<never> => {
     if (abortSignal?.aborted) {
@@ -460,6 +453,27 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().lane).toBe("active-memory");
+  });
+
+  it("does not recurse into Lossless expansion subagent sessions", async () => {
+    const sessionKey = "agent:main:subagent:lcm-expand:abc123";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-lcm-expand",
+      updatedAt: 0,
+    };
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "expand memory context", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("registers a session-scoped active-memory toggle command", async () => {
@@ -1493,9 +1507,138 @@ describe("active-memory plugin", () => {
     expect(params.provider).toBe("github-copilot");
     expect(params.model).toBe("gpt-5.4-mini");
     expect(params.messageProvider).toBe("webchat");
-    expect(params.sessionKey).toMatch(/^agent:main:main:active-memory:[a-f0-9]{12}$/);
+    expect(params.sessionKey).toMatch(
+      /^agent:main:main:active-memory:recall:[a-f0-9]{12}:[a-f0-9-]{8}$/,
+    );
+    expect(params.promptProfile).toBe("memory_recall");
     expect(activeMemoryConfigFrom(embeddedRunConfig()).qmd).toEqual({ searchMode: "search" });
     expect(params.cleanupBundleMcpOnRunEnd).toBe(true);
+    expect(params.disableTts).toBe(true);
+    expect(params.disableSkills).toBe(true);
+    expect(params.disableMcpServers).toBe(true);
+    expect(params.disableCodexPlugins).toBe(true);
+    expect(params.disableContextEngine).toBe(true);
+    expect(params.suppressPluginHooks).toBe(true);
+  });
+
+  it("uses fresh Codex recall sessions while keeping the Codex client warm", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      model: "openai/gpt-5.4-mini",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:main";
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order tonight?", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+    const firstParams = lastEmbeddedRunParams();
+
+    await hooks.before_prompt_build(
+      { prompt: "what drink goes with dinner?", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+    const secondParams = lastEmbeddedRunParams();
+
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+    expect(firstParams.sessionKey).toMatch(
+      /^agent:main:main:active-memory:recall:[a-f0-9]{12}:[a-f0-9-]{8}$/,
+    );
+    expect(secondParams.sessionKey).toMatch(
+      /^agent:main:main:active-memory:recall:[a-f0-9]{12}:[a-f0-9-]{8}$/,
+    );
+    expect(secondParams.sessionKey).not.toBe(firstParams.sessionKey);
+    expect(secondParams.sessionId).not.toBe(firstParams.sessionId);
+    expect(secondParams.sessionFile).not.toBe(firstParams.sessionFile);
+    expect(secondParams.runId).not.toBe(firstParams.runId);
+    expect(secondParams.agentHarnessId).toBe("codex");
+    expect(secondParams.cleanupBundleMcpOnRunEnd).toBe(false);
+    expect(secondParams.sessionFile).toMatch(
+      new RegExp(
+        `${escapeRegExp(path.sep)}openclaw-active-memory-recall-[^${escapeRegExp(
+          path.sep,
+        )}]+${escapeRegExp(path.sep)}active-memory-recall-[a-f0-9]{16}\\.jsonl$`,
+      ),
+    );
+  });
+
+  it("uses one-shot hidden recall sessions for non-Codex harness models", async () => {
+    const sessionKey = "agent:main:main";
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order tonight?", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+    const firstParams = lastEmbeddedRunParams();
+
+    await hooks.before_prompt_build(
+      { prompt: "what drink goes with dinner?", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+    const secondParams = lastEmbeddedRunParams();
+
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+    expect(firstParams.provider).toBe("github-copilot");
+    expect(firstParams.sessionKey).toMatch(
+      /^agent:main:main:active-memory:recall:[a-f0-9]{12}:[a-f0-9-]{8}$/,
+    );
+    expect(secondParams.sessionKey).toMatch(
+      /^agent:main:main:active-memory:recall:[a-f0-9]{12}:[a-f0-9-]{8}$/,
+    );
+    expect(secondParams.sessionKey).not.toBe(firstParams.sessionKey);
+    expect(secondParams.sessionId).not.toBe(firstParams.sessionId);
+    expect(secondParams.sessionFile).not.toBe(firstParams.sessionFile);
+    expect(secondParams.agentHarnessId).toBeUndefined();
+    expect(secondParams.cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
+  it("does not reuse stale transcript evidence from an earlier recall", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      model: "openai/gpt-5.4-mini",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:main";
+    runEmbeddedAgent
+      .mockImplementationOnce(async (params: { sessionFile: string }) => {
+        await writeUsableMemoryTranscript(params.sessionFile, "stale dinner memory");
+        return { payloads: [{ text: "- stale dinner memory" }] };
+      })
+      .mockResolvedValueOnce({ payloads: [{ text: "NONE" }] });
+
+    const first = await hooks.before_prompt_build(
+      { prompt: "what dinner memory exists?", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+    const firstSessionFile = lastEmbeddedSessionFile();
+
+    const second = await hooks.before_prompt_build(
+      { prompt: "what totally different memory exists?", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(requirePrependContext(first)).toContain("stale dinner memory");
+    expect(lastEmbeddedSessionFile()).not.toBe(firstSessionFile);
+    expect((second as { prependContext?: unknown } | undefined)?.prependContext).toBeUndefined();
+  });
+
+  it("forwards inherited fast mode state to the hidden recall run", async () => {
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order with fast mode?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+        fastMode: "auto",
+        fastModeStartedAtMs: 123_456,
+        fastModeAutoOnSeconds: 45,
+      },
+    );
+
+    const params = lastEmbeddedRunParams();
+    expect(params.fastMode).toBe("auto");
+    expect(params.fastModeStartedAtMs).toBe(123_456);
+    expect(params.fastModeAutoOnSeconds).toBe(45);
   });
 
   it("lets active memory inherit the main QMD search mode when configured", async () => {
@@ -1631,6 +1774,76 @@ describe("active-memory plugin", () => {
     );
     expect(runParams.prompt).not.toContain("Prefer memory_recall");
     expect(runParams.prompt).not.toContain("If memory_recall is unavailable");
+  });
+
+  it("preserves custom non-prefixed memory tools in the hidden recall tool surface", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      toolsAllow: [" search_notes ", "recall_context"],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What did we decide about active memory?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = lastEmbeddedRunParams();
+    expect(runParams.toolsAllow).toEqual(["search_notes", "recall_context"]);
+    expect(runParams.prompt).toContain("Configured memory tools: search_notes, recall_context.");
+  });
+
+  it("keeps Honcho tools out of the hidden recall tool surface", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      toolsAllow: [
+        "memory_search",
+        "memory_get",
+        "honcho_context",
+        "honcho_search_conclusions",
+        "honcho_search_messages",
+        "lcm_grep",
+        "lcm_describe",
+        "lcm_expand_query",
+      ],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What did we decide about active memory?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = lastEmbeddedRunParams();
+    const expectedHiddenTools = [
+      "memory_search",
+      "memory_get",
+      "lcm_grep",
+      "lcm_describe",
+      "lcm_expand_query",
+    ];
+    expect(runParams.toolsAllow).toEqual([...expectedHiddenTools]);
+    expect(activeMemoryConfigFrom(embeddedRunConfig()).toolsAllow).toEqual(expectedHiddenTools);
+    expect(runParams.prompt).toContain(
+      "Configured memory tools: memory_search, memory_get, lcm_grep, lcm_describe, lcm_expand_query.",
+    );
+    expect(runParams.prompt).not.toContain("honcho");
   });
 
   it("uses memory_recall by default when the memory slot selects LanceDB", async () => {
@@ -1968,6 +2181,11 @@ describe("active-memory plugin", () => {
   });
 
   it("preserves canonical parent session scope in the blocking memory subagent session key", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      model: "openai/gpt-5.4-mini",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
     await hooks.before_prompt_build(
       { prompt: "what should i grab on the way?", messages: [] },
       {
@@ -1980,7 +2198,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedSessionKey()).toMatch(
-      /^agent:main:telegram:direct:12345:thread:99:active-memory:[a-f0-9]{12}$/,
+      /^agent:main:telegram:direct:12345:thread:99:active-memory:recall:[a-f0-9]{12}:[a-f0-9-]{8}$/,
     );
   });
 
@@ -2897,7 +3115,7 @@ describe("active-memory plugin", () => {
     expect(lines.join("\n")).not.toContain("alpha beta gamma delta");
   });
 
-  it("returns partial transcript text on timeout when transcripts are temporary by default", async () => {
+  it("returns partial transcript text on timeout with private runtime transcripts by default", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     testing.setTimeoutPartialDataGraceMsForTests(100);
@@ -2933,9 +3151,7 @@ describe("active-memory plugin", () => {
     );
 
     expectPrependContextContains(result, "temporary partial recall summary");
-    await vi.waitFor(async () => {
-      await expectPathMissing(tempSessionFile);
-    });
+    await expect(fs.stat(tempSessionFile)).rejects.toMatchObject({ code: "ENOENT" });
     const lines = getActiveMemoryLines(sessionKey);
     expectLinesToContain(lines, "🧩 Active Memory: status=timeout_partial");
     expectLinesToContain(
@@ -3437,6 +3653,7 @@ describe("active-memory plugin", () => {
 
     await expect(resultPromise).resolves.toBeUndefined();
     expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5_000);
   });
 
   it("does not clean up memory managers when only successful status persistence stalls", async () => {
@@ -4809,6 +5026,11 @@ describe("active-memory plugin", () => {
   });
 
   it("uses a canonical agent session key when only sessionId is available", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      model: "openai/gpt-5.4-mini",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",
       updatedAt: 25,
@@ -4826,7 +5048,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedSessionKey()).toMatch(
-      /^agent:main:telegram:direct:12345:active-memory:[a-f0-9]{12}$/,
+      /^agent:main:telegram:direct:12345:active-memory:recall:[a-f0-9]{12}:[a-f0-9-]{8}$/,
     );
     expectEmbeddedChannel("telegram");
     const entries = hoisted.sessionStore["agent:main:telegram:direct:12345"]?.pluginDebugEntries as
@@ -4838,6 +5060,11 @@ describe("active-memory plugin", () => {
   });
 
   it("uses the resolved canonical session key for non-webchat chat-type checks", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      model: "openai/gpt-5.4-mini",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",
       updatedAt: 25,
@@ -4856,7 +5083,7 @@ describe("active-memory plugin", () => {
 
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
     expect(lastEmbeddedSessionKey()).toMatch(
-      /^agent:main:telegram:direct:12345:active-memory:[a-f0-9]{12}$/,
+      /^agent:main:telegram:direct:12345:active-memory:recall:[a-f0-9]{12}:[a-f0-9-]{8}$/,
     );
     expectPrependContextContains(
       result,
@@ -5402,12 +5629,18 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("keeps subagent transcripts off disk by default by using a temp session file", async () => {
+  it("removes private runtime transcripts when user transcript persistence is off", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      model: "openai/gpt-5.4-mini",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const mkdirSpy = vi.spyOn(fs, "mkdir");
     const mkdtempSpy = vi.spyOn(fs, "mkdtemp");
     const rmSpy = vi.spyOn(fs, "rm");
 
     await hooks.before_prompt_build(
-      { prompt: "what wings should i order? temp transcript path", messages: [] },
+      { prompt: "what wings should i order? private runtime transcript path", messages: [] },
       {
         agentId: "main",
         trigger: "user",
@@ -5418,11 +5651,15 @@ describe("active-memory plugin", () => {
 
     expect(mkdtempSpy).toHaveBeenCalled();
     const sessionFile = lastEmbeddedSessionFile();
-    expect(sessionFile).toMatch(/openclaw-active-memory-.*\/session\.jsonl$/);
-    expect(rmSpy).toHaveBeenCalledWith(path.dirname(sessionFile), {
-      recursive: true,
-      force: true,
-    });
+    const tempDir = path.dirname(sessionFile);
+    expect(tempDir).toContain(`${path.sep}openclaw-active-memory-recall-`);
+    expect(mkdirSpy).toHaveBeenCalledWith(tempDir, { recursive: true, mode: 0o700 });
+    expect(sessionFile).toMatch(
+      new RegExp(
+        `^${escapeRegExp(tempDir)}${escapeRegExp(path.sep)}active-memory-recall-[a-f0-9]{16}\\.jsonl$`,
+      ),
+    );
+    expect(rmSpy).toHaveBeenCalledWith(tempDir, { recursive: true, force: true });
   });
 
   it("persists subagent transcripts in a separate directory when enabled", async () => {
@@ -5456,7 +5693,7 @@ describe("active-memory plugin", () => {
     expect(mkdtempSpy).not.toHaveBeenCalled();
     expect(lastEmbeddedSessionFile()).toMatch(
       new RegExp(
-        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
+        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-recall-[a-f0-9]{16}\\.jsonl$`,
       ),
     );
     const infoLines = vi
@@ -5500,7 +5737,7 @@ describe("active-memory plugin", () => {
     expect(mkdirSpy).toHaveBeenCalledWith(expectedDir, { recursive: true, mode: 0o700 });
     expect(lastEmbeddedSessionFile()).toMatch(
       new RegExp(
-        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
+        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-recall-[a-f0-9]{16}\\.jsonl$`,
       ),
     );
   });
@@ -5537,7 +5774,7 @@ describe("active-memory plugin", () => {
     expect(mkdirSpy).toHaveBeenCalledWith(expectedDir, { recursive: true, mode: 0o700 });
     expect(lastEmbeddedSessionFile()).toMatch(
       new RegExp(
-        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
+        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-recall-[a-f0-9]{16}\\.jsonl$`,
       ),
     );
   });

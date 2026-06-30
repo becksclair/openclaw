@@ -5,6 +5,7 @@
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import * as readline from "node:readline";
 import {
@@ -36,7 +37,6 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
@@ -55,6 +55,7 @@ const MAX_SETUP_GRACE_TIMEOUT_MS = 30_000;
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
+const ACTIVE_MEMORY_RECALL_SESSION_SUFFIX = "active-memory:recall";
 const ACTIVE_MEMORY_RECALL_LANE = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
@@ -199,6 +200,7 @@ type ActiveRecallPluginConfig = {
 };
 
 type ActiveMemoryQmdSearchMode = "inherit" | "search" | "vsearch" | "query";
+type FastMode = boolean | "auto";
 
 type ResolvedActiveRecallPluginConfig = {
   enabled: boolean;
@@ -292,6 +294,7 @@ type TranscriptReadLimits = {
   maxChars?: number;
   maxLines?: number;
   maxBytes?: number;
+  startByteOffset?: number;
 };
 
 type RecallSubagentResult = {
@@ -473,7 +476,11 @@ function normalizeConfiguredToolsAllow(value: unknown): string[] | undefined {
 
 function isReservedActiveMemoryToolsAllowEntry(value: string): boolean {
   const normalized = value.trim().toLowerCase();
-  return normalized.startsWith("group:") || ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW.has(normalized);
+  return (
+    normalized.startsWith("group:") ||
+    normalized.startsWith("honcho_") ||
+    ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW.has(normalized)
+  );
 }
 
 function resolveDefaultToolsAllow(cfg: OpenClawConfig | undefined): string[] {
@@ -486,6 +493,10 @@ function resolveToolsAllow(params: { pluginToolsAllow: unknown; cfg?: OpenClawCo
   return (
     normalizeConfiguredToolsAllow(params.pluginToolsAllow) ?? resolveDefaultToolsAllow(params.cfg)
   );
+}
+
+function resolveHiddenRecallToolsAllow(toolsAllow: readonly string[]): string[] {
+  return toolsAllow.length > 0 ? [...toolsAllow] : [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
 }
 
 function normalizePromptConfigText(value: unknown): string | undefined {
@@ -534,11 +545,15 @@ function resolvePersistentTranscriptBaseDir(api: OpenClawPluginApi, agentId: str
   );
 }
 
-function requireTransientWorkspaceDir(tempDir: string | undefined): string {
-  if (!tempDir) {
-    throw new Error("Active memory transient workspace was not initialized.");
-  }
-  return tempDir;
+function stableRecallDigest(value: string, length = 16): string {
+  return crypto.createHash("sha1").update(value).digest("hex").slice(0, length);
+}
+
+function shouldUseCodexHarnessForReusableRecall(modelRef: {
+  provider: string;
+  model: string;
+}): boolean {
+  return modelRef.provider.trim().toLowerCase() === "openai";
 }
 
 function resolveCanonicalSessionKeyFromSessionId(params: {
@@ -936,6 +951,7 @@ function applyActiveMemoryRuntimeConfigSnapshot(
           ...existingEntry,
           config: {
             ...existingPluginConfig,
+            toolsAllow: [...pluginConfig.toolsAllow],
             qmd: {
               ...asRecord(existingPluginConfig?.qmd),
               searchMode: pluginConfig.qmd.searchMode,
@@ -1184,6 +1200,14 @@ function isEligibleInteractiveSession(ctx: {
     return true;
   }
   return Boolean(ctx.channelId && ctx.channelId.trim());
+}
+
+function isLosslessExpansionSubagentSession(sessionKey?: string): boolean {
+  const normalized = sessionKey?.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return /^agent:[^:]+:subagent:lcm-expand:[^:]+/.test(normalized);
 }
 
 function resolveChatType(ctx: {
@@ -1665,6 +1689,7 @@ function resolveTranscriptReadLimits(
       1,
       DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
     ),
+    startByteOffset: Math.max(0, Math.floor(limits?.startByteOffset ?? 0)),
   };
 }
 
@@ -1674,9 +1699,14 @@ async function streamBoundedTranscriptJsonl(params: {
   onRecord: (record: unknown) => boolean | void;
 }): Promise<void> {
   const limits = resolveTranscriptReadLimits(params.limits);
+  let startByteOffset = limits.startByteOffset;
   try {
     const stats = await fs.stat(params.sessionFile);
-    if (!stats.isFile() || stats.size > limits.maxBytes) {
+    if (!stats.isFile() || startByteOffset > stats.size) {
+      return;
+    }
+    startByteOffset = Math.min(startByteOffset, stats.size);
+    if (stats.size - startByteOffset > limits.maxBytes) {
       return;
     }
   } catch {
@@ -1684,6 +1714,7 @@ async function streamBoundedTranscriptJsonl(params: {
   }
   const stream = fsSync.createReadStream(params.sessionFile, {
     encoding: "utf8",
+    ...(startByteOffset > 0 ? { start: startByteOffset } : {}),
   });
   const rl = readline.createInterface({
     input: stream,
@@ -1987,26 +2018,6 @@ async function readActiveMemorySearchDebug(
   return (await readActiveMemoryTranscriptState(sessionFile, limits)).searchDebug;
 }
 
-async function readMergedActiveMemoryTranscriptState(params: {
-  sessionFiles: readonly string[];
-  toolsAllow: readonly string[];
-}): Promise<{
-  searchDebug?: ActiveMemorySearchDebug;
-  hasUsableMemoryResult: boolean;
-  hasUnavailableMemorySearchResult: boolean;
-}> {
-  let searchDebug: ActiveMemorySearchDebug | undefined;
-  let hasUsableMemoryResult = false;
-  let hasUnavailableMemorySearchResult = false;
-  for (const sessionFile of new Set(params.sessionFiles)) {
-    const state = await readActiveMemoryTranscriptState(sessionFile, undefined, params.toolsAllow);
-    searchDebug = state.searchDebug ?? searchDebug;
-    hasUsableMemoryResult ||= state.hasUsableMemoryResult;
-    hasUnavailableMemorySearchResult ||= state.hasUnavailableMemorySearchResult;
-  }
-  return { searchDebug, hasUsableMemoryResult, hasUnavailableMemorySearchResult };
-}
-
 async function readTerminalMemorySearchResult(
   sessionFile: string,
   limits?: TranscriptReadLimits,
@@ -2055,6 +2066,7 @@ async function readTerminalMemorySearchResult(
 
 function watchTerminalMemorySearchResult(params: {
   getSessionFile: () => string | undefined;
+  getTranscriptStartByteOffset: () => number | undefined;
   abortSignal: AbortSignal;
   toolsAllow: readonly string[];
 }): TerminalMemorySearchWatch {
@@ -2098,7 +2110,11 @@ function watchTerminalMemorySearchResult(params: {
     try {
       const sessionFile = params.getSessionFile();
       const result = sessionFile
-        ? await readTerminalMemorySearchResult(sessionFile, undefined, params.toolsAllow)
+        ? await readTerminalMemorySearchResult(
+            sessionFile,
+            { startByteOffset: params.getTranscriptStartByteOffset() },
+            params.toolsAllow,
+          )
         : undefined;
       if (result) {
         finish(result);
@@ -2339,6 +2355,7 @@ async function buildTimeoutRecallResult(params: {
   elapsedMs: number;
   maxSummaryChars: number;
   sessionFile?: string;
+  transcriptStartByteOffset?: number;
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
   hasUnavailableMemorySearchResult?: boolean;
@@ -2351,13 +2368,19 @@ async function buildTimeoutRecallResult(params: {
   const rawReply =
     params.rawReply ??
     subagentPartialData.rawReply ??
-    (await readPartialAssistantText(params.sessionFile));
+    (await readPartialAssistantText(params.sessionFile, {
+      startByteOffset: params.transcriptStartByteOffset,
+    }));
   const summary = truncateSummary(
     normalizeActiveSummary(rawReply ?? "") ?? "",
     params.maxSummaryChars,
   );
   const transcriptState = params.sessionFile
-    ? await readActiveMemoryTranscriptState(params.sessionFile, undefined, params.toolsAllow)
+    ? await readActiveMemoryTranscriptState(
+        params.sessionFile,
+        { startByteOffset: params.transcriptStartByteOffset },
+        params.toolsAllow,
+      )
     : undefined;
   const searchDebug =
     params.searchDebug ?? subagentPartialData.searchDebug ?? transcriptState?.searchDebug;
@@ -2917,8 +2940,11 @@ async function runRecallSubagent(params: {
   currentModelProviderId?: string;
   currentModelId?: string;
   modelRef?: { provider: string; model: string };
+  fastMode?: FastMode;
+  fastModeStartedAtMs?: number;
+  fastModeAutoOnSeconds?: number;
   abortSignal?: AbortSignal;
-  onSessionFile?: (sessionFile: string) => void;
+  onSessionFile?: (sessionFile: string, startByteOffset: number) => void;
 }): Promise<RecallSubagentResult> {
   const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
   const agentDir = resolveAgentDir(params.api.config, params.agentId);
@@ -2931,7 +2957,6 @@ async function runRecallSubagent(params: {
   if (!modelRef) {
     return { rawReply: "NONE" };
   }
-  const subagentSessionId = `active-memory-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
   const parentSessionKey =
     params.sessionKey ??
     resolveCanonicalSessionKeyFromSessionId({
@@ -2939,39 +2964,45 @@ async function runRecallSubagent(params: {
       agentId: params.agentId,
       sessionId: params.sessionId,
     });
-  const subagentScope = parentSessionKey ?? params.sessionId ?? crypto.randomUUID();
-  const subagentSuffix = `active-memory:${crypto
-    .createHash("sha1")
-    .update(`${subagentScope}:${params.query}`)
-    .digest("hex")
-    .slice(0, 12)}`;
-  const subagentSessionKey = parentSessionKey
-    ? `${parentSessionKey}:${subagentSuffix}`
-    : `agent:${params.agentId}:${subagentSuffix}`;
-  const transientWorkspace = params.config.persistTranscripts
-    ? undefined
-    : await tempWorkspace({
-        rootDir: resolvePreferredOpenClawTmpDir(),
-        prefix: "openclaw-active-memory-",
-      });
-  const tempDir = transientWorkspace?.dir;
-  const persistedDir = params.config.persistTranscripts
+  const subagentScope = parentSessionKey ?? params.sessionId ?? `agent:${params.agentId}`;
+  const recallAgentHarnessId = shouldUseCodexHarnessForReusableRecall(modelRef)
+    ? "codex"
+    : undefined;
+  const keepCodexClientWarm = recallAgentHarnessId === "codex";
+  const runNonce = crypto.randomUUID().slice(0, 8);
+  const recallSessionKeyBase = parentSessionKey
+    ? `${parentSessionKey}:${ACTIVE_MEMORY_RECALL_SESSION_SUFFIX}`
+    : `agent:${params.agentId}:${ACTIVE_MEMORY_RECALL_SESSION_SUFFIX}:${stableRecallDigest(
+        subagentScope,
+        12,
+      )}`;
+  const subagentSessionKey = `${recallSessionKeyBase}:${stableRecallDigest(
+    `${params.searchQuery}\n${params.query}`,
+    12,
+  )}:${runNonce}`;
+  const subagentSessionId = `active-memory-recall-${stableRecallDigest(subagentSessionKey)}`;
+  const subagentRunId = `${subagentSessionId}:run:${Date.now().toString(36)}:${crypto
+    .randomUUID()
+    .slice(0, 8)}`;
+  const sessionDir = params.config.persistTranscripts
     ? resolveSafeTranscriptDir(
         resolvePersistentTranscriptBaseDir(params.api, params.agentId),
         params.config.transcriptDir,
       )
-    : undefined;
-  const sessionFile =
-    persistedDir !== undefined
-      ? path.join(persistedDir, `${subagentSessionId}.jsonl`)
-      : path.join(requireTransientWorkspaceDir(tempDir), "session.jsonl");
-  params.onSessionFile?.(sessionFile);
-  if (persistedDir) {
-    await fs.mkdir(persistedDir, { recursive: true, mode: 0o700 });
-    await fs.chmod(persistedDir, 0o700).catch(() => undefined);
-  }
+    : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-recall-"));
+  const sessionFile = path.join(sessionDir, `${subagentSessionId}.jsonl`);
+  let sessionFileStartByteOffset = 0;
+  try {
+    const stats = await fs.stat(sessionFile);
+    sessionFileStartByteOffset = stats.isFile() ? stats.size : 0;
+  } catch {}
+  params.onSessionFile?.(sessionFile, sessionFileStartByteOffset);
+  await fs.mkdir(sessionDir, { recursive: true, mode: 0o700 });
+  await fs.chmod(sessionDir, 0o700).catch(() => undefined);
+  const hiddenToolsAllow = resolveHiddenRecallToolsAllow(params.config.toolsAllow);
+  const recallConfig = { ...params.config, toolsAllow: hiddenToolsAllow };
   const prompt = buildRecallPrompt({
-    config: params.config,
+    config: recallConfig,
     query: params.query,
     searchQuery: params.searchQuery,
   });
@@ -2987,9 +3018,34 @@ async function runRecallSubagent(params: {
   let activeSessionFile = sessionFile;
   let harnessHasUsableMemoryResult = false;
   let harnessHasUnavailableMemorySearchResult = false;
+  const recallRunStartedAt = Date.now();
+  const fastModeAgeMs =
+    typeof params.fastModeStartedAtMs === "number" && Number.isFinite(params.fastModeStartedAtMs)
+      ? Math.max(0, recallRunStartedAt - params.fastModeStartedAtMs)
+      : undefined;
   try {
-    const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
+    const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, recallConfig);
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
+    params.api.logger.info?.(
+      [
+        "active-memory: recall sub-agent start",
+        `agent=${toSingleLineLogValue(params.agentId)}`,
+        `session=${subagentSessionId}`,
+        `parentKeyHash=${parentSessionKey ? stableRecallDigest(parentSessionKey, 12) : "none"}`,
+        `recallKeyHash=${stableRecallDigest(subagentSessionKey, 12)}`,
+        `model=${toSingleLineLogValue(`${modelRef.provider}/${modelRef.model}`)}`,
+        `timeoutMs=${embeddedTimeoutMs}`,
+        `privateRuntime=${params.config.persistTranscripts ? "false" : "true"}`,
+        `codexWarmClient=${keepCodexClientWarm ? "true" : "false"}`,
+        `startByteOffset=${sessionFileStartByteOffset}`,
+        `tools=${hiddenToolsAllow.length}`,
+        `fastMode=${String(params.fastMode ?? "unset")}`,
+        ...(fastModeAgeMs !== undefined ? [`fastModeAgeMs=${fastModeAgeMs}`] : []),
+        ...(params.fastModeAutoOnSeconds !== undefined
+          ? [`fastModeAutoOnSeconds=${params.fastModeAutoOnSeconds}`]
+          : []),
+      ].join(" "),
+    );
     const result = await params.api.runtime.agent.runEmbeddedAgent({
       sessionId: subagentSessionId,
       sessionKey: subagentSessionKey,
@@ -3003,25 +3059,36 @@ async function runRecallSubagent(params: {
       prompt,
       provider: modelRef.provider,
       model: modelRef.model,
+      agentHarnessId: recallAgentHarnessId,
       lane: ACTIVE_MEMORY_RECALL_LANE,
       timeoutMs: embeddedTimeoutMs,
-      runId: subagentSessionId,
+      runId: subagentRunId,
       trigger: "manual",
-      toolsAllow: [...params.config.toolsAllow],
+      promptProfile: "memory_recall",
+      toolsAllow: [...hiddenToolsAllow],
       disableMessageTool: true,
+      disableTts: true,
+      disableSkills: true,
+      disableMcpServers: true,
+      disableCodexPlugins: true,
+      disableContextEngine: true,
+      suppressPluginHooks: true,
       allowGatewaySubagentBinding: true,
       bootstrapContextMode: "lightweight",
       verboseLevel: "off",
       thinkLevel: params.config.thinking,
       reasoningLevel: "off",
+      fastMode: params.fastMode,
+      fastModeStartedAtMs: params.fastModeStartedAtMs,
+      fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
       silentExpected: true,
       authProfileFailurePolicy: "local",
-      cleanupBundleMcpOnRunEnd: true,
+      cleanupBundleMcpOnRunEnd: !keepCodexClientWarm,
       abortSignal: params.abortSignal,
       onAgentToolResult: (event) => {
         const evidence = readMemoryToolResultEvidence({
           ...event,
-          toolsAllow: params.config.toolsAllow,
+          toolsAllow: hiddenToolsAllow,
         });
         harnessHasUsableMemoryResult ||= evidence.hasUsableMemoryResult;
         harnessHasUnavailableMemorySearchResult ||= evidence.hasUnavailableMemorySearchResult;
@@ -3045,27 +3112,56 @@ async function runRecallSubagent(params: {
       .filter(Boolean)
       .join("\n")
       .trim();
-    const transcriptState = await readMergedActiveMemoryTranscriptState({
-      sessionFiles: [sessionFile, activeSessionFile],
-      toolsAllow: params.config.toolsAllow,
-    });
+    const stableTranscriptState = await readActiveMemoryTranscriptState(
+      sessionFile,
+      { startByteOffset: sessionFileStartByteOffset },
+      hiddenToolsAllow,
+    );
+    const rotatedTranscriptState =
+      activeSessionFile === sessionFile
+        ? undefined
+        : await readActiveMemoryTranscriptState(activeSessionFile, undefined, hiddenToolsAllow);
     const searchDebug =
-      transcriptState.searchDebug ?? readActiveMemorySearchDebugFromRunResult(result);
+      rotatedTranscriptState?.searchDebug ??
+      stableTranscriptState.searchDebug ??
+      readActiveMemorySearchDebugFromRunResult(result);
+    params.api.logger.info?.(
+      [
+        "active-memory: recall sub-agent completed",
+        `agent=${toSingleLineLogValue(params.agentId)}`,
+        `session=${subagentSessionId}`,
+        `elapsedMs=${Date.now() - recallRunStartedAt}`,
+        `status=ok`,
+        `rawChars=${rawReply.length}`,
+        `stableEvidence=${stableTranscriptState.hasUsableMemoryResult ? "true" : "false"}`,
+        `rotated=${activeSessionFile === sessionFile ? "false" : "true"}`,
+        `unavailable=${stableTranscriptState.hasUnavailableMemorySearchResult || rotatedTranscriptState?.hasUnavailableMemorySearchResult === true || harnessHasUnavailableMemorySearchResult ? "true" : "false"}`,
+      ].join(" "),
+    );
     return {
       rawReply: rawReply || "NONE",
       transcriptPath: params.config.persistTranscripts ? activeSessionFile : undefined,
       searchDebug,
-      hasUsableMemoryResult: transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
+      hasUsableMemoryResult:
+        stableTranscriptState.hasUsableMemoryResult ||
+        rotatedTranscriptState?.hasUsableMemoryResult === true ||
+        harnessHasUsableMemoryResult,
       hasUnavailableMemorySearchResult:
-        transcriptState.hasUnavailableMemorySearchResult || harnessHasUnavailableMemorySearchResult,
+        stableTranscriptState.hasUnavailableMemorySearchResult ||
+        rotatedTranscriptState?.hasUnavailableMemorySearchResult === true ||
+        harnessHasUnavailableMemorySearchResult,
     };
   } catch (error) {
     if (params.abortSignal?.aborted) {
-      const partialReply = await readPartialAssistantText(activeSessionFile);
+      const transcriptLimits =
+        activeSessionFile === sessionFile
+          ? { startByteOffset: sessionFileStartByteOffset }
+          : undefined;
+      const partialReply = await readPartialAssistantText(activeSessionFile, transcriptLimits);
       const transcriptState = await readActiveMemoryTranscriptState(
         activeSessionFile,
-        undefined,
-        params.config.toolsAllow,
+        transcriptLimits,
+        hiddenToolsAllow,
       );
       attachPartialTimeoutData(
         error,
@@ -3076,7 +3172,7 @@ async function runRecallSubagent(params: {
     }
     if (
       !params.abortSignal?.aborted &&
-      isMissingRegisteredMemoryToolsError(error, params.config.toolsAllow)
+      isMissingRegisteredMemoryToolsError(error, hiddenToolsAllow)
     ) {
       params.api.logger.debug?.(
         `active-memory: no configured memory tools available; skipping sub-agent`,
@@ -3086,13 +3182,15 @@ async function runRecallSubagent(params: {
     if (!params.abortSignal?.aborted) {
       const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
       params.api.logger.warn?.(
-        `active-memory: memory sub-agent failed, skipping recall: ${message}`,
+        `active-memory: memory sub-agent failed after ${Date.now() - recallRunStartedAt}ms, skipping recall: ${message}`,
       );
       return { rawReply: "NONE", resultStatus: "failed" };
     }
     throw error;
   } finally {
-    await transientWorkspace?.cleanup();
+    if (!params.config.persistTranscripts) {
+      await fs.rm(sessionDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 }
 
@@ -3108,6 +3206,9 @@ async function maybeResolveActiveRecall(params: {
   searchQuery: string;
   currentModelProviderId?: string;
   currentModelId?: string;
+  fastMode?: FastMode;
+  fastModeStartedAtMs?: number;
+  fastModeAutoOnSeconds?: number;
   abortSignal?: AbortSignal;
 }): Promise<ActiveRecallResult> {
   params.abortSignal?.throwIfAborted();
@@ -3218,7 +3319,9 @@ async function maybeResolveActiveRecall(params: {
   }
   const TIMEOUT_SENTINEL = Symbol("timeout");
   let sessionFile: string | undefined;
+  let sessionFileStartByteOffset = 0;
   let recallTimedOut = false;
+  const hiddenToolsAllow = resolveHiddenRecallToolsAllow(params.config.toolsAllow);
   const watchdogTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
   const timeoutId = setTimeout(() => {
     if (params.abortSignal?.aborted) {
@@ -3247,14 +3350,16 @@ async function maybeResolveActiveRecall(params: {
       ...params,
       modelRef: resolvedModelRef,
       abortSignal: controller.signal,
-      onSessionFile: (value) => {
+      onSessionFile: (value, startByteOffset) => {
         sessionFile = value;
+        sessionFileStartByteOffset = startByteOffset;
       },
     });
     terminalMemorySearchWatch = watchTerminalMemorySearchResult({
       getSessionFile: () => sessionFile,
+      getTranscriptStartByteOffset: () => sessionFileStartByteOffset,
       abortSignal: controller.signal,
-      toolsAllow: params.config.toolsAllow,
+      toolsAllow: hiddenToolsAllow,
     });
     // Silently catch late rejections after timeout so they don't become
     // unhandled promise rejections.
@@ -3301,8 +3406,9 @@ async function maybeResolveActiveRecall(params: {
             elapsedMs,
             maxSummaryChars: params.config.maxSummaryChars,
             sessionFile,
+            transcriptStartByteOffset: sessionFileStartByteOffset,
             subagentPromise,
-            toolsAllow: params.config.toolsAllow,
+            toolsAllow: hiddenToolsAllow,
           });
       if (params.config.logging) {
         params.api.logger.info?.(
@@ -3400,10 +3506,11 @@ async function maybeResolveActiveRecall(params: {
         elapsedMs: Date.now() - startedAt,
         maxSummaryChars: params.config.maxSummaryChars,
         sessionFile,
+        transcriptStartByteOffset: sessionFileStartByteOffset,
         rawReply: partialTimeoutData.rawReply,
         searchDebug: partialTimeoutData.searchDebug,
         hasUnavailableMemorySearchResult: partialTimeoutData.hasUnavailableMemorySearchResult,
-        toolsAllow: params.config.toolsAllow,
+        toolsAllow: hiddenToolsAllow,
       });
       if (params.config.logging) {
         params.api.logger.info?.(
@@ -3628,6 +3735,16 @@ export default definePluginEntry({
                 : undefined);
             const effectiveAgentId =
               resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
+            if (isLosslessExpansionSubagentSession(resolvedSessionKey ?? ctx.sessionKey)) {
+              // Lossless expansion is already a private memory-context turn. Running
+              // Active Memory inside it creates a nested recall loop and extra Codex threads.
+              await persistPluginStatusLines({
+                api,
+                agentId: effectiveAgentId,
+                sessionKey: resolvedSessionKey,
+              });
+              return undefined;
+            }
             const sessionDisabled = await isSessionActiveMemoryDisabled({
               api,
               sessionKey: resolvedSessionKey,
@@ -3714,6 +3831,9 @@ export default definePluginEntry({
               searchQuery,
               currentModelProviderId: ctx.modelProviderId,
               currentModelId: ctx.modelId,
+              fastMode: ctx.fastMode,
+              fastModeStartedAtMs: ctx.fastModeStartedAtMs,
+              fastModeAutoOnSeconds: ctx.fastModeAutoOnSeconds,
               abortSignal: deadlineController.signal,
             });
             deadlineController.signal.throwIfAborted();
