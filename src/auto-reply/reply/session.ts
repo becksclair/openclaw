@@ -59,6 +59,7 @@ import {
   normalizeMainKey,
 } from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
+import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeSessionDeliveryFields,
@@ -86,6 +87,7 @@ import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js"
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 const log = createSubsystemLogger("session-init");
+const replySessionInitializationQueues = new Map<string, StoreWriterQueue>();
 
 function stripThreadFromSessionRoute(route: SessionEntry["route"]): SessionEntry["route"] {
   const normalized = normalizeDeliveryChannelRoute(route);
@@ -186,6 +188,83 @@ export type InitSessionStateParams = {
   resumeRequestedSession?: boolean;
 };
 
+type ReplySessionInitializationTarget = {
+  agentId: string;
+  conversationBindingContext: ReturnType<typeof resolveSessionConversationBindingContext>;
+  groupResolution?: GroupKeyResolution;
+  isSystemEvent: boolean;
+  mainKey: string;
+  sessionCfg: OpenClawConfig["session"];
+  sessionCtxForState: MsgContext;
+  sessionKey: string;
+  sessionScope: SessionScope;
+  storePath: string;
+};
+
+function resolveReplySessionInitializationTarget(
+  cfg: OpenClawConfig,
+  ctx: MsgContext,
+): ReplySessionInitializationTarget {
+  // Heartbeat, cron-event, and exec-event runs should NEVER trigger session
+  // resets or conversation binding retargeting. These are automated system
+  // events, not user interactions that should affect session continuity.
+  // See #58409 for details on silent session reset bug.
+  const isSystemEvent =
+    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
+  const conversationBindingContext = isSystemEvent
+    ? null
+    : resolveSessionConversationBindingContext(cfg, ctx);
+  // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
+  // "slash session" key, but should mutate the target chat session.
+  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
+  // Native slash/menu commands can arrive on a transport-specific "slash session"
+  // while explicitly targeting an existing chat session. Honor that explicit target
+  // before any binding lookup so command-side mutations land on the intended session.
+  // Priority: commandTargetSessionKey > boundConversation > route.
+  const targetSessionKey =
+    commandTargetSessionKey ??
+    resolveBoundConversationSessionKey({
+      cfg,
+      ctx,
+      bindingContext: conversationBindingContext,
+    });
+  const sessionCtxForState =
+    targetSessionKey && targetSessionKey !== ctx.SessionKey
+      ? { ...ctx, SessionKey: targetSessionKey }
+      : ctx;
+  const sessionCfg = cfg.session;
+  const mainKey = normalizeMainKey(sessionCfg?.mainKey);
+  const agentId = resolveSessionAgentId({
+    sessionKey: sessionCtxForState.SessionKey,
+    config: cfg,
+    fallbackAgentId: sessionCtxForState.AgentId,
+  });
+  const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
+  const sessionScope = sessionCfg?.scope ?? "per-sender";
+  const storePath = resolveStorePath(sessionCfg?.store, { agentId });
+  // Canonicalize so the written key matches what all read paths produce.
+  // resolveSessionKey uses DEFAULT_AGENT_ID="main"; the configured default
+  // agent may differ, causing key mismatch and orphaned sessions (#29683).
+  const sessionKey = canonicalizeMainSessionAlias({
+    cfg,
+    agentId,
+    sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey),
+  });
+
+  return {
+    agentId,
+    conversationBindingContext,
+    ...(groupResolution ? { groupResolution } : {}),
+    isSystemEvent,
+    mainKey,
+    sessionCfg,
+    sessionCtxForState,
+    sessionKey,
+    sessionScope,
+    storePath,
+  };
+}
+
 function resolveSessionConversationBindingContext(
   cfg: OpenClawConfig,
   ctx: MsgContext,
@@ -246,55 +325,39 @@ function resolveBoundConversationSessionKey(params: {
 
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
-  return await initSessionStateAttempt(params, false);
+  const target = resolveReplySessionInitializationTarget(params.cfg, params.ctx);
+  // Same-session bursts must queue before snapshot reads; otherwise each turn can
+  // prepare against the same revision and fight the guarded metadata commit.
+  return await runQueuedStoreWrite({
+    queues: replySessionInitializationQueues,
+    storePath: `${target.storePath}\0${target.sessionKey}`,
+    label: "replySessionInitialization",
+    fn: async () => await initSessionStateAttempt(params, false, target),
+  });
 }
 
 async function initSessionStateAttempt(
   params: InitSessionStateParams,
   staleSnapshotRetried: boolean,
+  resolvedTarget?: ReplySessionInitializationTarget,
 ): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
-  // Heartbeat, cron-event, and exec-event runs should NEVER trigger session
-  // resets or conversation binding retargeting. These are automated system
-  // events, not user interactions that should affect session continuity.
-  // See #58409 for details on silent session reset bug.
-  const isSystemEvent =
-    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
-  const conversationBindingContext = isSystemEvent
-    ? null
-    : resolveSessionConversationBindingContext(cfg, ctx);
-  // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
-  // "slash session" key, but should mutate the target chat session.
-  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
-  // Native slash/menu commands can arrive on a transport-specific "slash session"
-  // while explicitly targeting an existing chat session. Honor that explicit target
-  // before any binding lookup so command-side mutations land on the intended session.
-  // Priority: commandTargetSessionKey > boundConversation > route.
-  const targetSessionKey =
-    commandTargetSessionKey ??
-    resolveBoundConversationSessionKey({
-      cfg,
-      ctx,
-      bindingContext: conversationBindingContext,
-    });
-  const sessionCtxForState =
-    targetSessionKey && targetSessionKey !== ctx.SessionKey
-      ? { ...ctx, SessionKey: targetSessionKey }
-      : ctx;
-  const sessionCfg = cfg.session;
+  const {
+    agentId,
+    conversationBindingContext,
+    groupResolution,
+    isSystemEvent,
+    mainKey,
+    sessionCfg,
+    sessionCtxForState,
+    sessionKey,
+    sessionScope,
+    storePath,
+  } = resolvedTarget ?? resolveReplySessionInitializationTarget(cfg, ctx);
   const maintenanceConfig = resolveMaintenanceConfigFromInput(sessionCfg?.maintenance);
-  const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const agentId = resolveSessionAgentId({
-    sessionKey: sessionCtxForState.SessionKey,
-    config: cfg,
-    fallbackAgentId: sessionCtxForState.AgentId,
-  });
-  const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
-  const sessionScope = sessionCfg?.scope ?? "per-sender";
-  const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 
   let sessionEntry: SessionEntry;
@@ -393,14 +456,6 @@ async function initSessionStateAttempt(
     }
   }
 
-  // Canonicalize so the written key matches what all read paths produce.
-  // resolveSessionKey uses DEFAULT_AGENT_ID="main"; the configured default
-  // agent may differ, causing key mismatch and orphaned sessions (#29683).
-  const sessionKey: string = canonicalizeMainSessionAlias({
-    cfg,
-    agentId,
-    sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey),
-  });
   // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
   // Stale cache (especially with multiple gateway processes or on Windows where
   // mtime granularity may miss rapid writes) can cause incorrect sessionId
@@ -858,7 +913,7 @@ async function initSessionStateAttempt(
   });
   if (!committed.ok) {
     if (!staleSnapshotRetried) {
-      return await initSessionStateAttempt(params, true);
+      return await initSessionStateAttempt(params, true, resolvedTarget);
     }
     throw new Error(`reply session initialization conflicted for ${sessionKey}`);
   }

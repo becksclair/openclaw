@@ -31,6 +31,7 @@ import { createSessionConversationTestRegistry } from "../../test-utils/session-
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
+import { buildTestCtx } from "./test-ctx.js";
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
@@ -304,6 +305,38 @@ async function writeTerminalTranscriptSessionStore(params: {
     },
   });
 }
+
+it("serializes concurrent initialization for the same reply session", async () => {
+  const storePath = await makeStorePath("openclaw-session-init-burst-");
+  const cfg = {
+    session: { store: storePath },
+  } as OpenClawConfig;
+  const sessionKey = "agent:sky:main";
+
+  const results = await Promise.all(
+    Array.from({ length: 8 }, (_, index) =>
+      initSessionState({
+        ctx: buildTestCtx({
+          Provider: "telegram",
+          Surface: "telegram",
+          From: "telegram:1637222485",
+          To: "telegram:bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Body: `burst message ${index}`,
+          BodyForAgent: `burst message ${index}`,
+        }),
+        cfg,
+        commandAuthorized: true,
+      }),
+    ),
+  );
+
+  const sessionIds = new Set(results.map((result) => result.sessionId));
+  expect(sessionIds.size).toBe(1);
+  const stored = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
+  expect(stored[sessionKey]?.sessionId).toBe(results[0]?.sessionId);
+});
 
 function setMinimalCurrentConversationBindingRegistryForTests(): void {
   setActivePluginRegistry(
