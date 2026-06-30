@@ -75,6 +75,31 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     ]);
   });
 
+  it("keeps forced heartbeat response tool through explicit runtime allowlists", () => {
+    const tools = [{ name: "music_generate" }, { name: "heartbeat_respond" }];
+    const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(["music_generate"], {
+      forceHeartbeatTool: true,
+    });
+
+    expect(toolsAllow).toEqual(["music_generate", "heartbeat_respond"]);
+    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
+      "music_generate",
+      "heartbeat_respond",
+    ]);
+  });
+
+  it("materializes forced heartbeat response tool through empty runtime allowlists", () => {
+    const tools = [{ name: "music_generate" }, { name: "heartbeat_respond" }];
+    const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow([], {
+      forceHeartbeatTool: true,
+    });
+
+    expect(toolsAllow).toEqual(["heartbeat_respond"]);
+    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
+      "heartbeat_respond",
+    ]);
+  });
+
   it("normalizes explicit toolsAllow entries before filtering", () => {
     const tools = [{ name: "cron" }, { name: "read" }, { name: "message" }];
 
@@ -227,6 +252,24 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
     );
   });
 
+  it("constructs heartbeat response tool for forced heartbeat delivery on explicit no-tools runs", () => {
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [], forceHeartbeatTool: true }),
+      {
+        constructTools: true,
+        includeCoreTools: true,
+        runtimeToolAllowlist: ["heartbeat_respond"],
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      },
+    );
+  });
+
   it("materializes only plugin candidates for plugin-only allowlists", () => {
     expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["memory_search"] }),
@@ -255,6 +298,27 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         constructTools: true,
         includeCoreTools: true,
         runtimeToolAllowlist: ["memory_search", "message"],
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: true,
+          includeOpenClawTools: true,
+          includePluginTools: true,
+        },
+      },
+    );
+  });
+
+  it("materializes OpenClaw tools when a plugin-only allowlist forces heartbeat response", () => {
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({
+        toolsAllow: ["memory_search"],
+        forceHeartbeatTool: true,
+      }),
+      {
+        constructTools: true,
+        includeCoreTools: true,
+        runtimeToolAllowlist: ["memory_search", "heartbeat_respond"],
         coding: {
           includeBaseCodingTools: false,
           includeShellTools: false,

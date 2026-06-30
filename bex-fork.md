@@ -14,7 +14,7 @@ Replay classification:
 
 ## v2026.6.11-beta.1 seam necessity review
 
-Replayed from fork head `0fc81306a2` (base `v2026.6.10`) onto upstream `v2026.6.11-beta.1` (`c862a644bf`). 79 commits replayed; none went empty (all carried). Eight commits needed conflict resolution: the squashed seam bundle (`apps/android/app/build.gradle.kts` compileSdk 36 + ndkVersion, `extensions/google/speech-provider.ts` volume gain over upstream `synthesizeConfiguredGoogleTts`, `extensions/telegram/.../delivery.replies.ts` voice/react imports), and seven `:app`/extension follow-ups reconciling the fork's session-key threading and chat reconciliation against upstream's new `ChatSendAck` send-path refactor. Net fork footprint matches the prior head exactly (423 files). All 29 runtime seams verified present in the rebased tree (file:line evidence); no seam was lost.
+Replayed from fork head `0fc81306a2` (base `v2026.6.10`) onto upstream `v2026.6.11-beta.1` (`c862a644bf`). 79 commits replayed; none went empty (all carried). Eight commits needed conflict resolution: the squashed seam bundle (`apps/android/app/build.gradle.kts` compileSdk 36 + ndkVersion, `extensions/google/speech-provider.ts` volume gain over upstream `synthesizeConfiguredGoogleTts`, `extensions/telegram/.../delivery.replies.ts` voice/react imports), and seven `:app`/extension follow-ups reconciling the fork's session-key threading and chat reconciliation against upstream's new `ChatSendAck` send-path refactor. Net fork footprint matches the prior head exactly (423 files). All 29 replayed runtime seams verified present in the rebased tree (file:line evidence); no replayed seam was lost. Two post-review bug-fix seams are also recorded below for the next fork carry: forced heartbeat tool construction and Lobster workspace cwd sandboxing.
 
 | Seam                                      | Decision              | Importance | v2026.6.11-beta.1 evidence / replay note                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ----------------------------------------- | --------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -28,6 +28,8 @@ Replayed from fork head `0fc81306a2` (base `v2026.6.10`) onto upstream `v2026.6.
 | Gateway main session display title        | Runtime carry         | Medium     | Canonical-main display override (`session-utils.ts`) still absent upstream; carried.                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Gateway main session direct delivery      | Runtime carry         | Medium     | Direct-main delivery-route guard (`server-methods/chat.ts`) still absent upstream; carried.                                                                                                                                                                                                                                                                                                                                                                                              |
 | Notification heartbeat wakes              | Runtime carry         | Medium     | `notifications-event` wake bypass still absent upstream; carried with main-session routing, quiet HEARTBEAT policy, consecutive posted-summary wake dedupe, and SystemUI charging-noise filtering.                                                                                                                                                                                                                                                                                       |
+| Forced heartbeat tool construction        | Runtime carry         | Medium     | Explicit `toolsAllow` runs can filter out `heartbeat_respond` even when the run forces heartbeat delivery. Carry `forceHeartbeatTool` through embedded attempt allowlist merging and construction planning so heartbeat replies remain available for empty or plugin-only allowlists.                                                                                                                                                                                                      |
+| Lobster workspace cwd sandbox             | Runtime carry         | Medium     | Lobster tool calls used the Gateway process cwd as their sandbox root and rejected all absolute cwd values, so workspace-scoped calls could run in the wrong directory or fail when callers supplied the active workspace path. Carry workspace-rooted cwd resolution from the tool context while still rejecting paths outside the active workspace.                                                                                                                                          |
 | Control UI read aloud through Talk        | Partial-overlap carry | Medium     | Browser `talk-tts.ts` read-aloud surface still absent upstream; thin current-Talk integration carried.                                                                                                                                                                                                                                                                                                                                                                                   |
 | Discord 30032 command deploy recovery     | Runtime carry         | Medium     | `isDiscordDeployCommandLimit` recovery still absent; carried.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Discord auto-presence account auth store  | Runtime carry         | Medium     | Account-bound auth-store resolution still absent; carried.                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -215,6 +217,8 @@ keytool -printcert -jarfile <app.aab>         # AAB: read the "SHA256:" line
 - `context-rich-realtime-talk-tools` - active seam: keep Gateway-owned realtime Talk as a context-rich voice agent surface with exact `voice-agent-base.md` prompt loading, transient current-session context, latest projected `message` tool mirror context, degraded large-session fallback, opt-in `talk.realtime.tools`, the `voice` tool profile, hard exclusion of message-sending tools, and server-executed direct tools. Browser/client-owned realtime remains consult/control-only.
 - `android-phone-chat-bubble-width` - active seam: keep full-screen Android phone chat bubbles in `apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt` at `CHAT_SCREEN_BUBBLE_WIDTH_FRACTION = 0.85f` for user, assistant, streaming, and persisted rows. Guard with `apps/android/app/src/test/java/ai/openclaw/app/ui/chat/ChatScreenLayoutTest.kt` and verify with `./gradlew :app:testThirdPartyDebugUnitTest --tests ai.openclaw.app.ui.chat.ChatScreenLayoutTest --console=plain`; deploy Bex's phone with the third-party release APK, never Play release.
 - `notification-heartbeat-wakes` - active seam: keep Android notification wakes on the configured main session by default, keep explicit payload session keys canonicalized, preserve selected agent ids when global scope collapses explicit `agent:<id>:main` keys to `global`, make notification-event heartbeats prompt/consume only `notification:*` queued events while leaving exec, cron, and text-lookalike plugin events queued, suppress repeated wake requests for consecutive identical posted notification summaries, and filter Android SystemUI charging notifications out of notification heartbeat prompts.
+- `forced-heartbeat-tool-construction` - active seam: keep embedded attempt runs that force heartbeat delivery from losing `heartbeat_respond` when callers also provide a restrictive `toolsAllow`. Forced runtime tools are merged into explicit allowlists before construction planning, while undefined and wildcard allowlists keep their existing broad behavior.
+- `lobster-workspace-cwd-sandbox` - active seam: keep Lobster command cwd resolution rooted in the active plugin tool workspace, not the Gateway process cwd. Relative cwd values resolve inside `ctx.workspaceDir`; absolute cwd values are allowed only when they stay inside that workspace; omitted cwd defaults to the workspace root for tool-created Lobster instances.
 
 ## Seam inventory
 
@@ -262,6 +266,51 @@ Rebase notes:
 - Keep `channel-contract-testing` in both package DTS inputs and required package DTS outputs. The required outputs include the contract testkit declarations, `src/channels/turn/dispatch-result.d.ts`, and `src/plugin-sdk/channel-contract-testing.d.ts` under `packages/plugin-sdk/dist`.
 - If `packages/plugin-sdk/dist/src/plugin-sdk/channel-contract-testing.d.ts` exists only as the stale root-shim re-export, remove package DTS incremental state and regenerate it before treating package-boundary artifacts as fresh.
 - Do not satisfy package-boundary proof with root `dist/plugin-sdk` outputs alone. The packaged plugin-sdk import surface must work from `packages/plugin-sdk/dist` as shipped.
+
+### Forced heartbeat tool construction
+
+Carry behavior: embedded attempt runs that set `forceHeartbeatTool` must keep the `heartbeat_respond` tool constructible even when the caller also supplies a restrictive runtime tool allowlist. This fixes heartbeat delivery paths where the run explicitly needs heartbeat replies, but `toolsAllow: []` or a plugin-only allowlist would otherwise construct no OpenClaw heartbeat tool.
+
+Primary seam files:
+
+- `src/agents/embedded-agent-runner/run/attempt-tool-construction-plan.ts`
+- `src/agents/embedded-agent-runner/run/attempt-tool-construction-plan.test.ts`
+- `src/agents/embedded-agent-runner/run/attempt.ts`
+
+Primary seam tests:
+
+- `src/agents/embedded-agent-runner/run/attempt-tool-construction-plan.test.ts`
+- `pnpm test src/agents/embedded-agent-runner/run/attempt-tool-construction-plan.test.ts`
+
+Rebase notes:
+
+- Keep `forceHeartbeatTool` parity with `forceMessageTool` in `mergeForcedEmbeddedAttemptToolsAllow()`: forced runtime tools are appended to explicit allowlists, materialized for empty allowlists, left alone for wildcard allowlists, and not materialized when `toolsAllow` is undefined.
+- Keep construction planning and the runtime attempt path in sync. `runEmbeddedAttempt()` should merge forced runtime tools before `resolveEmbeddedAttemptToolConstructionPlan()` and pass `forceHeartbeatTool` into the plan so OpenClaw tool families are constructed when the only OpenClaw tool is the forced heartbeat response.
+- Do not broaden this into a generic hidden fallback. The seam exists because heartbeat delivery is an explicit runtime contract; other tools still need normal allowlist admission.
+
+### Lobster workspace cwd sandbox
+
+Carry behavior: Lobster tool calls resolve their working directory against the active workspace for the plugin tool invocation. Relative `cwd` values resolve inside that workspace, absolute `cwd` values are accepted only when they stay inside the workspace, and omitted `cwd` defaults to the workspace root for normal tool-created Lobster instances. This fixes workspace-scoped Lobster runs that previously resolved against the Gateway process cwd or rejected the already-resolved workspace path.
+
+Primary seam files:
+
+- `extensions/lobster/index.ts`
+- `extensions/lobster/src/lobster-tool.ts`
+- `extensions/lobster/src/lobster-tool.test.ts`
+- `extensions/lobster/src/lobster-runner.ts`
+- `extensions/lobster/src/lobster-runner.test.ts`
+
+Primary seam tests:
+
+- `extensions/lobster/src/lobster-runner.test.ts`
+- `extensions/lobster/src/lobster-tool.test.ts`
+- `pnpm test extensions/lobster/src/lobster-runner.test.ts extensions/lobster/src/lobster-tool.test.ts`
+
+Rebase notes:
+
+- The plugin entrypoint must pass `ctx.workspaceDir` into `createLobsterTool()` as the cwd sandbox base. Test-only or manually constructed tools may keep the process cwd fallback.
+- Preserve the sandbox check after path resolution. Normalize both base and resolved paths with platform-aware casing before comparing, and reject any `cwd` whose relative path escapes the base or becomes absolute.
+- Keep the tool schema description aligned with the runtime contract: cwd may be relative or absolute, but it is workspace-confined either way.
 
 ### ACP backend alias routing
 

@@ -143,23 +143,23 @@ function normalizeForCwdSandbox(p: string): string {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
-export function resolveLobsterCwd(cwdRaw: unknown): string {
+export function resolveLobsterCwd(
+  cwdRaw: unknown,
+  options: { baseCwd?: string } = {},
+): string {
+  const base = options.baseCwd?.trim() ? path.resolve(options.baseCwd) : process.cwd();
   if (typeof cwdRaw !== "string" || !cwdRaw.trim()) {
-    return process.cwd();
+    return base;
   }
   const cwd = cwdRaw.trim();
-  if (path.isAbsolute(cwd)) {
-    throw new Error("cwd must be a relative path");
-  }
-  const base = process.cwd();
-  const resolved = path.resolve(base, cwd);
+  const resolved = path.isAbsolute(cwd) ? path.resolve(cwd) : path.resolve(base, cwd);
 
   const rel = path.relative(normalizeForCwdSandbox(base), normalizeForCwdSandbox(resolved));
   if (rel === "" || rel === ".") {
     return resolved;
   }
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    throw new Error("cwd must stay within the gateway working directory");
+    throw new Error("cwd must stay within the Lobster working directory");
   }
   return resolved;
 }

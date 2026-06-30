@@ -1,5 +1,6 @@
 // Lobster tests cover lobster tool plugin behavior.
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../runtime-api.js";
 import { createLobsterTool } from "./lobster-tool.js";
@@ -387,20 +388,49 @@ describe("lobster plugin tool", () => {
     ).rejects.toThrow(/Unknown action/);
   });
 
-  it("rejects absolute cwd", async () => {
-    const tool = createLobsterTool(fakeApi(), {
-      runner: { run: vi.fn() },
-    });
-    await expect(
-      tool.execute("call-absolute-cwd", {
-        action: "run",
-        pipeline: "noop",
-        cwd: "/tmp",
+  it("allows absolute cwd inside the active workspace", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
       }),
-    ).rejects.toThrow(/cwd must be a relative path/);
+    };
+    const workspace = process.cwd();
+    const tool = createLobsterTool(fakeApi(), {
+      runner,
+      cwdBase: workspace,
+    });
+
+    await tool.execute("call-absolute-cwd", {
+      action: "run",
+      pipeline: "noop",
+      cwd: workspace,
+    });
+
+    expect(runner.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: workspace,
+      }),
+    );
   });
 
-  it("rejects cwd that escapes the gateway working directory", async () => {
+  it("rejects absolute cwd outside the active workspace", async () => {
+    const tool = createLobsterTool(fakeApi(), {
+      runner: { run: vi.fn() },
+      cwdBase: process.cwd(),
+    });
+    await expect(
+      tool.execute("call-absolute-cwd-outside-workspace", {
+        action: "run",
+        pipeline: "noop",
+        cwd: path.dirname(process.cwd()),
+      }),
+    ).rejects.toThrow(/must stay within/);
+  });
+
+  it("rejects cwd that escapes the Lobster working directory", async () => {
     const tool = createLobsterTool(fakeApi(), {
       runner: { run: vi.fn() },
     });
