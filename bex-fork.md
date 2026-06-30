@@ -31,6 +31,7 @@ Replayed from fork head `0fc81306a2` (base `v2026.6.10`) onto upstream `v2026.6.
 | Forced heartbeat tool construction        | Runtime carry         | Medium     | Explicit `toolsAllow` runs can filter out `heartbeat_respond` even when the run forces heartbeat delivery. Carry `forceHeartbeatTool` through embedded attempt allowlist merging and construction planning so heartbeat replies remain available for empty or plugin-only allowlists.                                                                                                                                                                                                    |
 | Lobster workspace cwd sandbox             | Runtime carry         | Medium     | Lobster tool calls used the Gateway process cwd as their sandbox root and rejected all absolute cwd values, so workspace-scoped calls could run in the wrong directory or fail when callers supplied the active workspace path. Carry workspace-rooted cwd resolution from the tool context while still rejecting paths outside the active workspace.                                                                                                                                    |
 | Reply session init burst serialization    | Runtime carry         | High       | Telegram/direct bursts can start several same-session reply initializers before any one commits session metadata. Carry per-store/per-session initialization queueing before snapshot reads so concurrent turns reuse the winning session id instead of tripping the guarded metadata commit with `reply session initialization conflicted`.                                                                                                                                             |
+| Persistent Codex memory recall            | Runtime carry         | High       | Active Memory hidden recall needs low-latency Codex/OpenAI execution without leaking hidden turns into visible session hooks, Honcho, TTS, skills, MCP servers, Codex plugins, or stale native thread context. Carry the fresh-per-recall native session, warm Codex app-server client, memory-recall prompt profile, trusted fast-mode inheritance, bounded trace instrumentation, and custom memory-tool preservation across Codex/Copilot sibling harnesses.                          |
 | Control UI read aloud through Talk        | Partial-overlap carry | Medium     | Browser `talk-tts.ts` read-aloud surface still absent upstream; thin current-Talk integration carried.                                                                                                                                                                                                                                                                                                                                                                                   |
 | Discord 30032 command deploy recovery     | Runtime carry         | Medium     | `isDiscordDeployCommandLimit` recovery still absent; carried.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Discord auto-presence account auth store  | Runtime carry         | Medium     | Account-bound auth-store resolution still absent; carried.                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -221,6 +222,7 @@ keytool -printcert -jarfile <app.aab>         # AAB: read the "SHA256:" line
 - `forced-heartbeat-tool-construction` - active seam: keep embedded attempt runs that force heartbeat delivery from losing `heartbeat_respond` when callers also provide a restrictive `toolsAllow`. Forced runtime tools are merged into explicit allowlists before construction planning, while undefined and wildcard allowlists keep their existing broad behavior.
 - `lobster-workspace-cwd-sandbox` - active seam: keep Lobster command cwd resolution rooted in the active plugin tool workspace, not the Gateway process cwd. Relative cwd values resolve inside `ctx.workspaceDir`; absolute cwd values are allowed only when they stay inside that workspace; omitted cwd defaults to the workspace root for tool-created Lobster instances.
 - `reply-session-init-burst-serialization` - active seam: keep reply session initialization serialized per store path and canonical session key before the session-store snapshot is read. Same-session Telegram/direct bursts must queue and reuse the committed session metadata instead of preparing multiple fresh session ids and surfacing `reply session initialization conflicted` as a channel dispatch failure.
+- `persistent-codex-memory-recall` - active seam: keep Active Memory recall on a stripped hidden Codex/OpenAI path with a warm app-server client but fresh native Codex session per recall, private temp transcript cleanup when user transcript persistence is off, no Honcho/plugin/TTS/skills/MCP/Codex-plugin participation, custom memory-tool allowlists preserved after broad-tool normalization, bounded trace instrumentation, and trusted parent fast-mode inheritance for plugin subagents only.
 
 ## Seam inventory
 
@@ -335,6 +337,43 @@ Rebase notes:
 - Queue before `loadReplySessionInitializationSnapshot()`, not only around `commitReplySessionInitialization()`. The store writer already serializes writes; the bug class is stale read/decision work that happens before the guarded write.
 - Keep `commitReplySessionInitialization()` CAS and one-retry recovery. The per-session queue is a same-process contention reducer, not a replacement for stale-snapshot protection across process boundaries or future SQLite transactions.
 - Keep concurrency regression coverage as a burst of several same-session initializers and assert they all converge on one persisted session id. A two-turn test is insufficient because the old one-retry path could already hide a simple two-way race.
+
+### Persistent Codex memory recall
+
+Carry behavior: Active Memory hidden recall runs should be fast, private, and isolated. OpenAI recall models run through the Codex harness with `reasoningLevel: "off"` and a compact memory-recall profile, while keeping the Codex app-server client warm across recalls. Each recall still uses a fresh hidden session key, native Codex thread, session id, run id, and temp transcript file so stale hidden memory cannot bleed into later queries. When `persistTranscripts: false`, private runtime transcript files live under `os.tmpdir()` and are removed in `finally` after result or partial-timeout evidence recovery. Hidden runs must not call Honcho, auto-TTS, generic plugin hooks, native Codex hooks, native Copilot hooks, skills, MCP servers, Codex plugins, message tools, or the context engine.
+
+Primary seam files:
+
+- `extensions/active-memory/index.ts`
+- `src/agents/embedded-agent-runner/run.ts`
+- `src/agents/embedded-agent-runner/run/attempt.ts`
+- `src/agents/embedded-agent-runner/run/params.ts`
+- `src/agents/harness/hook-context.ts`
+- `src/plugins/hook-types.ts`
+- `src/plugins/runtime/types.ts`
+- `src/gateway/server-methods/agent.ts`
+- `src/gateway/server-plugins.ts`
+- `packages/gateway-protocol/src/schema/agent.ts`
+- `extensions/codex/src/app-server/run-attempt.ts`
+- `extensions/codex/src/app-server/dynamic-tool-build.ts`
+- `extensions/codex/src/app-server/dynamic-tools.ts`
+- `extensions/codex/src/app-server/attempt-context.ts`
+- `extensions/copilot/src/attempt.ts`
+
+Primary seam tests:
+
+- `node scripts/run-vitest.mjs extensions/active-memory/index.test.ts`
+- `node scripts/run-vitest.mjs extensions/copilot/src/attempt.test.ts`
+- `node scripts/run-vitest.mjs extensions/active-memory/index.test.ts extensions/copilot/src/attempt.test.ts src/agents/agent-tools.create-openclaw-coding-tools.test.ts extensions/codex/src/app-server/dynamic-tool-build.test.ts extensions/codex/src/app-server/dynamic-tools.test.ts extensions/codex/src/app-server/run-attempt.test.ts extensions/codex/src/app-server/run-attempt.native-hook-relay.test.ts src/agents/embedded-agent-runner/run/attempt.test.ts src/agents/embedded-agent-runner/run.before-agent-reply-cron.test.ts src/gateway/server-methods/agent.test.ts src/gateway/server-plugins.test.ts packages/gateway-protocol/src/schema/agent.test.ts`
+
+Rebase notes:
+
+- Do not replay this as a stable native Codex thread. The app-server client/bundle may stay warm, but the native recall thread, session key, session id, session file, and run id must be fresh per recall to avoid stale hidden context.
+- Keep `persistTranscripts: false` private: use temporary 0700 runtime transcript directories and delete them after result or partial-timeout recovery. User transcript persistence is separate from private runtime scratch needed during a hidden recall.
+- Preserve the hidden-run suppression contract across sibling harnesses. Codex and Copilot must both skip generic plugin hooks, before/after tool hooks, LLM input/output hooks, compaction hooks, agent-end hooks, and their native hook bridges when `suppressPluginHooks` is set.
+- Keep hidden recall tool filtering in the Active Memory config normalizer, not a memory-prefix-only hidden filter. Reserved broad/core tools, Honcho, TTS, web, message, exec/read/write, group entries, and wildcard entries are excluded, but custom memory tools such as `search_notes` or `recall_context` remain valid.
+- Fast-mode inheritance is trusted only from plugin subagent/runtime paths. Public gateway agent calls may set the visible fast-mode policy but must not spoof inherited `fastModeStartedAtMs` or `fastModeAutoOnSeconds`.
+- Keep gateway trace maps bounded and lifecycle-cleaned; tracing is for latency diagnosis and must not become unbounded per-request state.
 
 ### ACP backend alias routing
 
