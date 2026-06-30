@@ -1185,12 +1185,14 @@ export async function runEmbeddedAttempt(
       params.toolsAllow,
       {
         forceMessageTool: forceDirectMessageTool,
+        forceHeartbeatTool: params.forceHeartbeatTool,
       },
     );
     const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
       disableTools: params.disableTools,
       isRawModelRun,
       toolsAllow: toolsAllowWithForcedRuntimeTools,
+      forceHeartbeatTool: params.forceHeartbeatTool,
     });
     const toolsEnabled = supportsModelTools(params.model);
     const codeModeConfig = resolveCodeModeConfig(params.config, sessionAgentId);

@@ -88,6 +88,24 @@ describe("resolveLobsterCwd", () => {
       path.resolve(process.cwd(), "extensions/lobster"),
     );
   });
+
+  it("resolves relative paths from an explicit base cwd", () => {
+    const base = path.resolve(process.cwd(), "extensions");
+
+    expect(resolveLobsterCwd("lobster", { baseCwd: base })).toBe(path.join(base, "lobster"));
+  });
+
+  it("allows absolute cwd values inside an explicit base cwd", () => {
+    const base = path.resolve(process.cwd(), "extensions");
+    const cwd = path.join(base, "lobster");
+
+    expect(resolveLobsterCwd(cwd, { baseCwd: base })).toBe(cwd);
+  });
+
+  it("rejects cwd values outside the working directory", () => {
+    expect(() => resolveLobsterCwd(path.dirname(process.cwd()))).toThrow(/must stay within/);
+    expect(() => resolveLobsterCwd("..", { baseCwd: process.cwd() })).toThrow(/must stay within/);
+  });
 });
 
 describe("createEmbeddedLobsterRunner", () => {
