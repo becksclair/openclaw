@@ -202,6 +202,9 @@ async function runCopilotAgentEndHook(
   params: AttemptParamsLike,
   hookParams: CopilotAgentEndHookParams,
 ): Promise<void> {
+  if (params.suppressPluginHooks === true) {
+    return;
+  }
   if (!params.messageChannel && !params.messageProvider) {
     await awaitAgentEndSideEffects(hookParams);
     return;
@@ -395,6 +398,13 @@ export async function runCopilotAttempt(
       ? { contextWindowReferenceTokens: input.contextWindowInfo.referenceTokens }
       : {}),
   };
+  const hookFastMode: boolean | "auto" | undefined =
+    input.fastModeAuto === true
+      ? "auto"
+      : typeof input.fastMode === "boolean"
+        ? input.fastMode
+        : undefined;
+  const shouldRunPluginHooks = input.suppressPluginHooks !== true;
   const hookContext = {
     runId: input.runId,
     jobId: input.jobId,
@@ -406,6 +416,13 @@ export async function runCopilotAttempt(
     modelId: modelRef.id,
     trigger: input.trigger,
     ...(input.config ? { config: input.config } : {}),
+    ...(hookFastMode !== undefined ? { fastMode: hookFastMode } : {}),
+    ...(input.fastModeStartedAtMs !== undefined
+      ? { fastModeStartedAtMs: input.fastModeStartedAtMs }
+      : {}),
+    ...(input.fastModeAutoOnSeconds !== undefined
+      ? { fastModeAutoOnSeconds: input.fastModeAutoOnSeconds }
+      : {}),
     ...hookContextWindowFields,
     ...buildAgentHookContextChannelFields(input),
   };
@@ -648,20 +665,22 @@ export async function runCopilotAttempt(
         onYieldDetected: () => {
           yieldDetected = true;
         },
-        onToolCompleted: ({ args, error, result, startedAt, toolCallId, toolName }) =>
-          runAgentHarnessAfterToolCallHook({
-            toolName,
-            toolCallId,
-            runId: input.runId,
-            agentId: sessionAgentId,
-            sessionId: input.sessionId,
-            sessionKey: sandboxSessionKey,
-            channelId: hookContext.channelId,
-            startArgs: args,
-            ...(result !== undefined ? { result } : {}),
-            ...(error ? { error } : {}),
-            startedAt,
-          }),
+        onToolCompleted: shouldRunPluginHooks
+          ? ({ args, error, result, startedAt, toolCallId, toolName }) =>
+              runAgentHarnessAfterToolCallHook({
+                toolName,
+                toolCallId,
+                runId: input.runId,
+                agentId: sessionAgentId,
+                sessionId: input.sessionId,
+                sessionKey: sandboxSessionKey,
+                channelId: hookContext.channelId,
+                startArgs: args,
+                ...(result !== undefined ? { result } : {}),
+                ...(error ? { error } : {}),
+                startedAt,
+              })
+          : undefined,
       });
       cleanupToolBridge = toolBridge.cleanup;
       sdkTools = toolBridge.sdkTools;
@@ -706,25 +725,29 @@ export async function runCopilotAttempt(
     });
     const originalDeveloperInstructions =
       createSystemMessageContent(input, workspaceBootstrap.instructions) ?? "";
-    const promptBuild = isRawCopilotModelRun(input)
-      ? {
-          prompt: input.prompt,
-          developerInstructions: originalDeveloperInstructions,
-        }
-      : await resolveAgentHarnessBeforePromptBuildResult({
-          prompt: input.prompt,
-          developerInstructions: originalDeveloperInstructions,
-          messages,
-          ctx: hookContext,
-          bootstrapContextRunKind: input.bootstrapContextRunKind,
-          ...("beforeAgentStartResult" in input
-            ? { beforeAgentStartResult: input.beforeAgentStartResult }
-            : {}),
-        });
+    const promptBuild =
+      isRawCopilotModelRun(input) || !shouldRunPluginHooks
+        ? {
+            prompt: input.prompt,
+            developerInstructions: originalDeveloperInstructions,
+          }
+        : await resolveAgentHarnessBeforePromptBuildResult({
+            prompt: input.prompt,
+            developerInstructions: originalDeveloperInstructions,
+            messages,
+            ctx: hookContext,
+            bootstrapContextRunKind: input.bootstrapContextRunKind,
+            ...("beforeAgentStartResult" in input
+              ? { beforeAgentStartResult: input.beforeAgentStartResult }
+              : {}),
+          });
     const attemptInput =
       promptBuild.prompt === input.prompt ? input : { ...input, prompt: promptBuild.prompt };
     let promptImagesCount = 0;
     const emitLlmInput = (prompt: string, additionalContext?: string) => {
+      if (!shouldRunPluginHooks) {
+        return;
+      }
       runAgentHarnessLlmInputHook({
         event: {
           runId: input.runId,
@@ -744,7 +767,9 @@ export async function runCopilotAttempt(
         ctx: hookContext,
       });
     };
-    const hasNativePromptHook = Boolean(attemptInput.hooksConfig?.onUserPromptSubmitted);
+    const hasNativePromptHook = shouldRunPluginHooks
+      ? Boolean(attemptInput.hooksConfig?.onUserPromptSubmitted)
+      : false;
     const userInputBridge = createCopilotUserInputBridge({
       paramsForRun: attemptInput,
       signal: params.abortSignal,
@@ -847,6 +872,9 @@ export async function runCopilotAttempt(
       onAgentEvent: input.onAgentEvent,
       onNativeSubagentEvent: (event) => nativeSubagentTaskMirror?.handleEvent(event),
       onCompactionStart: async () => {
+        if (!shouldRunPluginHooks) {
+          return;
+        }
         const sessionFile = readString(input.sessionFile);
         if (!sessionFile) {
           return;
@@ -857,6 +885,9 @@ export async function runCopilotAttempt(
         });
       },
       onCompactionComplete: async ({ messagesRemoved, success }) => {
+        if (!shouldRunPluginHooks) {
+          return;
+        }
         const sessionFile = readString(input.sessionFile);
         if (!success || !sessionFile) {
           return;
@@ -1168,7 +1199,7 @@ export async function runCopilotAttempt(
     usage: snap?.usage,
     yieldDetected,
   });
-  if (sentTurnStarted) {
+  if (sentTurnStarted && shouldRunPluginHooks) {
     runAgentHarnessLlmOutputHook({
       event: {
         runId: input.runId,
@@ -1290,7 +1321,10 @@ function createSessionConfig(
   hooksBridgeOptions?: Parameters<typeof createHooksBridge>[1],
 ): CopilotSessionConfig {
   const permissionPolicy = params.permissionPolicy ?? rejectAllPolicy;
-  const hooks = createHooksBridge(params.hooksConfig, hooksBridgeOptions);
+  const hooks =
+    params.suppressPluginHooks === true
+      ? undefined
+      : createHooksBridge(params.hooksConfig, hooksBridgeOptions);
   const infiniteSessions = createInfiniteSessionConfig(params.infiniteSessionConfig);
   return {
     model: sdkModelId,
