@@ -43,6 +43,7 @@ const CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set([
 const CODEX_HEARTBEAT_CONTEXT_BASENAME = "heartbeat.md";
 const CODEX_MEMORY_CONTEXT_BASENAME = "memory.md";
 const CODEX_MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+const CODEX_PROMPT_PROFILE_CHARS_PER_TOKEN = 4;
 const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["soul.md", 10],
   ["identity.md", 20],
@@ -61,6 +62,37 @@ type CodexBootstrapContext = {
 /** System prompt accounting report attached to Codex attempt results. */
 export type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
+type CodexPromptSurfaceProfileEntry = {
+  name: string;
+  chars: number;
+  estimatedTokens: number;
+};
+type CodexPromptSurfaceProfileToolEntry = CodexPromptSurfaceProfileEntry & {
+  summaryChars: number;
+  schemaChars: number;
+};
+export type CodexPromptSurfaceProfile = {
+  schemaVersion: 1;
+  source: "codex-app-server";
+  charsPerToken: number;
+  totals: {
+    promptChars: number;
+    developerInstructionChars: number;
+    baseInstructionChars: number;
+    toolDefinitionChars: number;
+    estimatedTokens: number;
+  };
+  buckets: CodexPromptSurfaceProfileEntry[];
+  contextEngine?: {
+    active: boolean;
+    projectionMode?: string;
+    prePromptMessageCount?: number;
+    promptContextChars?: number;
+  };
+  topWorkspaceFiles: CodexPromptSurfaceProfileEntry[];
+  topSkills: CodexPromptSurfaceProfileEntry[];
+  topTools: CodexPromptSurfaceProfileToolEntry[];
+};
 type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   promptContextFiles?: EmbeddedContextFile[];
   developerInstructionFiles?: EmbeddedContextFile[];
@@ -169,6 +201,21 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   sessionAgentId: string;
   memoryToolNames: readonly string[];
 }): Promise<CodexWorkspaceBootstrapContext> {
+  if (params.params.promptProfile === "memory_recall") {
+    return {
+      bootstrapFiles: [],
+      contextFiles: [],
+      promptContextFiles: [],
+      developerInstructionFiles: [],
+      turnScopedDeveloperInstructionFiles: [],
+      heartbeatReferenceFiles: [],
+      memoryReferenceFiles: [],
+      memoryToolRoutedBootstrapFiles: [],
+      memoryToolNames: [],
+      memoryToolRouted: false,
+    };
+  }
+
   try {
     const memoryToolsAvailable =
       params.memoryToolNames.length > 0 &&
@@ -331,6 +378,128 @@ export function buildCodexSystemPromptReport(params: {
       entries: toolEntries,
     },
   };
+}
+
+/** Builds a content-free prompt attribution profile for Codex app-server diagnostics. */
+export function buildCodexPromptSurfaceProfile(params: {
+  systemPromptReport: CodexSystemPromptReport;
+  turnPrompt: string;
+  rawPrompt: string;
+  developerInstructions: string;
+  threadDeveloperInstructions: string;
+  turnCollaborationInstructions?: string;
+  baseInstructions?: string;
+  openClawPromptContext?: string;
+  contextEngine?: {
+    active: boolean;
+    projectionMode?: string;
+    prePromptMessageCount?: number;
+    promptContextChars?: number;
+  };
+}): CodexPromptSurfaceProfile {
+  const report = params.systemPromptReport;
+  const toolDescriptionChars = report.tools.entries.reduce(
+    (sum, tool) => sum + tool.summaryChars,
+    0,
+  );
+  const toolDefinitionChars = report.tools.schemaChars + toolDescriptionChars;
+  const workspaceFilesChars = report.injectedWorkspaceFiles.reduce(
+    (sum, file) => sum + file.injectedChars,
+    0,
+  );
+  const buckets = [
+    promptProfileEntry("turn.prompt.final", params.turnPrompt.length),
+    promptProfileEntry("turn.prompt.rawUser", params.rawPrompt.length),
+    promptProfileEntry(
+      "turn.prompt.openclawContextFrame",
+      params.openClawPromptContext?.length ?? 0,
+    ),
+    promptProfileEntry("developer.total", params.developerInstructions.length),
+    promptProfileEntry("developer.thread", params.threadDeveloperInstructions.length),
+    promptProfileEntry(
+      "developer.turnCollaboration",
+      params.turnCollaborationInstructions?.length ?? 0,
+    ),
+    promptProfileEntry("developer.baseInstructions", params.baseInstructions?.length ?? 0),
+    promptProfileEntry("tools.definitions", toolDefinitionChars),
+    promptProfileEntry("tools.schemas", report.tools.schemaChars),
+    promptProfileEntry("tools.descriptions", toolDescriptionChars),
+    promptProfileEntry("skills.prompt", report.skills.promptChars),
+    promptProfileEntry("workspace.injectedFiles", workspaceFilesChars),
+  ].filter((entry) => entry.chars > 0);
+  return {
+    schemaVersion: 1,
+    source: "codex-app-server",
+    charsPerToken: CODEX_PROMPT_PROFILE_CHARS_PER_TOKEN,
+    totals: {
+      promptChars: params.turnPrompt.length,
+      developerInstructionChars: params.developerInstructions.length,
+      baseInstructionChars: params.baseInstructions?.length ?? 0,
+      toolDefinitionChars,
+      estimatedTokens: estimateCodexPromptProfileTokens(
+        params.turnPrompt.length +
+          params.developerInstructions.length +
+          (params.baseInstructions?.length ?? 0) +
+          toolDefinitionChars,
+      ),
+    },
+    buckets: buckets.toSorted(comparePromptProfileEntries),
+    ...(params.contextEngine
+      ? {
+          contextEngine: {
+            active: params.contextEngine.active,
+            ...(params.contextEngine.projectionMode
+              ? { projectionMode: params.contextEngine.projectionMode }
+              : {}),
+            ...(params.contextEngine.prePromptMessageCount !== undefined
+              ? { prePromptMessageCount: params.contextEngine.prePromptMessageCount }
+              : {}),
+            ...(params.contextEngine.promptContextChars !== undefined
+              ? { promptContextChars: params.contextEngine.promptContextChars }
+              : {}),
+          },
+        }
+      : {}),
+    topWorkspaceFiles: report.injectedWorkspaceFiles
+      .map((file) => promptProfileEntry(file.name || file.path, file.injectedChars))
+      .filter((entry) => entry.chars > 0)
+      .toSorted(comparePromptProfileEntries)
+      .slice(0, 10),
+    topSkills: report.skills.entries
+      .map((skill) => promptProfileEntry(skill.name, skill.blockChars))
+      .filter((entry) => entry.chars > 0)
+      .toSorted(comparePromptProfileEntries)
+      .slice(0, 10),
+    topTools: report.tools.entries
+      .map((tool) => ({
+        ...promptProfileEntry(tool.name, tool.summaryChars + tool.schemaChars),
+        summaryChars: tool.summaryChars,
+        schemaChars: tool.schemaChars,
+      }))
+      .filter((entry) => entry.chars > 0)
+      .toSorted(comparePromptProfileEntries)
+      .slice(0, 10),
+  };
+}
+
+function estimateCodexPromptProfileTokens(chars: number): number {
+  return Math.max(0, Math.ceil(Math.max(0, chars) / CODEX_PROMPT_PROFILE_CHARS_PER_TOKEN));
+}
+
+function promptProfileEntry(name: string, chars: number): CodexPromptSurfaceProfileEntry {
+  const safeChars = Number.isFinite(chars) ? Math.max(0, Math.floor(chars)) : 0;
+  return {
+    name,
+    chars: safeChars,
+    estimatedTokens: estimateCodexPromptProfileTokens(safeChars),
+  };
+}
+
+function comparePromptProfileEntries(
+  left: CodexPromptSurfaceProfileEntry,
+  right: CodexPromptSurfaceProfileEntry,
+): number {
+  return right.chars - left.chars || left.name.localeCompare(right.name);
 }
 
 function buildCodexSkillReportEntries(
@@ -541,6 +710,9 @@ export function buildCodexOpenClawPromptContext(params: {
 }
 
 function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams): boolean {
+  if (params.promptProfile === "memory_recall") {
+    return false;
+  }
   // Lightweight cron runs are commonly exact commands. Keep the user input byte-for-byte
   // to avoid changing command intent while Codex keeps its native project-doc loader.
   return !(

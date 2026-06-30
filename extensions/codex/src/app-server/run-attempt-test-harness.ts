@@ -541,6 +541,6 @@ export function setupRunAttemptTestHooks(): void {
     vi.useRealTimers();
     vi.unstubAllEnvs();
     await closeCodexSandboxExecServersForTests();
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
 }

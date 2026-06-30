@@ -125,6 +125,12 @@ const CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent": false,
 };
 
+const CODEX_MEMORY_RECALL_DEVELOPER_INSTRUCTIONS =
+  "Internal OpenClaw memory recall profile: use only the provided memory or lossless-claw tools needed by the recall prompt. Do not message the user, use workspace context, load skills, spawn agents, or perform unrelated work. Return only NONE or the compact memory note requested.";
+
+const CODEX_MEMORY_RECALL_COLLABORATION_INSTRUCTIONS =
+  "Internal memory recall turn. Follow the recall prompt exactly and return only the requested recall output.";
+
 export type CodexThreadLifecycleTimingSpan = {
   name: string;
   durationMs: number;
@@ -138,6 +144,7 @@ export type CodexThreadLifecycleTimingSummary = {
 
 export type CodexThreadLifecycleTimingLogger = {
   isEnabled?: (level: "trace") => boolean;
+  info?: (message: string, meta?: Record<string, unknown>) => void;
   trace: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
@@ -256,7 +263,8 @@ function createCodexThreadLifecycleTimingTracker(options: CodexThreadLifecycleTi
       }
       const summary = snapshot();
       const shouldWarn = shouldWarnCodexThreadLifecycleTimingSummary(summary, options);
-      if (!shouldWarn && !log.isEnabled?.("trace")) {
+      const traceEnabled = log.isEnabled?.("trace") === true;
+      if (!shouldWarn && !traceEnabled && options.enabled !== true) {
         return;
       }
       didLog = true;
@@ -278,8 +286,10 @@ function createCodexThreadLifecycleTimingTracker(options: CodexThreadLifecycleTi
       };
       if (shouldWarn) {
         log.warn(message, meta);
-      } else {
+      } else if (traceEnabled) {
         log.trace(message, meta);
+      } else {
+        (log.info ?? log.trace)(message, meta);
       }
     },
   };
@@ -295,6 +305,10 @@ export async function startOrResumeThread(params: {
   webSearchAllowed?: boolean;
   appServer: CodexAppServerRuntimeOptions;
   baseInstructions?: string;
+  baseInstructionsSource?: Exclude<
+    CodexAppServerThreadBinding["baseInstructionsSource"],
+    "external-thread"
+  >;
   baseInstructionsFingerprint?: string;
   developerInstructions?: string;
   config?: JsonObject;
@@ -695,7 +709,7 @@ export async function startOrResumeThread(params: {
         const baseInstructionsManagedBinding =
           isBaseInstructionsFingerprintManagedBinding(resumeBinding);
         const nextBaseInstructionsSource = baseInstructionsManagedBinding
-          ? "agent-file"
+          ? resolveManagedBaseInstructionsSource(params.baseInstructionsSource)
           : resumeBinding.baseInstructionsSource;
         const nextBaseInstructionsFingerprint = baseInstructionsManagedBinding
           ? params.baseInstructionsFingerprint
@@ -872,7 +886,9 @@ export async function startOrResumeThread(params: {
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
           webSearchThreadConfigFingerprint,
-          baseInstructionsSource: "agent-file",
+          baseInstructionsSource: resolveManagedBaseInstructionsSource(
+            params.baseInstructionsSource,
+          ),
           baseInstructionsFingerprint: params.baseInstructionsFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
@@ -925,7 +941,7 @@ export async function startOrResumeThread(params: {
       response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
     dynamicToolsFingerprint,
     dynamicToolsContainDeferred,
-    baseInstructionsSource: "agent-file",
+    baseInstructionsSource: resolveManagedBaseInstructionsSource(params.baseInstructionsSource),
     baseInstructionsFingerprint: params.baseInstructionsFingerprint,
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
@@ -1548,6 +1564,10 @@ function buildTurnScopedCollaborationInstructions(
     heartbeatCollaborationInstructions?: string;
   } = {},
 ): string | null {
+  if (params.promptProfile === "memory_recall") {
+    return CODEX_MEMORY_RECALL_COLLABORATION_INSTRUCTIONS;
+  }
+
   const contextInstructions = joinPresentSections(
     options.turnScopedDeveloperInstructions,
     options.memoryCollaborationInstructions,
@@ -1713,6 +1733,9 @@ function isBaseInstructionsFingerprintManagedBinding(
   if (binding.baseInstructionsSource === "agent-file") {
     return true;
   }
+  if (binding.baseInstructionsSource === "runtime-profile") {
+    return true;
+  }
   if (binding.baseInstructionsSource === "external-thread") {
     return false;
   }
@@ -1723,6 +1746,12 @@ function isBaseInstructionsFingerprintManagedBinding(
     binding.baseInstructionsFingerprint !== undefined ||
     binding.dynamicToolsFingerprint !== undefined
   );
+}
+
+function resolveManagedBaseInstructionsSource(
+  source: CodexAppServerThreadBinding["baseInstructionsSource"] | undefined,
+): "agent-file" | "runtime-profile" {
+  return source === "runtime-profile" ? "runtime-profile" : "agent-file";
 }
 
 function compareJsonFingerprint(left: JsonValue, right: JsonValue): number {
@@ -1736,6 +1765,10 @@ export function buildDeveloperInstructions(
     runtimeDeveloperInstructions?: string;
   } = {},
 ): string {
+  if (params.promptProfile === "memory_recall") {
+    return CODEX_MEMORY_RECALL_DEVELOPER_INSTRUCTIONS;
+  }
+
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
     surface: "codex_app_server",
     includeLegacyGlobalGuidance: false,

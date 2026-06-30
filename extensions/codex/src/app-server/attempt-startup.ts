@@ -102,6 +102,7 @@ export async function startCodexAttemptThread(params: {
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
   baseInstructions?: string;
+  baseInstructionsSource?: Parameters<typeof startOrResumeThread>[0]["baseInstructionsSource"];
   baseInstructionsFingerprint?: string;
   developerInstructions: string | undefined;
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
@@ -109,6 +110,7 @@ export async function startCodexAttemptThread(params: {
   nativeHookRelayGeneration?: string;
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
   nativeToolSurfaceEnabled: boolean;
+  userMcpServersEnabled: boolean;
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   sandboxExecServerEnabled: boolean;
   sandbox: CodexSandboxContext;
@@ -213,12 +215,14 @@ export async function startCodexAttemptThread(params: {
             if (startupAbandonController.signal.aborted) {
               throw new Error("codex app-server startup aborted");
             }
-            await ensureCodexComputerUse({
-              client: activeStartupClient,
-              pluginConfig: params.pluginConfig,
-              timeoutMs: params.appServer.requestTimeoutMs,
-              signal: startupAbandonController.signal,
-            });
+            if (params.computerUseConfig.enabled === true) {
+              await ensureCodexComputerUse({
+                client: activeStartupClient,
+                pluginConfig: params.pluginConfig,
+                timeoutMs: params.appServer.requestTimeoutMs,
+                signal: startupAbandonController.signal,
+              });
+            }
             const startupRuntimeIdentity = activeStartupClient.getRuntimeIdentity();
             const pluginAppCacheKey = buildCodexPluginAppCacheKey({
               appServer: params.appServer,
@@ -321,6 +325,7 @@ export async function startCodexAttemptThread(params: {
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
                 baseInstructions: params.baseInstructions,
+                baseInstructionsSource: params.baseInstructionsSource,
                 baseInstructionsFingerprint: params.baseInstructionsFingerprint,
                 developerInstructions: params.developerInstructions,
                 config: threadConfig,
@@ -330,7 +335,7 @@ export async function startCodexAttemptThread(params: {
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
-                userMcpServersEnabled: params.nativeToolSurfaceEnabled,
+                userMcpServersEnabled: params.userMcpServersEnabled,
                 mcpServersFingerprint: params.bundleMcpThreadConfig.fingerprint,
                 mcpServersFingerprintEvaluated: params.bundleMcpThreadConfig.evaluated,
                 environmentSelection: startupEnvironmentSelection,

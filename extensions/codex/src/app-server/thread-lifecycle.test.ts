@@ -203,6 +203,7 @@ function threadStartResult(threadId = "thread-1") {
 function createTimingLogger(traceEnabled: boolean): CodexThreadLifecycleTimingLogger {
   return {
     isEnabled: vi.fn((level: "trace") => level === "trace" && traceEnabled),
+    info: vi.fn(),
     trace: vi.fn(),
     warn: vi.fn(),
   };
@@ -210,9 +211,12 @@ function createTimingLogger(traceEnabled: boolean): CodexThreadLifecycleTimingLo
 
 function expectSingleLogMessage(
   log: CodexThreadLifecycleTimingLogger,
-  level: "trace" | "warn",
+  level: "info" | "trace" | "warn",
 ): string {
-  const mock = log[level] as ReturnType<typeof vi.fn>;
+  const mock = log[level] as ReturnType<typeof vi.fn> | undefined;
+  if (!mock) {
+    throw new Error(`Expected ${level} logger`);
+  }
   expect(mock).toHaveBeenCalledTimes(1);
   const message = mock.mock.calls[0]?.[0];
   expect(typeof message).toBe("string");
@@ -285,6 +289,37 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).not.toContain("You are a personal agent");
     expect(instructions).not.toContain("You are a personal assistant running inside OpenClaw");
     expect(instructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+  });
+
+  it("uses compact developer instructions for memory recall prompt profile", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.promptProfile = "memory_recall";
+    const instructions = buildDeveloperInstructions(params, {
+      dynamicTools: [
+        {
+          type: "function",
+          name: "message",
+          description: "Send a message",
+          inputSchema: { type: "object" },
+        },
+      ],
+      runtimeDeveloperInstructions: [
+        "## Voice (TTS)",
+        "Voice (TTS) is enabled.",
+        "",
+        "## Runtime",
+        "Runtime: model=gpt-5.4 | channel=codex_app_server",
+      ].join("\n"),
+    });
+
+    expect(instructions).toContain("Internal OpenClaw memory recall profile");
+    expect(instructions).toContain("Return only NONE or the compact memory note requested.");
+    expect(instructions).not.toContain("OpenClaw has dynamic tools");
+    expect(instructions).not.toContain("## Messaging");
+    expect(instructions).not.toContain("## Voice (TTS)");
+    expect(instructions).not.toContain("## Runtime");
+    expect(instructions).not.toContain("Current model identity:");
+    expect(instructions.length).toBeLessThan(500);
   });
 
   it("keeps dynamic runtime context in developer instructions when provided", () => {
@@ -995,6 +1030,32 @@ describe("Codex app-server turn params", () => {
     ).toContain("# Collaboration Mode: Default");
   });
 
+  it("uses compact turn-scoped collaboration instructions for memory recall profile", () => {
+    const params = createAttemptParams({ provider: "codex" });
+    params.modelId = "gpt-5.4-codex";
+    params.promptProfile = "memory_recall";
+
+    const collaborationMode = buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
+      memoryCollaborationInstructions: "## Memory Recall\nUse memory_search.",
+      heartbeatCollaborationInstructions: "Heartbeat context.",
+    });
+
+    expect(collaborationMode.mode).toBe("default");
+    expect(collaborationMode.settings.model).toBe("gpt-5.4-codex");
+    expect(collaborationMode.settings.developer_instructions).toContain(
+      "Internal memory recall turn",
+    );
+    expect(collaborationMode.settings.developer_instructions).not.toContain(
+      "Turn-only workspace instructions.",
+    );
+    expect(collaborationMode.settings.developer_instructions).not.toContain("## Memory Recall");
+    expect(collaborationMode.settings.developer_instructions).not.toContain(
+      "# Collaboration Mode: Default",
+    );
+    expect(collaborationMode.settings.developer_instructions?.length).toBeLessThan(180);
+  });
+
   it("uses turn-scoped collaboration instructions for cron Codex turns", () => {
     const params = createAttemptParams({ provider: "codex" });
     params.modelId = "gpt-5.4-codex";
@@ -1275,6 +1336,41 @@ describe("Codex app-server thread lifecycle timing", () => {
     expect(message).toContain("thread-ready:0ms@17ms");
   });
 
+  it("emits an info stage summary when profiling is enabled without trace logging", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    let nowMs = 0;
+    const log = createTimingLogger(false);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        nowMs += 17;
+        return threadStartResult("thread-started");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createThreadLifecycleParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      timing: {
+        enabled: true,
+        now: () => nowMs,
+        log,
+        totalThresholdMs: 1_000,
+        stageThresholdMs: 1_000,
+      },
+    });
+
+    const message = expectSingleLogMessage(log, "info");
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.trace).not.toHaveBeenCalled();
+    expect(message).toContain("action=started");
+    expect(message).toContain("thread-start-request:17ms@17ms");
+  });
+
   it("emits a trace stage summary when resuming an existing thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -1349,6 +1445,56 @@ describe("Codex app-server thread lifecycle timing", () => {
     expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "thread/resume"]);
     expect(requests[0]?.params).toMatchObject({ baseInstructions: "custom base v1" });
     expect(requests[1]?.params).not.toHaveProperty("baseInstructions");
+  });
+
+  it("resumes runtime-profile base instructions until their fingerprint changes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params: unknown) => {
+      requests.push({ method, params });
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult(`thread-${requests.length}`);
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const commonParams = {
+      client: { request } as never,
+      params: createThreadLifecycleParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      baseInstructionsSource: "runtime-profile" as const,
+    };
+
+    await startOrResumeThread({
+      ...commonParams,
+      baseInstructions: "memory recall base v1",
+      baseInstructionsFingerprint: "sha256:memory-v1",
+    });
+    await startOrResumeThread({
+      ...commonParams,
+      baseInstructions: "memory recall base v1",
+      baseInstructionsFingerprint: "sha256:memory-v1",
+    });
+    await startOrResumeThread({
+      ...commonParams,
+      baseInstructions: "memory recall base v2",
+      baseInstructionsFingerprint: "sha256:memory-v2",
+    });
+
+    expect(requests.map((entry) => entry.method)).toEqual([
+      "thread/start",
+      "thread/resume",
+      "thread/start",
+    ]);
+    expect(requests[0]?.params).toMatchObject({ baseInstructions: "memory recall base v1" });
+    expect(requests[1]?.params).not.toHaveProperty("baseInstructions");
+    expect(requests[2]?.params).toMatchObject({ baseInstructions: "memory recall base v2" });
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      baseInstructionsSource: "runtime-profile",
+      baseInstructionsFingerprint: "sha256:memory-v2",
+    });
   });
 
   it("starts a fresh thread when the agent base instructions fingerprint changes", async () => {

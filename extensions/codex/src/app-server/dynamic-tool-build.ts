@@ -272,6 +272,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
     abortSignal: input.runAbortController.signal,
     emitBeforeToolCallDiagnostics: false,
+    wrapBeforeToolCallHook: params.suppressPluginHooks === true ? false : undefined,
     modelProvider: params.model.provider,
     modelId: params.modelId,
     modelCompat:
@@ -419,26 +420,30 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     );
   }
   const summary = toolBuildStages.snapshot();
-  if (shouldWarnCodexDynamicToolBuildStageSummary(summary)) {
+  const shouldWarn = shouldWarnCodexDynamicToolBuildStageSummary(summary);
+  if (shouldWarn || input.profilerEnabled === true) {
     const phase = input.forceHeartbeatTool ? "registered-tools" : "runtime-tools";
-    embeddedAgentLog.warn(
-      `codex app-server dynamic tool build timings runId=${params.runId} sessionId=${params.sessionId} phase=${phase} totalMs=${summary.totalMs} stages=${formatCodexDynamicToolBuildStageSummary(summary)}`,
-      {
-        runId: params.runId,
-        sessionId: params.sessionId,
-        phase,
-        totalMs: summary.totalMs,
-        stages: summary.stages,
-        allToolCount: readableAllTools.length,
-        codexFilteredToolCount: codexFilteredTools.length,
-        visionFilteredToolCount: visionFilteredTools.length,
-        filteredToolCount: filteredTools.length,
-        normalizedToolCount: exposedTools.length,
-        forceHeartbeatTool: input.forceHeartbeatTool === true,
-        ignoreRuntimePlan: input.ignoreRuntimePlan === true,
-        nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled === true,
-      },
-    );
+    const message = `codex app-server dynamic tool build timings runId=${params.runId} sessionId=${params.sessionId} phase=${phase} totalMs=${summary.totalMs} stages=${formatCodexDynamicToolBuildStageSummary(summary)}`;
+    const meta = {
+      runId: params.runId,
+      sessionId: params.sessionId,
+      phase,
+      totalMs: summary.totalMs,
+      stages: summary.stages,
+      allToolCount: readableAllTools.length,
+      codexFilteredToolCount: codexFilteredTools.length,
+      visionFilteredToolCount: visionFilteredTools.length,
+      filteredToolCount: filteredTools.length,
+      normalizedToolCount: exposedTools.length,
+      forceHeartbeatTool: input.forceHeartbeatTool === true,
+      ignoreRuntimePlan: input.ignoreRuntimePlan === true,
+      nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled === true,
+    };
+    if (shouldWarn) {
+      embeddedAgentLog.warn(message, meta);
+    } else {
+      embeddedAgentLog.info(message, meta);
+    }
   }
   return exposedTools;
 }
