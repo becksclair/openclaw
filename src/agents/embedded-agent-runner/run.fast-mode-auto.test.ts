@@ -9,6 +9,7 @@ import {
   loadRunOverflowCompactionHarness,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
+  mockedResolveContextEngine,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
@@ -63,6 +64,24 @@ describe("runEmbeddedAgent fast auto progress", () => {
   afterEach(() => {
     vi.useRealTimers();
     resetAgentEventsForTest();
+  });
+
+  it("does not resolve or pass the context engine when disabled", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("ollama", "glm-5.1:cloud"));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+      runId: "run-disable-context-engine",
+      disableContextEngine: true,
+    });
+
+    expect(mockedResolveContextEngine).not.toHaveBeenCalled();
+    const attemptParams = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as {
+      contextEngine?: unknown;
+    };
+    expect(attemptParams.contextEngine).toBeUndefined();
   });
 
   it("emits auto-off after a tool execution boundary crosses the threshold", async () => {

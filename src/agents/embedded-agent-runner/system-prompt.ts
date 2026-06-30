@@ -35,6 +35,7 @@ export function buildEmbeddedSystemPrompt(params: {
   docsPath?: string;
   sourcePath?: string;
   ttsHint?: string;
+  disableTts?: boolean;
   reactionGuidance?: {
     level: "minimal" | "extensive";
     channel: string;
@@ -106,6 +107,7 @@ export function buildEmbeddedSystemPrompt(params: {
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     ttsHint: params.ttsHint,
+    disableTts: params.disableTts,
     workspaceNotes: params.workspaceNotes,
     reactionGuidance: params.reactionGuidance,
     promptMode: params.promptMode,

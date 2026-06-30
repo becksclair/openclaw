@@ -226,6 +226,23 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
+  it("skips before_tool_call wrappers when requested by hidden helper runtimes", async () => {
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-suppressed-"));
+    await fs.writeFile(path.join(tmpDir, "note.txt"), "quiet");
+    const tools = createOpenClawCodingTools({
+      workspaceDir: tmpDir,
+      wrapBeforeToolCallHook: false,
+    });
+    const readTool = requireTool(tools, "read");
+    await requireToolExecute(readTool)("tool-hook-suppressed", { path: "note.txt" });
+
+    expect(beforeToolCall).not.toHaveBeenCalled();
+  });
+
   it("re-wraps existing before_tool_call hooks once with the current context", async () => {
     const beforeToolCall = vi.fn();
     initializeGlobalHookRunner(

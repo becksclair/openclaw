@@ -90,6 +90,41 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(result.developerInstructions).toBe("base instructions");
   });
 
+  it("forwards fast-mode policy into native harness prompt hooks", async () => {
+    const beforePromptBuild = vi.fn(async () => undefined);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: beforePromptBuild,
+        },
+      ]),
+    );
+
+    await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "hello",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: {
+        trigger: "user",
+        agentId: "agent-1",
+        sessionKey: "session-1",
+        fastMode: "auto",
+        fastModeStartedAtMs: 123_456,
+        fastModeAutoOnSeconds: 45,
+      },
+    });
+
+    expect(beforePromptBuild).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "hello" }),
+      expect.objectContaining({
+        fastMode: "auto",
+        fastModeStartedAtMs: 123_456,
+        fastModeAutoOnSeconds: 45,
+      }),
+    );
+  });
+
   it("runs heartbeat contributions before other prompt-build hooks", async () => {
     const calls: string[] = [];
     initializeGlobalHookRunner(

@@ -96,6 +96,13 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
   }
 }
 
+export function shouldResolvePromptBuildHookResult(params: {
+  isRawModelRun: boolean;
+  suppressPluginHooks?: boolean;
+}): boolean {
+  return !params.isRawModelRun && params.suppressPluginHooks !== true;
+}
+
 /**
  * Resolves prompt-build hook contributions for one attempt. Next-turn
  * injections are drained once per run and cached for retries so destructive

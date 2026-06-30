@@ -910,10 +910,11 @@ function expectRecordFields(value: unknown, expected: Record<string, unknown>): 
   }
 }
 
-async function runBasicAgentCommand() {
+async function runBasicAgentCommand(overrides: Partial<Parameters<typeof agentCommand>[0]> = {}) {
   await agentCommand({
     message: "hello",
     to: "+1234567890",
+    ...overrides,
   });
 }
 
@@ -1174,6 +1175,26 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       fastModeStartedAtMs?: number;
     };
     expect(firstAttempt.fastModeStartedAtMs).toBe(secondAttempt.fastModeStartedAtMs);
+  });
+
+  it("uses caller-provided fast mode cutoff timestamp", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand({
+      fastMode: "auto",
+      fastModeStartedAtMs: 123_456,
+      fastModeAutoOnSeconds: 45,
+    });
+
+    const attempt = mockCallArg(state.runAgentAttemptMock) as {
+      fastMode?: unknown;
+      fastModeStartedAtMs?: unknown;
+      fastModeAutoOnSeconds?: unknown;
+    };
+    expect(attempt.fastMode).toBe("auto");
+    expect(attempt.fastModeStartedAtMs).toBe(123_456);
+    expect(attempt.fastModeAutoOnSeconds).toBe(45);
   });
 
   it("uses an embedded queue rebound generation for terminal lifecycle and cleanup", async () => {
