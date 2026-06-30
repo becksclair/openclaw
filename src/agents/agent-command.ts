@@ -1810,7 +1810,7 @@ async function agentCommandInternal(
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
     let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
-    const fastModeStartedAtMs = Date.now();
+    const fastModeStartedAtMs = opts.fastModeStartedAtMs ?? Date.now();
     const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
       cfg,
       runId,
@@ -1909,6 +1909,27 @@ async function agentCommandInternal(
               sessionEntry,
             });
             const fastMode = opts.fastMode ?? fastModeState.mode;
+            const fastModeAutoOnSeconds =
+              fastMode === "auto"
+                ? (opts.fastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds)
+                : fastModeState.fastAutoOnSeconds;
+            if (
+              opts.fastMode !== undefined ||
+              opts.fastModeStartedAtMs !== undefined ||
+              opts.fastModeAutoOnSeconds !== undefined
+            ) {
+              log.info("agent command inherited fast mode", {
+                runId,
+                sessionId,
+                agentId: sessionAgentId,
+                provider: providerOverride,
+                model: modelOverride,
+                fastMode,
+                inheritedStartedAtMs: opts.fastModeStartedAtMs !== undefined,
+                fastModeAgeMs: Math.max(0, Date.now() - fastModeStartedAtMs),
+                fastModeAutoOnSeconds,
+              });
+            }
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
@@ -1927,10 +1948,7 @@ async function agentCommandInternal(
               resolvedThinkLevel,
               fastMode,
               fastModeStartedAtMs,
-              fastModeAutoOnSeconds:
-                fastMode === "auto"
-                  ? (opts.fastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds)
-                  : fastModeState.fastAutoOnSeconds,
+              fastModeAutoOnSeconds,
               isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
               timeoutMs,
               runTimeoutOverrideMs,

@@ -29,12 +29,14 @@ type ResolvedAgentSystemPromptConfig = Pick<
 type ConfiguredAgentSystemPromptParams = AgentSystemPromptRenderParams & {
   config?: OpenClawConfig;
   agentId?: string;
+  disableTts?: boolean;
 };
 
 /** Resolves all config-derived system prompt fields for an agent. */
 export function resolveAgentSystemPromptConfig(params: {
   config?: OpenClawConfig;
   agentId?: string;
+  disableTts?: boolean;
 }): ResolvedAgentSystemPromptConfig {
   const { config, agentId } = params;
   const ownerDisplay = resolveOwnerDisplaySetting(config);
@@ -47,7 +49,8 @@ export function resolveAgentSystemPromptConfig(params: {
       agentSubagents?.delegationMode ??
       config?.agents?.defaults?.subagents?.delegationMode ??
       "suggest",
-    ttsHint: config ? buildTtsSystemPromptHint(config, agentId) : undefined,
+    ttsHint:
+      config && params.disableTts !== true ? buildTtsSystemPromptHint(config, agentId) : undefined,
     modelAliasLines: buildModelAliasLines(config),
     memoryCitationsMode: config?.memory?.citations,
     fsWorkspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg: config, agentId }),
@@ -56,8 +59,10 @@ export function resolveAgentSystemPromptConfig(params: {
 
 /** Builds the agent system prompt after applying config-derived prompt fields. */
 export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPromptParams) {
-  const { config, agentId, ...renderParams } = params;
-  const configParams = config ? resolveAgentSystemPromptConfig({ config, agentId }) : {};
+  const { config, agentId, disableTts, ...renderParams } = params;
+  const configParams = config
+    ? resolveAgentSystemPromptConfig({ config, agentId, disableTts })
+    : {};
   return buildAgentSystemPrompt({
     ...renderParams,
     ...configParams,

@@ -969,6 +969,73 @@ describe("loadGatewayPlugins", () => {
     expect(params.deliver).toBe(false);
   });
 
+  test("forwards inherited fast mode fields on subagent run", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("fast-mode-forward"));
+
+    await runtime.run({
+      sessionKey: "s-fast-mode",
+      message: "hello",
+      fastMode: "auto",
+      fastModeStartedAtMs: 123_456,
+      fastModeAutoOnSeconds: 45,
+      timeoutMs: 120_000,
+      deliver: false,
+    });
+
+    const params = getRequiredLastDispatchedParams();
+    expect(params.sessionKey).toBe("s-fast-mode");
+    expect(params.fastMode).toBe("auto");
+    expect(params.fastModeStartedAtMs).toBe(123_456);
+    expect(params.fastModeAutoOnSeconds).toBe(45);
+    expect(params.timeout).toBe(120);
+  });
+
+  test("clears traced subagent run state after waitForRun observes completion", async () => {
+    vi.useFakeTimers();
+    try {
+      const serverPlugins = serverPluginsModule;
+      const runtime = await createSubagentRuntime(serverPlugins);
+      serverPlugins.setFallbackGatewayContext(createTestContext("subagent-trace-clears-on-wait"));
+
+      await runtime.run({
+        sessionKey: "agent:main:subagent:lcm-expand:trace-clear",
+        message: "hello",
+        timeoutMs: 5,
+        deliver: false,
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      await runtime.waitForRun({ runId: "run-1", timeoutMs: 5 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("expires traced subagent run state when callers do not wait", async () => {
+    vi.useFakeTimers();
+    try {
+      const serverPlugins = serverPluginsModule;
+      const runtime = await createSubagentRuntime(serverPlugins);
+      serverPlugins.setFallbackGatewayContext(createTestContext("subagent-trace-ttl"));
+
+      await runtime.run({
+        sessionKey: "agent:main:subagent:lcm-expand:trace-ttl",
+        message: "hello",
+        timeoutMs: 5,
+        deliver: false,
+      });
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(60_005);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("generates a non-empty idempotencyKey when the caller omits it", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);

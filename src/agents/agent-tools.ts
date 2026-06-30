@@ -544,6 +544,8 @@ export function createOpenClawCodingTools(options?: {
   recordToolPrepStage?: (name: string) => void;
   /** Lower routine policy-removal audits for diagnostic-only tool probes. */
   toolPolicyAuditLogLevel?: "info" | "debug";
+  /** If false, return executable tools without plugin before_tool_call wrappers. */
+  wrapBeforeToolCallHook?: boolean;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
@@ -1261,11 +1263,14 @@ export function createOpenClawCodingTools(options?: {
     allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
   };
   const hookOptions = { emitDiagnostics: options?.emitBeforeToolCallDiagnostics };
-  const withHooks = normalized.map((tool) =>
-    isToolWrappedWithBeforeToolCallHook(tool)
-      ? rewrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions)
-      : wrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions),
-  );
+  const withHooks =
+    options?.wrapBeforeToolCallHook === false
+      ? normalized
+      : normalized.map((tool) =>
+          isToolWrappedWithBeforeToolCallHook(tool)
+            ? rewrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions)
+            : wrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions),
+        );
   options?.recordToolPrepStage?.("tool-hooks");
   const withAbort = options?.abortSignal
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))

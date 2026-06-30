@@ -39,6 +39,8 @@ export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
+export type EmbeddedRunPromptProfile = "memory_recall";
+
 export type CurrentInboundPromptContext = {
   text: string;
   resumableText?: string;
@@ -113,10 +115,18 @@ export type RunEmbeddedAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Internal helper runs can opt out of TTS prompt steering and delivery enrichment. */
+  disableTts?: boolean;
+  /** Internal helper runs can opt out of context-engine projection/compaction. */
+  disableContextEngine?: boolean;
+  /** Internal helper runs can opt out of plugin lifecycle hooks and capture side effects. */
+  suppressPluginHooks?: boolean;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
+  /** Internal helper profile for narrow hidden runs with specialized prompt surfaces. */
+  promptProfile?: EmbeddedRunPromptProfile;
   /** Keep the message tool available even when a narrow profile would omit it. */
   forceMessageTool?: boolean;
   /** Include the heartbeat response tool for structured heartbeat outcomes. */
@@ -132,6 +142,12 @@ export type RunEmbeddedAgentParams = {
   cwd?: string;
   agentDir?: string;
   config?: OpenClawConfig;
+  /** Internal helper runs can skip skill discovery, env overrides, and prompt injection. */
+  disableSkills?: boolean;
+  /** Internal helper runs can skip Codex app-server MCP projections. */
+  disableMcpServers?: boolean;
+  /** Internal helper runs can skip Codex app-server plugin app config. */
+  disableCodexPlugins?: boolean;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */

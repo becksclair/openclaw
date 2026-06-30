@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
@@ -407,6 +407,7 @@ import {
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   resolvePromptSubmissionSkipReason,
+  shouldResolvePromptBuildHookResult,
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
@@ -524,6 +525,7 @@ export {
   resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  shouldResolvePromptBuildHookResult,
   shouldWarnOnOrphanedUserRepair,
 } from "./attempt.prompt-helpers.js";
 export {
@@ -1086,48 +1088,58 @@ export async function runEmbeddedAttempt(
     }
   };
   try {
+    const skillsDisabled = params.disableSkills === true;
+    const skillRuntimeInputs = resolveSandboxSkillRuntimeInputs({
+      sandbox,
+      effectiveWorkspace,
+      skillsSnapshot: skillsDisabled ? undefined : params.skillsSnapshot,
+    });
     const {
       skillsEligibility,
       skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
       skillsSnapshot: skillsSnapshotForRun,
       skillsWorkspaceDir: effectiveSkillsWorkspace,
       workspaceOnly: loadSkillsWorkspaceOnly,
-    } = resolveSandboxSkillRuntimeInputs({
-      sandbox,
-      effectiveWorkspace,
-      skillsSnapshot: params.skillsSnapshot,
-    });
-    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-      workspaceDir: effectiveSkillsWorkspace,
-      config: params.config,
-      agentId: sessionAgentId,
-      eligibility: skillsEligibility,
-      skillsSnapshot: skillsSnapshotForRun,
-      workspaceOnly: loadSkillsWorkspaceOnly,
-    });
-    restoreSkillEnv = skillsSnapshotForRun
-      ? applySkillEnvOverridesFromSnapshot({
-          snapshot: skillsSnapshotForRun,
+    } = skillRuntimeInputs;
+    const { shouldLoadSkillEntries, skillEntries } = skillsDisabled
+      ? { shouldLoadSkillEntries: false, skillEntries: undefined }
+      : resolveEmbeddedRunSkillEntries({
+          workspaceDir: effectiveSkillsWorkspace,
           config: params.config,
-        })
-      : applySkillEnvOverrides({
-          skills: skillEntries ?? [],
-          config: params.config,
+          agentId: sessionAgentId,
+          eligibility: skillsEligibility,
+          skillsSnapshot: skillsSnapshotForRun,
+          workspaceOnly: loadSkillsWorkspaceOnly,
         });
-    const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
-      skillsWorkspaceDir: effectiveSkillsWorkspace,
-      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
-    });
+    restoreSkillEnv = skillsDisabled
+      ? undefined
+      : skillsSnapshotForRun
+        ? applySkillEnvOverridesFromSnapshot({
+            snapshot: skillsSnapshotForRun,
+            config: params.config,
+          })
+        : applySkillEnvOverrides({
+            skills: skillEntries ?? [],
+            config: params.config,
+          });
+    const promptSkillEntries = skillsDisabled
+      ? undefined
+      : mapSandboxSkillEntriesForPrompt({
+          entries: shouldLoadSkillEntries ? skillEntries : undefined,
+          skillsWorkspaceDir: effectiveSkillsWorkspace,
+          skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+        });
 
-    const skillsPrompt = resolveSkillsPromptForRun({
-      skillsSnapshot: skillsSnapshotForRun,
-      entries: promptSkillEntries,
-      config: params.config,
-      workspaceDir: effectiveSkillsPromptWorkspace,
-      agentId: sessionAgentId,
-      eligibility: skillsEligibility,
-    });
+    const skillsPrompt = skillsDisabled
+      ? undefined
+      : resolveSkillsPromptForRun({
+          skillsSnapshot: skillsSnapshotForRun,
+          entries: promptSkillEntries,
+          config: params.config,
+          workspaceDir: effectiveSkillsPromptWorkspace,
+          agentId: sessionAgentId,
+          eligibility: skillsEligibility,
+        });
     prepStages.mark("skills");
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -2022,6 +2034,7 @@ export async function runEmbeddedAttempt(
         skillsPrompt: effectiveSkillsPrompt,
         docsPath: openClawReferences.docsPath ?? undefined,
         sourcePath: openClawReferences.sourcePath ?? undefined,
+        disableTts: params.disableTts,
         workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
         reactionGuidance,
         promptMode: effectivePromptMode,
@@ -2094,7 +2107,7 @@ export async function runEmbeddedAttempt(
       systemPrompt: appendPrompt,
       bootstrapFiles: hookAdjustedBootstrapFiles,
       injectedFiles: contextFiles,
-      skillsPrompt,
+      skillsPrompt: skillsPrompt ?? "",
       tools: effectiveTools,
     });
     let systemPromptText = attemptSystemPrompt.systemPrompt;
@@ -2321,8 +2334,9 @@ export async function runEmbeddedAttempt(
       applyAgentAutoCompactionGuard(autoCompactionGuardArgs);
       prepStages.mark("session-resource-loader");
 
-      // Get hook runner early so it's available when creating tools
-      const hookRunner = getGlobalHookRunner();
+      // Get hook runner early so it's available when creating tools.
+      // Private helper runs suppress lifecycle observers such as memory capture.
+      const hookRunner = params.suppressPluginHooks === true ? null : getGlobalHookRunner();
 
       const { customTools } = splitSdkTools({
         tools: effectiveTools,
@@ -3566,7 +3580,7 @@ export async function runEmbeddedAttempt(
           lifecycleGeneration: params.lifecycleGeneration,
           messageChannel: runtimeChannel,
           initialReplayState: params.initialReplayState,
-          hookRunner: getGlobalHookRunner() ?? undefined,
+          hookRunner: hookRunner ?? undefined,
           verboseLevel: params.verboseLevel,
           reasoningMode: params.reasoningLevel ?? "off",
           thinkingLevel: params.thinkLevel,
@@ -3938,6 +3952,12 @@ export async function runEmbeddedAttempt(
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
         let effectivePrompt = params.prompt;
+        const hookFastMode: FastMode | undefined =
+          params.fastModeAuto === true
+            ? "auto"
+            : typeof params.fastMode === "boolean"
+              ? params.fastMode
+              : undefined;
         const hookCtx = {
           runId: params.runId,
           trace: freezeDiagnosticTraceContext(diagnosticTrace),
@@ -3948,6 +3968,13 @@ export async function runEmbeddedAttempt(
           modelProviderId: params.model.provider,
           modelId: params.model.id,
           trigger: params.trigger,
+          ...(hookFastMode !== undefined ? { fastMode: hookFastMode } : {}),
+          ...(params.fastModeStartedAtMs !== undefined
+            ? { fastModeStartedAtMs: params.fastModeStartedAtMs }
+            : {}),
+          ...(params.fastModeAutoOnSeconds !== undefined
+            ? { fastModeAutoOnSeconds: params.fastModeAutoOnSeconds }
+            : {}),
           ...buildAgentHookContextChannelFields(params),
           ...buildAgentHookContextIdentityFields({
             trigger: params.trigger,
@@ -3958,7 +3985,10 @@ export async function runEmbeddedAttempt(
         };
         const promptBuildMessages =
           pruneProcessedHistoryImages(activeSession.messages) ?? activeSession.messages;
-        const hookResult = isRawModelRun
+        const hookResult = !shouldResolvePromptBuildHookResult({
+          isRawModelRun,
+          suppressPluginHooks: params.suppressPluginHooks,
+        })
           ? undefined
           : await resolvePromptBuildHookResult({
               config: params.config ?? getRuntimeConfig(),
@@ -5239,7 +5269,7 @@ export async function runEmbeddedAttempt(
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
-        if (!beforeAgentFinalizeRevisionReason) {
+        if (!beforeAgentFinalizeRevisionReason && params.suppressPluginHooks !== true) {
           runAgentEndSideEffects({
             event: {
               messages: messagesSnapshot,

@@ -548,6 +548,47 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
   });
 
+  it("skips supplemental TTS media when the run disables TTS", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+        messages: {
+          tts: {
+            auto: "always",
+          },
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        disableTts: true,
+        replyChannel: "slack",
+        replyTo: "#general",
+        sessionKey: "agent:tester:slack:direct:alice",
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:slack:direct:alice",
+        agentId: "tester",
+      } as never,
+      sessionEntry: undefined,
+      payloads: [{ text: "final answer" }],
+      result: createResult(),
+    });
+
+    expect(maybeApplyTtsToPayloadMock).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+    const deliverArgs = latestOutboundDeliveryArgs();
+    expect(deliverArgs.payloads).toHaveLength(1);
+    expectTextPayload(requirePayload(deliverArgs.payloads, 0), "final answer");
+    expect(delivered.payloads).toHaveLength(1);
+  });
+
   it("refreshes stale implicit session routing before final delivery", async () => {
     deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
     const runtime = { log: vi.fn(), error: vi.fn() };

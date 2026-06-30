@@ -1,4 +1,5 @@
 // Plugin runtime types describe activated plugin capabilities exposed to core execution.
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
 export type { RuntimeLogger };
@@ -16,6 +17,10 @@ export type SubagentRunParams = {
   lane?: string;
   lightContext?: boolean;
   deliver?: boolean;
+  fastMode?: FastMode;
+  fastModeStartedAtMs?: number;
+  fastModeAutoOnSeconds?: number;
+  timeoutMs?: number;
   idempotencyKey?: string;
 };
 

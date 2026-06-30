@@ -26,6 +26,7 @@ import {
 } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import type { CallGatewayOptions } from "../call.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { agentHandlers } from "./agent.js";
 import { chatHandlers } from "./chat.js";
@@ -156,7 +157,7 @@ vi.mock("../../infra/agent-events.js", () => ({
   emitAgentEvent: mocks.emitAgentEvent,
   getAgentEventLifecycleGeneration: () => mocks.lifecycleGeneration,
   registerAgentRunContext: mocks.registerAgentRunContext,
-  onAgentEvent: vi.fn(),
+  onAgentEvent: vi.fn(() => () => {}),
 }));
 
 vi.mock("../../agents/subagent-registry-read.js", () => ({
@@ -2080,6 +2081,63 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
+  it("ignores inherited fast mode timing fields from public agent RPC", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "expand this memory query",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        fastMode: "auto",
+        fastModeStartedAtMs: 123_456,
+        fastModeAutoOnSeconds: 45,
+        idempotencyKey: "test-fast-mode-inherit",
+      },
+      { reqId: "fast-mode-1" },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      fastMode?: unknown;
+      fastModeStartedAtMs?: unknown;
+      fastModeAutoOnSeconds?: unknown;
+    }>();
+    expect(callArgs.fastMode).toBe("auto");
+    expect(callArgs.fastModeStartedAtMs).toBeUndefined();
+    expect(callArgs.fastModeAutoOnSeconds).toBeUndefined();
+  });
+
+  it("passes inherited fast mode timing fields from plugin subagent RPC", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "expand this memory query",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        fastMode: "auto",
+        fastModeStartedAtMs: 123_456,
+        fastModeAutoOnSeconds: 45,
+        idempotencyKey: "test-fast-mode-inherit-internal",
+      },
+      {
+        reqId: "fast-mode-internal-1",
+        client: {
+          internal: { agentRunTracking: "plugin_subagent", pluginRuntimeOwnerId: "active-memory" },
+        } as never,
+      },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      fastMode?: unknown;
+      fastModeStartedAtMs?: unknown;
+      fastModeAutoOnSeconds?: unknown;
+    }>();
+    expect(callArgs.fastMode).toBe("auto");
+    expect(callArgs.fastModeStartedAtMs).toBe(123_456);
+    expect(callArgs.fastModeAutoOnSeconds).toBe(45);
+  });
+
   it("marks inter-session agent messages at the gateway boundary without timestamping them", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
@@ -3289,6 +3347,39 @@ describe("gateway agent handler", () => {
         meta: { durationMs: 100 },
       });
       const context = makeContext();
+      subagentRegistryTesting.setDepsForTest({
+        callGateway: async <T = Record<string, unknown>>(
+          request: CallGatewayOptions,
+        ): Promise<T> => {
+          if (request.method !== "agent.wait") {
+            throw new Error(`unexpected gateway method ${request.method}`);
+          }
+          let payload: unknown;
+          let handlerError: unknown;
+          await agentHandlers["agent.wait"]({
+            params: (request.params ?? {}) as Record<string, unknown>,
+            respond: (ok, nextPayload, error) => {
+              if (!ok) {
+                handlerError = error ?? new Error("agent.wait failed");
+                return;
+              }
+              payload = nextPayload;
+            },
+            context,
+            req: {
+              type: "req",
+              id: `${runId}-registry-wait`,
+              method: "agent.wait",
+            },
+            client: null,
+            isWebchatConnect: () => false,
+          });
+          if (handlerError) {
+            throw handlerError;
+          }
+          return payload as T;
+        },
+      });
       const baseClient = requireValue(backendGatewayClient(), "expected backend client");
       const pluginClient: AgentHandlerArgs["client"] = {
         connect: baseClient.connect,

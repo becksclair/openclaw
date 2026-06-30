@@ -133,12 +133,16 @@ export type AgentCommandOpts = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Internal runs can omit the channel message tool entirely. */
   disableMessageTool?: boolean;
+  /** Internal helper runs can opt out of TTS prompt steering and delivery enrichment. */
+  disableTts?: boolean;
   /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
   skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
   /** Resolved per-run fast mode from channel/directive handling. */
   fastMode?: FastMode;
+  /** Stable outer-run start time for auto fast-mode cutoff across hidden/subagent runs. */
+  fastModeStartedAtMs?: number;
   /** Resolved per-run auto cutoff seconds for fast mode. */
   fastModeAutoOnSeconds?: number;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */

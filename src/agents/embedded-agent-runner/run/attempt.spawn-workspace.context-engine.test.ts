@@ -1172,6 +1172,26 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
   });
 
+  it("skips skill discovery and prompt resolution when skills are disabled", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableSkills: true,
+        skillsSnapshot: {
+          prompt:
+            "<available_skills><skill><location>hidden/SKILL.md</location></skill></available_skills>",
+          skills: [{ name: "hidden-skill" }],
+          resolvedSkills: [],
+        },
+      },
+    });
+
+    expect(hoisted.resolveEmbeddedRunSkillEntriesMock).not.toHaveBeenCalled();
+    expect(hoisted.resolveSkillsPromptForRunMock).not.toHaveBeenCalled();
+  });
+
   it("keeps before_prompt_build context in the model prompt and out of transcript messages", async () => {
     const runBeforePromptBuild = vi.fn(async () => ({
       prependContext: "dynamic hook context",

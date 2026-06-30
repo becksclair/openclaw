@@ -1,3 +1,4 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
@@ -265,6 +266,12 @@ export type PluginHookAgentContext = {
   contextWindowSource?: PluginHookContextWindowSource;
   /** Native/configured reference window when a lower cap wins. */
   contextWindowReferenceTokens?: number;
+  /** Resolved per-run fast mode policy inherited by hidden/plugin subagent work. */
+  fastMode?: FastMode;
+  /** Stable outer-run start time for auto fast-mode cutoff inheritance. */
+  fastModeStartedAtMs?: number;
+  /** Effective auto fast-mode cutoff for this run, in seconds. */
+  fastModeAutoOnSeconds?: number;
   /**
    * @deprecated Core does not populate cross-app sender ids. Channel plugins
    * should expose channel-specific identities by augmenting `channelContext.sender`.

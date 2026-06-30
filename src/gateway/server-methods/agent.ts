@@ -1004,6 +1004,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       sessionId?: string;
       sessionKey?: string;
       thinking?: string;
+      fastMode?: AgentCommandOpts["fastMode"];
+      fastModeStartedAtMs?: number;
+      fastModeAutoOnSeconds?: number;
       deliver?: boolean;
       attachments?: Array<{
         type?: string;
@@ -2518,6 +2521,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           dispatchTaskTrackingMode = "cli";
         }
       }
+      const canUseInheritedFastModeTiming = taskTrackingMode === "plugin_subagent";
 
       const accepted = {
         runId,
@@ -2651,6 +2655,13 @@ export const agentHandlers: GatewayRequestHandlers = {
               sessionId: resolvedSessionId,
               sessionKey: resolvedSessionKey,
               thinking: request.thinking,
+              fastMode: request.fastMode,
+              fastModeStartedAtMs: canUseInheritedFastModeTiming
+                ? request.fastModeStartedAtMs
+                : undefined,
+              fastModeAutoOnSeconds: canUseInheritedFastModeTiming
+                ? request.fastModeAutoOnSeconds
+                : undefined,
               deliver,
               deliveryTargetMode,
               channel: resolvedChannel,

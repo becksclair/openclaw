@@ -1,6 +1,6 @@
 // Gateway plugin runtime adapter.
 // Loads plugin registries and builds fallback request context for non-WS paths.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -12,6 +12,7 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { clearActivatedPluginRuntimeState, loadOpenClawPlugins } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
@@ -537,8 +538,88 @@ export async function dispatchGatewayMethodInProcess<T>(
 }
 
 const PLUGIN_SUBAGENT_SESSION_MESSAGES_MAX_LIMIT = 1_000;
+const PLUGIN_SUBAGENT_TRACE_MAX_ENTRIES = 256;
+const PLUGIN_SUBAGENT_TRACE_DEFAULT_TTL_MS = 10 * 60_000;
+const PLUGIN_SUBAGENT_TRACE_RETENTION_GRACE_MS = 60_000;
+const pluginSubagentLog = createSubsystemLogger("gateway/plugin-subagent");
+
+type PluginSubagentTrace = {
+  pluginId: string | undefined;
+  sessionKeyHash: string | undefined;
+  provider: string | undefined;
+  model: string | undefined;
+  fastMode: unknown;
+  fastModeAgeMs: number | undefined;
+  fastModeAutoOnSeconds: number | undefined;
+  startedAtMs: number;
+  acceptedElapsedMs: number;
+  cleanupTimer: ReturnType<typeof setTimeout>;
+};
+
+function traceSessionKeyHash(sessionKey?: string): string | undefined {
+  const normalized = typeof sessionKey === "string" ? sessionKey.trim() : "";
+  if (!normalized) {
+    return undefined;
+  }
+  return createHash("sha1").update(normalized).digest("hex").slice(0, 12);
+}
+
+function shouldTracePluginSubagentRun(params: { pluginId?: string; sessionKey?: string }): boolean {
+  const sessionKey = params.sessionKey ?? "";
+  return (
+    params.pluginId === "lossless-claw" ||
+    sessionKey.includes(":active-memory:recall") ||
+    sessionKey.includes(":subagent:lcm-expand:")
+  );
+}
+
+function resolveGatewayAgentTimeoutSeconds(timeoutMs: number | undefined): number | undefined {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+    return undefined;
+  }
+  const safeTimeoutMs = Math.max(0, Math.floor(timeoutMs));
+  return safeTimeoutMs === 0 ? 0 : Math.ceil(safeTimeoutMs / 1_000);
+}
+
+function resolvePluginSubagentTraceRetentionMs(timeoutMs: number | undefined): number {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+    return PLUGIN_SUBAGENT_TRACE_DEFAULT_TTL_MS;
+  }
+  return Math.min(
+    PLUGIN_SUBAGENT_TRACE_DEFAULT_TTL_MS,
+    Math.max(0, Math.floor(timeoutMs)) + PLUGIN_SUBAGENT_TRACE_RETENTION_GRACE_MS,
+  );
+}
 
 export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
+  const subagentTraceByRunId = new Map<string, PluginSubagentTrace>();
+  const clearSubagentTrace = (runId: string): PluginSubagentTrace | undefined => {
+    const trace = subagentTraceByRunId.get(runId);
+    if (!trace) {
+      return undefined;
+    }
+    clearTimeout(trace.cleanupTimer);
+    subagentTraceByRunId.delete(runId);
+    return trace;
+  };
+  const rememberSubagentTrace = (
+    runId: string,
+    trace: Omit<PluginSubagentTrace, "cleanupTimer">,
+    retentionMs: number,
+  ) => {
+    const existing = clearSubagentTrace(runId);
+    if (!existing && subagentTraceByRunId.size >= PLUGIN_SUBAGENT_TRACE_MAX_ENTRIES) {
+      const oldestRunId = subagentTraceByRunId.keys().next().value;
+      if (typeof oldestRunId === "string") {
+        clearSubagentTrace(oldestRunId);
+      }
+    }
+    const cleanupTimer = setTimeout(() => {
+      subagentTraceByRunId.delete(runId);
+    }, retentionMs);
+    cleanupTimer.unref?.();
+    subagentTraceByRunId.set(runId, { ...trace, cleanupTimer });
+  };
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
     const limit =
       params.limit == null || !Number.isFinite(params.limit)
@@ -580,6 +661,31 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       if (overrideRequested && !allowOverride) {
         throw new Error("provider/model override is not authorized for this plugin subagent run.");
       }
+      const traceEnabled = shouldTracePluginSubagentRun({
+        pluginId,
+        sessionKey: params.sessionKey,
+      });
+      const traceStartedAt = Date.now();
+      const fastModeAgeMs =
+        typeof params.fastModeStartedAtMs === "number" &&
+        Number.isFinite(params.fastModeStartedAtMs)
+          ? Math.max(0, traceStartedAt - params.fastModeStartedAtMs)
+          : undefined;
+      if (traceEnabled) {
+        pluginSubagentLog.info("plugin subagent run dispatching", {
+          pluginId,
+          sessionKeyHash: traceSessionKeyHash(params.sessionKey),
+          provider: params.provider,
+          model: params.model,
+          lane: params.lane,
+          lightContext: params.lightContext === true,
+          fastMode: params.fastMode,
+          fastModeAgeMs,
+          fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
+          timeoutMs: params.timeoutMs,
+        });
+      }
+      const agentTimeoutSeconds = resolveGatewayAgentTimeoutSeconds(params.timeoutMs);
       const payload = await dispatchGatewayMethod<{ runId?: string }>(
         "agent",
         {
@@ -591,6 +697,14 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
           ...(params.lane && { lane: params.lane }),
           ...(params.lightContext === true && { bootstrapContextMode: "lightweight" }),
+          ...(params.fastMode !== undefined && { fastMode: params.fastMode }),
+          ...(params.fastModeStartedAtMs !== undefined && {
+            fastModeStartedAtMs: params.fastModeStartedAtMs,
+          }),
+          ...(params.fastModeAutoOnSeconds !== undefined && {
+            fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
+          }),
+          ...(agentTimeoutSeconds !== undefined && { timeout: agentTimeoutSeconds }),
           // The gateway `agent` schema requires `idempotencyKey: NonEmptyString`,
           // so fall back to a generated UUID when the caller omits it. Without
           // this, plugin subagent runs (for example memory-core dreaming
@@ -607,31 +721,90 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       if (typeof runId !== "string" || !runId) {
         throw new Error("Gateway agent method returned an invalid runId.");
       }
+      if (traceEnabled) {
+        const acceptedElapsedMs = Date.now() - traceStartedAt;
+        rememberSubagentTrace(
+          runId,
+          {
+            pluginId,
+            sessionKeyHash: traceSessionKeyHash(params.sessionKey),
+            provider: params.provider,
+            model: params.model,
+            fastMode: params.fastMode,
+            fastModeAgeMs,
+            fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
+            startedAtMs: traceStartedAt,
+            acceptedElapsedMs,
+          },
+          resolvePluginSubagentTraceRetentionMs(params.timeoutMs),
+        );
+        pluginSubagentLog.info("plugin subagent run accepted", {
+          runId,
+          pluginId,
+          sessionKeyHash: traceSessionKeyHash(params.sessionKey),
+          acceptedElapsedMs,
+        });
+      }
       return { runId };
     },
     async waitForRun(params) {
-      const payload = await dispatchGatewayMethod<{ status?: string; error?: string }>(
-        "agent.wait",
-        {
-          runId: params.runId,
-          ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
-        },
-      );
-      let status = payload?.status;
-      if (status === "completed" || status === "succeeded") {
-        status = "ok";
-      } else if (status === "error" && payload?.error?.trim().toLowerCase() === "completed") {
-        status = "ok";
+      const trace = subagentTraceByRunId.get(params.runId);
+      const waitStartedAt = Date.now();
+      try {
+        const payload = await dispatchGatewayMethod<{ status?: string; error?: string }>(
+          "agent.wait",
+          {
+            runId: params.runId,
+            ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
+          },
+        );
+        let status = payload?.status;
+        if (status === "completed" || status === "succeeded") {
+          status = "ok";
+        } else if (status === "error" && payload?.error?.trim().toLowerCase() === "completed") {
+          status = "ok";
+        }
+        if (status !== "ok" && status !== "error" && status !== "timeout") {
+          throw new Error(`Gateway agent.wait returned unexpected status: ${payload?.status}`);
+        }
+        if (trace) {
+          pluginSubagentLog.info("plugin subagent run finished", {
+            runId: params.runId,
+            pluginId: trace.pluginId,
+            sessionKeyHash: trace.sessionKeyHash,
+            status,
+            acceptedElapsedMs: trace.acceptedElapsedMs,
+            waitElapsedMs: Date.now() - waitStartedAt,
+            totalElapsedMs: Date.now() - trace.startedAtMs,
+            provider: trace.provider,
+            model: trace.model,
+            fastMode: trace.fastMode,
+            fastModeAgeMs: trace.fastModeAgeMs,
+            fastModeAutoOnSeconds: trace.fastModeAutoOnSeconds,
+          });
+          clearSubagentTrace(params.runId);
+        }
+        return {
+          status,
+          ...(status !== "ok" &&
+            typeof payload?.error === "string" &&
+            payload.error && { error: payload.error }),
+        };
+      } catch (error) {
+        if (trace) {
+          pluginSubagentLog.warn("plugin subagent run wait failed", {
+            runId: params.runId,
+            pluginId: trace.pluginId,
+            sessionKeyHash: trace.sessionKeyHash,
+            acceptedElapsedMs: trace.acceptedElapsedMs,
+            waitElapsedMs: Date.now() - waitStartedAt,
+            totalElapsedMs: Date.now() - trace.startedAtMs,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          clearSubagentTrace(params.runId);
+        }
+        throw error;
       }
-      if (status !== "ok" && status !== "error" && status !== "timeout") {
-        throw new Error(`Gateway agent.wait returned unexpected status: ${payload?.status}`);
-      }
-      return {
-        status,
-        ...(status !== "ok" &&
-          typeof payload?.error === "string" &&
-          payload.error && { error: payload.error }),
-      };
     },
     getSessionMessages,
     async getSession(params) {

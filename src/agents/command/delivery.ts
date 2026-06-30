@@ -776,7 +776,10 @@ export async function deliverAgentCommandResult(
       : normalizedReplyPayloads;
   params.assertDeliveryCurrent?.();
   const finalDeliveryReplyPayloads =
-    deliver && !deliveryStatus && !isInternalMessageChannel(deliveryChannel)
+    deliver &&
+    !deliveryStatus &&
+    !isInternalMessageChannel(deliveryChannel) &&
+    opts.disableTts !== true
       ? await applyAgentDeliveryTts({
           cfg,
           payloads: mediaNormalizedReplyPayloads,
