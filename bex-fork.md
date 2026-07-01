@@ -32,6 +32,8 @@ Replayed from fork head `0fc81306a2` (base `v2026.6.10`) onto upstream `v2026.6.
 | Lobster workspace cwd sandbox             | Runtime carry         | Medium     | Lobster tool calls used the Gateway process cwd as their sandbox root and rejected all absolute cwd values, so workspace-scoped calls could run in the wrong directory or fail when callers supplied the active workspace path. Carry workspace-rooted cwd resolution from the tool context while still rejecting paths outside the active workspace.                                                                                                                                    |
 | Reply session init burst serialization    | Runtime carry         | High       | Telegram/direct bursts can start several same-session reply initializers before any one commits session metadata. Carry per-store/per-session initialization queueing before snapshot reads so concurrent turns reuse the winning session id instead of tripping the guarded metadata commit with `reply session initialization conflicted`.                                                                                                                                             |
 | Persistent Codex memory recall            | Runtime carry         | High       | Active Memory hidden recall needs low-latency Codex/OpenAI execution without leaking hidden turns into visible session hooks, Honcho, TTS, skills, MCP servers, Codex plugins, or stale native thread context. Carry the fresh-per-recall native session, warm Codex app-server client, memory-recall prompt profile, trusted fast-mode inheritance, bounded trace instrumentation, and custom memory-tool preservation across Codex/Copilot sibling harnesses.                          |
+| Lossless transcript-wedge rebootstrap     | Runtime carry         | High       | `lossless-claw` must recover terminal transcript wedges by persisting a per-conversation projection reset generation and folding it into the existing `thread_bootstrap` epoch hash. The public epoch shape stays `summary-prefix-v1:<conversationId>:<hash>` while a proven wedge forces OpenClaw's Codex app-server binding compatibility path to rotate the backend thread and inject Lossless's rich compacted context once.                                                         |
+| Lossless Active Memory recall expansion   | Runtime carry         | High       | `lossless-claw` delegated expansion for Active Memory recall reuses stable child sessions for continuity, but scopes the stable key by caller, conversation, sorted summary ids, token cap, message-expansion mode, and depth. Each run still refreshes grant/context/idempotency bindings, clears grant/context state afterward, and non-Active-Memory expansion sessions remain disposable and deleted.                                                                                |
 | Control UI read aloud through Talk        | Partial-overlap carry | Medium     | Browser `talk-tts.ts` read-aloud surface still absent upstream; thin current-Talk integration carried.                                                                                                                                                                                                                                                                                                                                                                                   |
 | Discord 30032 command deploy recovery     | Runtime carry         | Medium     | `isDiscordDeployCommandLimit` recovery still absent; carried.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Discord auto-presence account auth store  | Runtime carry         | Medium     | Account-bound auth-store resolution still absent; carried.                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -223,6 +225,8 @@ keytool -printcert -jarfile <app.aab>         # AAB: read the "SHA256:" line
 - `lobster-workspace-cwd-sandbox` - active seam: keep Lobster command cwd resolution rooted in the active plugin tool workspace, not the Gateway process cwd. Relative cwd values resolve inside `ctx.workspaceDir`; absolute cwd values are allowed only when they stay inside that workspace; omitted cwd defaults to the workspace root for tool-created Lobster instances.
 - `reply-session-init-burst-serialization` - active seam: keep reply session initialization serialized per store path and canonical session key before the session-store snapshot is read. Same-session Telegram/direct bursts must queue and reuse the committed session metadata instead of preparing multiple fresh session ids and surfacing `reply session initialization conflicted` as a channel dispatch failure.
 - `persistent-codex-memory-recall` - active seam: keep Active Memory recall on a stripped hidden Codex/OpenAI path with a warm app-server client but fresh native Codex session per recall, private temp transcript cleanup when user transcript persistence is off, no Honcho/plugin/TTS/skills/MCP/Codex-plugin participation, custom memory-tool allowlists preserved after broad-tool normalization, bounded trace instrumentation, and trusted parent fast-mode inheritance for plugin subagents only.
+- `lossless-transcript-wedge-rebootstrap` - active seam in external `lossless-claw`: when stored compaction exhausts but host-observed live transcript tokens remain over target, bump a persisted `conversations.context_projection_reset_generation` value and include it in the existing `thread_bootstrap` epoch hash. Preserve the external OpenClaw session key/conversation identity and reproject summaries/focus/tail context into a fresh Codex backend thread without changing the v1 epoch wire shape.
+- `lossless-active-memory-recall-expansion` - active seam in external `lossless-claw`: reuse Active Memory recall delegated expansion child sessions only within the same authorization/input scope, refresh per-run grants/recursion context/idempotency keys, keep non-reusable sessions deleted, and forward fast-mode/idempotency params through the plugin gateway adapter.
 
 ## Seam inventory
 
@@ -374,6 +378,58 @@ Rebase notes:
 - Keep hidden recall tool filtering in the Active Memory config normalizer, not a memory-prefix-only hidden filter. Reserved broad/core tools, Honcho, TTS, web, message, exec/read/write, group entries, and wildcard entries are excluded, but custom memory tools such as `search_notes` or `recall_context` remain valid.
 - Fast-mode inheritance is trusted only from plugin subagent/runtime paths. Public gateway agent calls may set the visible fast-mode policy but must not spoof inherited `fastModeStartedAtMs` or `fastModeAutoOnSeconds`.
 - Keep gateway trace maps bounded and lifecycle-cleaned; tracing is for latency diagnosis and must not become unbounded per-request state.
+
+### Lossless transcript-wedge rebootstrap
+
+Carry behavior: the external `lossless-claw` context engine must not leave users stuck after stored compaction has no eligible candidates while the live Codex backend transcript remains over target. A proven transcript wedge increments a persisted per-conversation reset generation in SQLite and the next `assemble` folds that generation into the existing `thread_bootstrap` epoch hash. OpenClaw keeps the same session key and conversation identity, but the changed epoch makes the Codex app-server binding compatibility path start a fresh backend thread and inject Lossless's rich compacted context once.
+
+Primary seam files:
+
+- `../lossless-claw/src/db/migration.ts`
+- `../lossless-claw/src/store/conversation-store.ts`
+- `../lossless-claw/src/engine.ts`
+- `../lossless-claw/test/transcript-wedge.test.ts`
+
+Primary seam tests:
+
+- `npm test -- test/transcript-wedge.test.ts`
+- `npm test -- test/migration.test.ts`
+- `npm test -- test/engine-assemble.test.ts`
+- `npm run typecheck`
+- `npm run build`
+
+Rebase notes:
+
+- Do not change the public epoch format while keeping the `summary-prefix-v1` prefix. Keep emitted epochs shaped as `summary-prefix-v1:<conversationId>:<hash>` and place the reset generation only in the hash input unless all consumers/tests move to a new version.
+- Bump the reset generation only in the terminal transcript-wedge branch: threshold sweep, no action taken, no auth failure, not budget-stopped, still over target, and host-observed tokens present. Ordinary compaction progress, budget stops, generic over-target failures, and repeated assemble calls must not churn backend threads.
+- The rebootstrap payload must preserve rich Lossless context: summaries, focus brief, important fresh tail, and other assembled context still flow through `assemble` before the epoch is emitted. Regression proof should assert content survives before and after the epoch change, not only that the epoch string changes.
+- OpenClaw host proof relies on `ContextEngineProjection.mode = "thread_bootstrap"` and Codex app-server binding compatibility comparing projection epoch/fingerprint. No host code should be needed when only the epoch changes.
+
+### Lossless Active Memory recall expansion
+
+Carry behavior: the external `lossless-claw` delegated expansion helpers need stable child sessions for Active Memory recall so recall expansion can retain useful local continuity, but the retained child transcript must not cross authorization or input scopes. Active Memory reusable keys are scoped by caller session key, conversation id, sorted summary ids, token cap, include-messages mode, and max depth. Each delegated run still gets fresh grant/context/idempotency state, and cleanup clears those in-memory bindings even when the child transcript is retained. Non-Active-Memory callers keep random child session keys and delete transcripts.
+
+Primary seam files:
+
+- `../lossless-claw/src/plugin/index.ts`
+- `../lossless-claw/src/tools/lcm-expand-query-tool.ts`
+- `../lossless-claw/src/tools/lcm-expand-tool.delegation.ts`
+- `../lossless-claw/test/lcm-expand-query-tool.test.ts`
+- `../lossless-claw/test/lcm-expand-tool.delegation.test.ts`
+- `../lossless-claw/test/plugin-config-registration.test.ts`
+
+Primary seam tests:
+
+- `npm test -- test/lcm-expand-query-tool.test.ts test/lcm-expand-tool.delegation.test.ts test/plugin-config-registration.test.ts`
+- `npm run typecheck`
+- `npm run build`
+
+Rebase notes:
+
+- Stable reusable child keys must include the authorization/input scope. Reusing only `agent:<id>:...:active-memory:recall` is unsafe because a later narrower grant could see prior expansion tool results from a wider conversation/token scope.
+- Keep summary id order canonical in the key hash. Reordered identical summary id sets should reuse a key; another conversation, smaller token cap, different include-message mode, or different max depth should not.
+- Always refresh the delegated expansion grant, recursion context, and gateway `idempotencyKey` for each run. Always revoke the grant and clear the recursion context in `finally`; only skip `sessions.delete` for scoped reusable Active Memory keys.
+- Forward `idempotencyKey`, `fastMode`, `fastModeAutoOnSeconds`, and `fastModeStartedAtMs` through the Lossless plugin's gateway `agent` adapter so Active Memory's trusted fast-mode inheritance reaches delegated subagents without accepting malformed values.
 
 ### ACP backend alias routing
 
