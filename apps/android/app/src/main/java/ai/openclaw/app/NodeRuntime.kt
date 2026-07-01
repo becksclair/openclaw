@@ -13,6 +13,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.gateway.OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
@@ -71,6 +72,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -82,6 +84,13 @@ import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+
+internal enum class GatewayNodesDevicesRefreshMode(
+  val includePairingDevices: Boolean,
+) {
+  Normal(includePairingDevices = false),
+  PairingManagement(includePairingDevices = true),
+}
 
 /**
  * Process runtime that owns gateway sessions, node command handlers, capture managers, and UI-facing state.
@@ -117,6 +126,7 @@ class NodeRuntime(
 ) {
   companion object {
     private const val WEAR_RELAY_PHONE_CAPABILITY = "openclaw_relay_phone"
+    private const val PAIRING_OPERATOR_CONNECT_TIMEOUT_MS = 12_000L
   }
 
   /**
@@ -146,6 +156,7 @@ class NodeRuntime(
   val discoveryStatusText: StateFlow<String> = discovery.statusText
 
   private val identityStore = DeviceIdentityStore(appContext)
+  private val pairingIdentityStore = DeviceIdentityStore(appContext, namespace = "operator-pairing")
   private var connectedEndpoint: GatewayEndpoint? = null
   private var activeGatewayAuth: GatewayConnectAuth? = null
 
@@ -457,6 +468,8 @@ class NodeRuntime(
 
   @Volatile private var nodePresenceAliveLastSuccessAtMs: Long? = null
   private var operatorConnected = false
+  private var pairingOperatorConnected = false
+  private var pairingOperatorConnectFailed = false
   private var operatorStatusText: String = "Offline"
   private var nodeStatusText: String = "Offline"
 
@@ -545,6 +558,26 @@ class NodeRuntime(
     }
   }
 
+  private val pairingOperatorSession =
+    GatewaySession(
+      scope = scope,
+      identityStore = pairingIdentityStore,
+      deviceAuthStore = deviceAuthStore,
+      onConnected = {
+        pairingOperatorConnected = true
+        pairingOperatorConnectFailed = false
+      },
+      onDisconnected = {
+        pairingOperatorConnected = false
+      },
+      onConnectFailure = { error, _ ->
+        pairingOperatorConnected = false
+        pairingOperatorConnectFailed = true
+        Log.d("OpenClawRuntime", "pairing operator connect failed: ${error.code}: ${error.message}")
+      },
+      onEvent = { _, _ -> },
+    )
+
   private val nodeSession =
     GatewaySession(
       scope = scope,
@@ -564,7 +597,7 @@ class NodeRuntime(
         val endpoint = connectedEndpoint
         val auth = activeGatewayAuth
         if (operatorConnected) {
-          scope.launch { refreshNodesDevicesFromGateway() }
+          scope.launch { refreshNodesDevicesFromGateway(includePairingDevices = false) }
         } else if (endpoint != null && auth != null) {
           maybeStartOperatorSessionAfterNodeConnect(endpoint, auth)
         }
@@ -886,7 +919,7 @@ class NodeRuntime(
       refreshCronFromGateway()
       refreshUsageFromGateway()
       refreshSkillsFromGateway()
-      refreshNodesDevicesFromGateway()
+      refreshNodesDevicesFromGateway(includePairingDevices = false)
       refreshChannelsFromGateway()
       refreshDreamingFromGateway()
       refreshHealthLogsFromGateway()
@@ -924,8 +957,16 @@ class NodeRuntime(
   }
 
   fun refreshNodesDevices() {
+    refreshNodesDevices(mode = GatewayNodesDevicesRefreshMode.Normal)
+  }
+
+  fun refreshPairingManagement() {
+    refreshNodesDevices(mode = GatewayNodesDevicesRefreshMode.PairingManagement)
+  }
+
+  private fun refreshNodesDevices(mode: GatewayNodesDevicesRefreshMode) {
     scope.launch {
-      refreshNodesDevicesFromGateway()
+      refreshNodesDevicesFromGateway(includePairingDevices = mode.includePairingDevices)
     }
   }
 
@@ -1042,8 +1083,10 @@ class NodeRuntime(
   fun resetGatewaySetupAuth() {
     prefs.clearGatewaySetupAuth()
     val deviceId = identityStore.loadOrCreate().deviceId
+    val pairingDeviceId = pairingIdentityStore.loadOrCreate().deviceId
     deviceAuthStore.clearToken(deviceId, "node")
     deviceAuthStore.clearToken(deviceId, "operator")
+    deviceAuthStore.clearToken(pairingDeviceId, OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE)
   }
 
   /** Persists onboarding state; callers decide whether runtime startup is needed first. */
@@ -1642,6 +1685,9 @@ class NodeRuntime(
     reconnect: Boolean = false,
   ) {
     activeGatewayAuth = auth
+    pairingOperatorConnected = false
+    pairingOperatorConnectFailed = false
+    pairingOperatorSession.disconnect()
     val tls = connectionManager.resolveTlsParams(endpoint)
     val operatorAuth =
       resolveOperatorSessionConnectAuth(
@@ -1805,6 +1851,11 @@ class NodeRuntime(
     return deviceAuthStore.loadToken(deviceId, role)
   }
 
+  private fun loadStoredPairingOperatorDeviceToken(): String? {
+    val deviceId = pairingIdentityStore.loadOrCreate().deviceId
+    return deviceAuthStore.loadToken(deviceId, OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE)
+  }
+
   private fun advertiseWearRelayCapability() {
     scope.launch {
       runCatching {
@@ -1854,6 +1905,7 @@ class NodeRuntime(
     _gatewayConnectionProblem.value = null
     _pendingGatewayTrust.value = null
     operatorSession.disconnect()
+    pairingOperatorSession.disconnect()
     nodeSession.disconnect()
   }
 
@@ -2226,7 +2278,7 @@ class NodeRuntime(
     }
   }
 
-  private suspend fun refreshNodesDevicesFromGateway() {
+  private suspend fun refreshNodesDevicesFromGateway(includePairingDevices: Boolean) {
     val refreshGeneration = nodeApprovalRefreshGuard.begin()
     val refreshStarted =
       nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
@@ -2263,20 +2315,30 @@ class NodeRuntime(
       if (!publishedApproval) {
         return
       }
-      val devicesRoot =
-        try {
-          val devicesRes = operatorSession.request("device.pair.list", "{}")
-          json.parseToJsonElement(devicesRes).asObjectOrNull()
-        } catch (_: Throwable) {
-          null
-        }
+      val devicesRoot = if (includePairingDevices) requestPairingDevicesRoot() else null
       nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
+        val previousSummary = _nodesDevicesSummary.value
         _nodesDevicesSummary.value =
           GatewayNodesDevicesSummary(
             nodes = nodes,
-            pendingDevices = parsePendingDevices(devicesRoot?.get("pending") as? JsonArray),
-            pairedDevices = parsePairedDevices(devicesRoot?.get("paired") as? JsonArray),
-            devicePairingAvailable = devicesRoot != null,
+            pendingDevices =
+              if (includePairingDevices) {
+                parsePendingDevices(devicesRoot?.get("pending") as? JsonArray)
+              } else {
+                previousSummary.pendingDevices
+              },
+            pairedDevices =
+              if (includePairingDevices) {
+                parsePairedDevices(devicesRoot?.get("paired") as? JsonArray)
+              } else {
+                previousSummary.pairedDevices
+              },
+            devicePairingAvailable =
+              if (includePairingDevices) {
+                devicesRoot != null
+              } else {
+                previousSummary.devicePairingAvailable
+              },
           )
       }
     } catch (_: Throwable) {
@@ -2289,6 +2351,48 @@ class NodeRuntime(
       }
     }
   }
+
+  private suspend fun requestPairingDevicesRoot(): JsonObject? {
+    val endpoint = connectedEndpoint ?: return null
+    val auth = activeGatewayAuth ?: return null
+    val storedPairingToken = loadStoredPairingOperatorDeviceToken()
+    val pairingAuth =
+      if (!storedPairingToken.isNullOrBlank()) {
+        resolveOperatorSessionConnectAuth(
+          auth = auth.copy(bootstrapToken = null),
+          storedOperatorToken = storedPairingToken,
+        ) ?: return null
+      } else {
+        NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = auth.password)
+      }
+    if (!pairingOperatorConnected) {
+      pairingOperatorConnectFailed = false
+      pairingOperatorSession.connect(
+        endpoint,
+        pairingAuth.token,
+        pairingAuth.bootstrapToken,
+        pairingAuth.password,
+        connectionManager.buildPairingOperatorConnectOptions(),
+        connectionManager.resolveTlsParams(endpoint),
+      )
+      if (!waitForPairingOperatorConnected()) return null
+    }
+    return try {
+      val devicesRes = pairingOperatorSession.request("device.pair.list", "{}")
+      json.parseToJsonElement(devicesRes).asObjectOrNull()
+    } catch (err: Throwable) {
+      Log.d("OpenClawRuntime", "device.pair.list unavailable to pairing session: ${err.message ?: err::class.java.simpleName}")
+      null
+    }
+  }
+
+  private suspend fun waitForPairingOperatorConnected(): Boolean =
+    withTimeoutOrNull(PAIRING_OPERATOR_CONNECT_TIMEOUT_MS) {
+      while (!pairingOperatorConnected && !pairingOperatorConnectFailed) {
+        delay(50)
+      }
+      pairingOperatorConnected
+    } == true
 
   private suspend fun refreshExecApprovalsFromGateway() {
     val refreshGeneration = execApprovalsRefreshSeq.incrementAndGet()

@@ -324,6 +324,70 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
+  fun connect_reusesStoredDeviceTokenFromAuthRoleSlot() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val connectParams = CompletableDeferred<JsonObject>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(json) { webSocket, id, method, frame ->
+          if (method == "connect") {
+            if (!connectParams.isCompleted) {
+              connectParams.complete(frame["params"]!!.jsonObject)
+            }
+            webSocket.send(connectResponseFrame(id))
+            webSocket.close(1000, "done")
+          }
+        }
+
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        harness.deviceAuthStore.saveToken(
+          deviceId = deviceId,
+          role = "operator",
+          token = "bounded-operator-token",
+          scopes = listOf("operator.read", "operator.write"),
+        )
+        harness.deviceAuthStore.saveToken(
+          deviceId = deviceId,
+          role = "operator-pairing",
+          token = "pairing-operator-token",
+          scopes = listOf("operator.read", "operator.pairing"),
+        )
+
+        connectNodeSession(
+          session = harness.session,
+          port = server.port,
+          token = null,
+          role = "operator",
+          authRole = "operator-pairing",
+          scopes = listOf("operator.read", "operator.pairing"),
+        )
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+        val params = withTimeout(TEST_TIMEOUT_MS) { connectParams.await() }
+        assertEquals(
+          "pairing-operator-token",
+          params["auth"]
+            ?.jsonObject
+            ?.get("token")
+            ?.jsonPrimitive
+            ?.content,
+        )
+        assertEquals(listOf("operator.read", "operator.pairing"), params.scopes())
+      } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
   fun bootstrapConnect_filtersOperatorHandoffScopesFromConnectRequest() =
     runBlocking {
       val json = testJson()
@@ -382,6 +446,59 @@ class GatewaySessionInvokeTest {
           ),
           params.scopes(),
         )
+      } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun bootstrapConnect_keepsPairingScopesForPairingOperatorAuthRole() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val connectParams = CompletableDeferred<JsonObject>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(json) { webSocket, id, method, frame ->
+          if (method == "connect") {
+            if (!connectParams.isCompleted) {
+              connectParams.complete(frame["params"]!!.jsonObject)
+            }
+            webSocket.send(
+              connectResponseFrame(
+                id,
+                authJson = """{"deviceToken":"pairing-bootstrap-token","role":"operator","scopes":["operator.read","operator.pairing"]}""",
+              ),
+            )
+            webSocket.close(1000, "done")
+          }
+        }
+
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        connectNodeSession(
+          session = harness.session,
+          port = server.port,
+          token = null,
+          bootstrapToken = "setup-bootstrap-token",
+          role = "operator",
+          authRole = "operator-pairing",
+          scopes = listOf("operator.read", "operator.pairing"),
+        )
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+        val params = withTimeout(TEST_TIMEOUT_MS) { connectParams.await() }
+        assertEquals(listOf("operator.pairing", "operator.read"), params.scopes())
+
+        val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        val pairingEntry = harness.deviceAuthStore.loadEntry(deviceId, "operator-pairing")
+        assertEquals("pairing-bootstrap-token", pairingEntry?.token)
+        assertEquals(listOf("operator.pairing", "operator.read"), pairingEntry?.scopes)
       } finally {
         shutdownHarness(harness, server)
       }
@@ -848,6 +965,7 @@ class GatewaySessionInvokeTest {
     token: String? = "test-token",
     bootstrapToken: String? = null,
     role: String = "node",
+    authRole: String = role,
     scopes: List<String> = listOf("node:invoke"),
   ) {
     session.connect(
@@ -865,6 +983,7 @@ class GatewaySessionInvokeTest {
       options =
         GatewayConnectOptions(
           role = role,
+          authRole = authRole,
           scopes = scopes,
           caps = emptyList(),
           commands = emptyList(),

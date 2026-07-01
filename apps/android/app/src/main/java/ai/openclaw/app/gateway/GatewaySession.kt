@@ -52,6 +52,7 @@ data class GatewayClientInfo(
  */
 data class GatewayConnectOptions(
   val role: String,
+  val authRole: String = role,
   val scopes: List<String>,
   val caps: List<String>,
   val commands: List<String>,
@@ -66,6 +67,14 @@ internal val OPENCLAW_OPERATOR_SCOPES =
     "operator.read",
     "operator.talk.secrets",
     "operator.write",
+  )
+
+internal const val OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE = "operator-pairing"
+
+internal val OPENCLAW_PAIRING_OPERATOR_SCOPES =
+  listOf(
+    "operator.read",
+    "operator.pairing",
   )
 
 private fun gatewayScopesAllow(
@@ -617,7 +626,8 @@ class GatewaySession(
 
     private suspend fun sendConnect(connectNonce: String) {
       val identity = identityStore.loadOrCreate()
-      val storedEntry = deviceAuthStore.loadEntry(identity.deviceId, options.role)
+      val authRole = options.authRole
+      val storedEntry = deviceAuthStore.loadEntry(identity.deviceId, authRole)
       val storedToken = storedEntry?.token?.trim()
       val selectedAuth =
         selectConnectAuth(
@@ -663,7 +673,7 @@ class GatewaySession(
           selectedAuth.attemptedDeviceTokenRetry &&
           shouldClearStoredDeviceTokenAfterRetry(error)
         ) {
-          deviceAuthStore.clearToken(identity.deviceId, options.role)
+          deviceAuthStore.clearToken(identity.deviceId, authRole)
         }
         throw GatewayConnectFailure(error)
       }
@@ -685,7 +695,11 @@ class GatewaySession(
         "node" -> emptyList()
         "operator" -> {
           val allowedOperatorScopes =
-            OPENCLAW_OPERATOR_SCOPES.toSet()
+            if (options.authRole == OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE) {
+              OPENCLAW_PAIRING_OPERATOR_SCOPES.toSet()
+            } else {
+              OPENCLAW_OPERATOR_SCOPES.toSet()
+            }
           scopes.filter { allowedOperatorScopes.contains(it) }.distinct().sorted()
         }
         else -> null
@@ -696,9 +710,10 @@ class GatewaySession(
       role: String,
       token: String,
       scopes: List<String>,
+      storageRole: String = role,
     ) {
       val filteredScopes = filteredBootstrapHandoffScopes(role, scopes) ?: return
-      deviceAuthStore.saveToken(deviceId, role, token, filteredScopes)
+      deviceAuthStore.saveToken(deviceId, storageRole, token, filteredScopes)
     }
 
     private fun persistIssuedDeviceToken(
@@ -710,10 +725,10 @@ class GatewaySession(
     ) {
       if (authSource == GatewayConnectAuthSource.BOOTSTRAP_TOKEN) {
         if (!shouldPersistBootstrapHandoffTokens(authSource)) return
-        persistBootstrapHandoffToken(deviceId, role, token, scopes)
+        persistBootstrapHandoffToken(deviceId, role, token, scopes, storageRole = options.authRole)
         return
       }
-      deviceAuthStore.saveToken(deviceId, role, token, scopes)
+      deviceAuthStore.saveToken(deviceId, options.authRole, token, scopes)
     }
 
     private fun handleConnectSuccess(

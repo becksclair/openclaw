@@ -430,6 +430,8 @@ class ConnectionManagerTest {
   fun buildOperatorConnectOptions_requestsQrBootstrapHandoffScopes() {
     val options = newManager().buildOperatorConnectOptions()
 
+    assertEquals("operator", options.role)
+    assertEquals("operator", options.authRole)
     assertEquals(
       listOf(
         "operator.approvals",
@@ -439,6 +441,17 @@ class ConnectionManagerTest {
       ),
       options.scopes,
     )
+  }
+
+  @Test
+  fun buildPairingOperatorConnectOptions_usesSeparatePairingTokenSlot() {
+    val options = newManager().buildPairingOperatorConnectOptions()
+
+    assertEquals("operator", options.role)
+    assertEquals("operator-pairing", options.authRole)
+    assertEquals(listOf("operator.read", "operator.pairing"), options.scopes)
+    assertEquals("openclaw-android", options.client.id)
+    assertEquals("ui", options.client.mode)
   }
 
   @Test

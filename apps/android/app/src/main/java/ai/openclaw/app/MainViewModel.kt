@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.node.CameraCaptureManager
@@ -302,9 +303,11 @@ class MainViewModel(
   private fun resetGatewaySetupAuthWithoutRuntime() {
     prefs.clearGatewaySetupAuth()
     val deviceId = DeviceIdentityStore(nodeApp).loadOrCreate().deviceId
+    val pairingDeviceId = DeviceIdentityStore(nodeApp, namespace = "operator-pairing").loadOrCreate().deviceId
     val deviceAuthStore = DeviceAuthStore(prefs)
     deviceAuthStore.clearToken(deviceId, "node")
     deviceAuthStore.clearToken(deviceId, "operator")
+    deviceAuthStore.clearToken(pairingDeviceId, OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE)
   }
 
   fun saveGatewayConfigAndConnect(
@@ -604,6 +607,10 @@ class MainViewModel(
 
   fun refreshNodesDevices() {
     ensureRuntime().refreshNodesDevices()
+  }
+
+  fun refreshPairingManagement() {
+    ensureRuntime().refreshPairingManagement()
   }
 
   fun refreshExecApprovals() {

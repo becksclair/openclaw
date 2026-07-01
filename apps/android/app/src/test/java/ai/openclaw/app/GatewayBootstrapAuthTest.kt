@@ -6,6 +6,7 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
+import ai.openclaw.app.gateway.OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE
 import ai.openclaw.app.node.InvokeDispatcher
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 import ai.openclaw.app.voice.TalkModeManager
@@ -17,6 +18,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -391,12 +393,14 @@ class GatewayBootstrapAuthTest {
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
     val runtime = NodeRuntime(app, prefs)
     val deviceId = DeviceIdentityStore(app).loadOrCreate().deviceId
+    val pairingDeviceId = DeviceIdentityStore(app, namespace = "operator-pairing").loadOrCreate().deviceId
     val authStore = DeviceAuthStore(prefs)
     prefs.setGatewayToken("stale-shared-token")
     prefs.setGatewayBootstrapToken("stale-bootstrap-token")
     prefs.setGatewayPassword("stale-password")
     authStore.saveToken(deviceId, "node", "stale-node-token")
     authStore.saveToken(deviceId, "operator", "stale-operator-token")
+    authStore.saveToken(pairingDeviceId, OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE, "stale-pairing-token")
 
     runtime.resetGatewaySetupAuth()
 
@@ -405,6 +409,13 @@ class GatewayBootstrapAuthTest {
     assertNull(prefs.loadGatewayPassword())
     assertNull(authStore.loadToken(deviceId, "node"))
     assertNull(authStore.loadToken(deviceId, "operator"))
+    assertNull(authStore.loadToken(pairingDeviceId, OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE))
+  }
+
+  @Test
+  fun nodesDevicesRefreshMode_keepsNormalRefreshOffPairingList() {
+    assertFalse(GatewayNodesDevicesRefreshMode.Normal.includePairingDevices)
+    assertTrue(GatewayNodesDevicesRefreshMode.PairingManagement.includePairingDevices)
   }
 
   @Test

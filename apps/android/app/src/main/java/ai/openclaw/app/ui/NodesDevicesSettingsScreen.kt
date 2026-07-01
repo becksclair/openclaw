@@ -45,7 +45,7 @@ internal fun NodesDevicesSettingsScreen(
     if (isConnected) {
       // Refresh once on connection; user-triggered refresh handles later changes
       // so device admin state is not polled from Compose.
-      viewModel.refreshNodesDevices()
+      viewModel.refreshPairingManagement()
     }
   }
 
@@ -67,7 +67,7 @@ internal fun NodesDevicesSettingsScreen(
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawSecondaryButton(
         text = if (refreshing) "Refreshing" else "Refresh",
-        onClick = viewModel::refreshNodesDevices,
+        onClick = viewModel::refreshPairingManagement,
         enabled = isConnected && !refreshing,
         modifier = Modifier.weight(1f),
       )
