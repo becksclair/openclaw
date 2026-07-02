@@ -553,12 +553,14 @@ export function buildChannelProgressDraftLine(
     }
     case "item": {
       const name = input.name ?? itemKindToToolName(input.itemKind);
-      const meta =
-        input.meta ??
-        input.summary ??
-        (options?.commandText === "status" && isCommandProgressItem(input)
-          ? undefined
-          : input.progressText);
+      // commandText "status" promises label-only command lines. Runner item
+      // events pre-fill meta/summary with the raw command or live output, so
+      // suppress every detail source here, not just progressText.
+      const suppressCommandDetail =
+        options?.commandText === "status" && isCommandProgressItem(input);
+      const meta = suppressCommandDetail
+        ? undefined
+        : (input.meta ?? input.summary ?? input.progressText);
       if (isEmptyReasoningProgressItem(input, meta)) {
         return undefined;
       }

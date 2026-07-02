@@ -62,6 +62,76 @@ describe("buildChannelProgressDraftLine", () => {
     });
   });
 
+  it("suppresses pre-filled command meta on item events in status-only mode", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "item",
+        itemId: "item-1",
+        toolCallId: "exec-1",
+        phase: "start",
+        itemKind: "tool",
+        name: "bash",
+        status: "running",
+        meta: "set -euo pipefail cd ~/.openclaw/workspace claude … EOF (agent)",
+      },
+      { commandText: "status" },
+    );
+
+    expect(line).toMatchObject({
+      kind: "item",
+      id: "item-1",
+      text: "🛠️ Bash",
+      status: "running",
+    });
+    expect(line?.detail).toBeUndefined();
+  });
+
+  it("suppresses command output summary on item events in status-only mode", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "item",
+        itemId: "item-1",
+        toolCallId: "exec-1",
+        phase: "end",
+        itemKind: "command",
+        name: "exec",
+        status: "completed",
+        summary: "total 12\ndrwxr-xr-x …",
+      },
+      { commandText: "status" },
+    );
+
+    expect(line).toMatchObject({
+      kind: "item",
+      text: "🛠️ Exec",
+      status: "completed",
+    });
+    expect(line?.detail).toBeUndefined();
+  });
+
+  it("keeps pre-filled command meta on item events in raw mode", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "item",
+        itemId: "item-1",
+        toolCallId: "exec-1",
+        phase: "start",
+        itemKind: "tool",
+        name: "bash",
+        status: "running",
+        meta: "run tests (repo)",
+      },
+      { commandText: "raw" },
+    );
+
+    expect(line).toMatchObject({
+      kind: "item",
+      text: "🛠️ run tests (repo)",
+      detail: "run tests (repo)",
+      status: "running",
+    });
+  });
+
   it("keeps only command status in status-only progress lines", () => {
     const line = buildChannelProgressDraftLine(
       {
