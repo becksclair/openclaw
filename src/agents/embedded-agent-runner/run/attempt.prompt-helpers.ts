@@ -3,6 +3,7 @@
  */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
+  ContextEnginePromptBudget,
   ContextEnginePromptCacheInfo,
   ContextEngineRuntimeContext,
 } from "../../../context-engine/types.js";
@@ -599,6 +600,7 @@ export function buildAfterTurnRuntimeContext(params: {
   contextEnginePluginId?: string;
   tokenBudget?: number;
   currentTokenCount?: number;
+  contextEngineBudget?: ContextEnginePromptBudget;
   promptCache?: ContextEnginePromptCacheInfo;
 }): ContextEngineRuntimeContext {
   return {
@@ -651,6 +653,7 @@ export function buildAfterTurnRuntimeContext(params: {
     params.currentTokenCount > 0
       ? { currentTokenCount: Math.floor(params.currentTokenCount) }
       : {}),
+    ...(params.contextEngineBudget ? { contextEngineBudget: params.contextEngineBudget } : {}),
     ...(params.promptCache ? { promptCache: params.promptCache } : {}),
   };
 }

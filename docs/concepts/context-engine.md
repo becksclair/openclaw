@@ -240,7 +240,12 @@ rendered directly to users and does not create a dedicated reporting surface.
 - `contextEngineSelection`: selected context engine id and selection source
 - `executionHost`: host id and label for the surface invoking the hook
 - `model`: requested model, resolved model, provider, and optional model family
-- `limits`: prompt token budget and max output tokens when known
+- `limits`: prompt token budget and max output tokens when known. Hosts that
+  can distinguish their own prompt floor from engine-owned context may also
+  include `limits.contextEngineBudget` with `promptTokenBudget`,
+  `nonEnginePromptTokens`, and `enginePromptTokenBudget`. Engines should treat
+  this object as optional; absent or `null` values mean the host cannot provide
+  that budget split for the current surface.
 - `diagnostics`: closed fallback and degraded reason codes when known
 
 Fields that can be unknown are represented as `null`; discriminator fields such

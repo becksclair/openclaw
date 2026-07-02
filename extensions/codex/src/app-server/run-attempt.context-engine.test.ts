@@ -422,6 +422,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         degradedReason: "context_overflow",
       },
     });
+    expect(assembleParams.runtimeSettings?.limits.contextEngineBudget).toMatchObject({
+      schemaVersion: 1,
+      promptTokenBudget: 321,
+      source: "host_estimate",
+    });
+    expect(
+      assembleParams.runtimeSettings?.limits.contextEngineBudget?.nonEnginePromptTokens,
+    ).toBeGreaterThan(0);
+    expect(assembleParams.runtimeContext?.contextEngineBudget).toEqual(
+      assembleParams.runtimeSettings?.limits.contextEngineBudget,
+    );
     expect(assembleParams.prompt).toBe("hello");
     expect(assembleParams.messages.map((message) => message.role)).toEqual(["assistant"]);
     expect(assembleParams.availableTools).toEqual(new Set());
@@ -435,6 +446,47 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.completeTurn();
     await run;
     expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("subtracts before_prompt_build prompt additions from active context-engine budgets", async () => {
+    const beforePromptBuild = vi.fn(async () => ({
+      appendContext: `hook-owned prompt floor ${"h".repeat(120_000)}`,
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: beforePromptBuild,
+        },
+      ]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const contextEngine = createContextEngine();
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 20_000;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const assembleParams = requireFirstCallArg(contextEngine["assemble"], "assemble") as Parameters<
+      ContextEngine["assemble"]
+    >[0];
+    const budget = assembleParams.runtimeSettings?.limits.contextEngineBudget;
+    expect(budget).toMatchObject({
+      schemaVersion: 1,
+      promptTokenBudget: 20_000,
+      enginePromptTokenBudget: 0,
+      source: "host_estimate",
+    });
+    expect(budget?.nonEnginePromptTokens).toBeGreaterThan(20_000);
+    expect(assembleParams.runtimeContext?.contextEngineBudget).toEqual(budget);
+    expect(beforePromptBuild).toHaveBeenCalledOnce();
+
+    await harness.completeTurn();
+    await run;
   });
 
   it("keeps context-engine history bound to the run session when sandbox key differs", async () => {
@@ -535,7 +587,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     const inputText = getRequestInputText(harness);
-    expect(inputText.length).toBe(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
+    expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
     expect(inputText).toContain("recent anchor");
     expect(inputText).toContain("current inbound context survives");
     expect(inputText).toContain("current prompt survives");
@@ -1466,7 +1518,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         schemaVersion: 1,
         engineId: "lossless-claw",
         policyFingerprint:
-          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"contextEngineProjectionTokenBudget":399703,"projectionMaxChars":1000000}',
         projection: {
           schemaVersion: 1,
           mode: "thread_bootstrap",
@@ -1568,7 +1620,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         schemaVersion: 1,
         engineId: "lossless-claw",
         policyFingerprint:
-          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"contextEngineProjectionTokenBudget":399703,"projectionMaxChars":1000000}',
         projection: {
           schemaVersion: 1,
           mode: "thread_bootstrap",
@@ -1640,7 +1692,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         schemaVersion: 1,
         engineId: "lossless-claw",
         policyFingerprint:
-          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"contextEngineProjectionTokenBudget":399703,"projectionMaxChars":1000000}',
         projection: {
           schemaVersion: 1,
           mode: "thread_bootstrap",
@@ -1798,7 +1850,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         schemaVersion: 1,
         engineId: "lossless-claw",
         policyFingerprint:
-          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"contextEngineProjectionTokenBudget":399703,"projectionMaxChars":1000000}',
         projection: {
           schemaVersion: 1,
           mode: "thread_bootstrap",

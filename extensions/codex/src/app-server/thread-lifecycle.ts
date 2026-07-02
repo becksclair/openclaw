@@ -334,6 +334,8 @@ export async function startOrResumeThread(params: {
   appServerRuntimeFingerprint?: string;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
+  contextEngineProjectionTokenBudget?: number | null;
+  contextEngineProjectionMaxChars?: number | null;
   signal?: AbortSignal;
   timing?: CodexThreadLifecycleTimingOptions;
 }): Promise<CodexAppServerThreadLifecycleBinding> {
@@ -361,7 +363,10 @@ export async function startOrResumeThread(params: {
   const webSearchThreadConfigFingerprint = fingerprintJsonObject(webSearchPlan.threadConfig);
   const networkProxyConfigFingerprint = params.appServer.networkProxy?.configFingerprint;
   const contextEngineBinding = lifecycleTiming.measureSync("context-engine-binding", () =>
-    buildContextEngineBinding(params.params, params.contextEngineProjection),
+    buildContextEngineBinding(params.params, params.contextEngineProjection, {
+      contextEngineProjectionTokenBudget: params.contextEngineProjectionTokenBudget,
+      projectionMaxChars: params.contextEngineProjectionMaxChars,
+    }),
   );
   const userMcpServersConfigPatch =
     params.userMcpServersEnabled === false
@@ -1033,6 +1038,10 @@ function isTransientWebSearchRestriction(
 export function buildContextEngineBinding(
   params: EmbeddedRunAttemptParams,
   projection?: CodexContextEngineThreadBootstrapProjection,
+  projectionBudget?: {
+    contextEngineProjectionTokenBudget?: number | null;
+    projectionMaxChars?: number | null;
+  },
 ): CodexAppServerContextEngineBinding | undefined {
   const contextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
@@ -1041,6 +1050,13 @@ export function buildContextEngineBinding(
   if (!contextEngine || !engineId) {
     return undefined;
   }
+  const defaultProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
+    contextTokenBudget: params.contextTokenBudget,
+    reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
+      config: params.config,
+    }),
+  });
+  const projectionMaxChars = projectionBudget?.projectionMaxChars ?? defaultProjectionMaxChars;
   return {
     schemaVersion: 1,
     engineId,
@@ -1052,12 +1068,12 @@ export function buildContextEngineBinding(
       turnMaintenanceMode: contextEngine.info.turnMaintenanceMode,
       citationsMode: resolveContextEngineCitationsMode(params.config),
       contextTokenBudget: params.contextTokenBudget,
-      projectionMaxChars: resolveCodexContextEngineProjectionMaxChars({
-        contextTokenBudget: params.contextTokenBudget,
-        reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
-          config: params.config,
-        }),
-      }),
+      ...(projectionBudget?.contextEngineProjectionTokenBudget !== undefined
+        ? {
+            contextEngineProjectionTokenBudget: projectionBudget.contextEngineProjectionTokenBudget,
+          }
+        : {}),
+      projectionMaxChars,
     }),
     projection: projection ? buildContextEngineProjectionBinding(projection) : undefined,
   };

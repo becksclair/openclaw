@@ -347,6 +347,7 @@ class LegacyAssembleStrictEngine implements ContextEngine {
     citationsMode?: MemoryCitationsMode;
     prompt?: string;
     runtimeSettings?: unknown;
+    runtimeContext?: unknown;
   }): Promise<AssembleResult> {
     this.assembleCalls.push({ ...params });
     if (Object.hasOwn(params, "sessionKey")) {
@@ -357,6 +358,9 @@ class LegacyAssembleStrictEngine implements ContextEngine {
     }
     if (Object.hasOwn(params, "runtimeSettings")) {
       throw new Error("Unrecognized key(s) in object: 'runtimeSettings'");
+    }
+    if (Object.hasOwn(params, "runtimeContext")) {
+      throw new Error("Unrecognized key(s) in object: 'runtimeContext'");
     }
     return {
       messages: params.messages,
@@ -1674,7 +1678,7 @@ describe("assemble() prompt forwarding", () => {
     }
   });
 
-  it("retries strict legacy assemble without sessionKey, prompt, and runtimeSettings", async () => {
+  it("retries strict legacy assemble without sessionKey, prompt, runtimeSettings, and runtimeContext", async () => {
     const engineId = `prompt-legacy-${Date.now().toString(36)}`;
     const strictEngine = new LegacyAssembleStrictEngine(engineId);
     registerContextEngine(engineId, () => strictEngine);
@@ -1686,22 +1690,31 @@ describe("assemble() prompt forwarding", () => {
       messages: [makeMockMessage("user", "hello")],
       prompt: "hello",
       runtimeSettings: { schemaVersion: 1 } as never,
+      runtimeContext: { schemaVersion: 1 } as never,
     });
 
     expect(result.estimatedTokens).toBe(3);
-    expect(strictEngine.assembleCalls).toHaveLength(4);
+    expect(strictEngine.assembleCalls).toHaveLength(5);
     expect(strictEngine.assembleCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
     expect(strictEngine.assembleCalls[0]).toHaveProperty("prompt", "hello");
     expect(strictEngine.assembleCalls[0]).toHaveProperty("runtimeSettings");
+    expect(strictEngine.assembleCalls[0]).toHaveProperty("runtimeContext");
     expect(strictEngine.assembleCalls[1]).not.toHaveProperty("sessionKey");
     expect(strictEngine.assembleCalls[1]).toHaveProperty("prompt", "hello");
     expect(strictEngine.assembleCalls[1]).toHaveProperty("runtimeSettings");
+    expect(strictEngine.assembleCalls[1]).toHaveProperty("runtimeContext");
     expect(strictEngine.assembleCalls[2]).not.toHaveProperty("sessionKey");
     expect(strictEngine.assembleCalls[2]).not.toHaveProperty("prompt");
     expect(strictEngine.assembleCalls[2]).toHaveProperty("runtimeSettings");
+    expect(strictEngine.assembleCalls[2]).toHaveProperty("runtimeContext");
     expect(strictEngine.assembleCalls[3]).not.toHaveProperty("sessionKey");
     expect(strictEngine.assembleCalls[3]).not.toHaveProperty("prompt");
     expect(strictEngine.assembleCalls[3]).not.toHaveProperty("runtimeSettings");
+    expect(strictEngine.assembleCalls[3]).toHaveProperty("runtimeContext");
+    expect(strictEngine.assembleCalls[4]).not.toHaveProperty("sessionKey");
+    expect(strictEngine.assembleCalls[4]).not.toHaveProperty("prompt");
+    expect(strictEngine.assembleCalls[4]).not.toHaveProperty("runtimeSettings");
+    expect(strictEngine.assembleCalls[4]).not.toHaveProperty("runtimeContext");
   });
 
   it("retries strict legacy lifecycle hooks without runtimeSettings", async () => {

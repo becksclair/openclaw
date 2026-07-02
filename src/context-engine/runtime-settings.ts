@@ -1,5 +1,6 @@
 import type { ContextEngineHostSupport } from "./host-compat.js";
 import type {
+  ContextEnginePromptBudget,
   ContextEngineRuntimeReasonCode,
   ContextEngineSelectionSource,
   ContextEngineRuntimeMode,
@@ -28,6 +29,27 @@ function normalizeNullableString(value: OptionalString): string | null {
 
 function normalizeNullableNumber(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function normalizeNonNegativeNullableInteger(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : null;
+}
+
+export function buildContextEnginePromptBudget(
+  params: Omit<ContextEnginePromptBudget, "schemaVersion">,
+): ContextEnginePromptBudget {
+  return {
+    schemaVersion: 1,
+    promptTokenBudget: normalizeNonNegativeNullableInteger(params.promptTokenBudget),
+    nonEnginePromptTokens: normalizeNonNegativeNullableInteger(params.nonEnginePromptTokens),
+    enginePromptTokenBudget: normalizeNonNegativeNullableInteger(params.enginePromptTokenBudget),
+    ...(params.observedPromptTokens !== undefined
+      ? { observedPromptTokens: normalizeNonNegativeNullableInteger(params.observedPromptTokens) }
+      : {}),
+    source: params.source,
+  };
 }
 
 function normalizeReasonCode(value: OptionalReason): ContextEngineRuntimeReasonCode | null {
@@ -72,6 +94,7 @@ export function buildContextEngineRuntimeSettings(params: {
   degradedReason?: OptionalReason;
   promptTokenBudget?: number | null;
   maxOutputTokens?: number | null;
+  contextEngineBudget?: ContextEnginePromptBudget;
   contextEngineHost: ContextEngineHostSupport;
 }): ContextEngineRuntimeSettings {
   const hostId = normalizeNullableString(params.contextEngineHost.id);
@@ -114,6 +137,9 @@ export function buildContextEngineRuntimeSettings(params: {
     limits: {
       promptTokenBudget: normalizeNullableNumber(params.promptTokenBudget),
       maxOutputTokens: normalizeNullableNumber(params.maxOutputTokens),
+      ...(params.contextEngineBudget
+        ? { contextEngineBudget: buildContextEnginePromptBudget(params.contextEngineBudget) }
+        : {}),
     },
     diagnostics: {
       fallbackReason,

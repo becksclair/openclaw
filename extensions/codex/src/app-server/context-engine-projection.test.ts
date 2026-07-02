@@ -372,6 +372,24 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(resolveCodexContextEngineProjectionMaxChars({ contextTokenBudget: 0 })).toBe(24_000);
   });
 
+  it("allows an explicit zero rendered context cap when the host floor consumes the budget", () => {
+    const projected = projectContextEngineAssemblyForCodex({
+      assembledMessages: [
+        {
+          role: "assistant",
+          content: "older assembled context",
+          timestamp: 1,
+        } as AgentMessage,
+      ],
+      originalHistoryMessages: [],
+      prompt: "current request",
+      maxRenderedContextChars: 0,
+    });
+
+    expect(projected.promptText).toBe("current request");
+    expect(projected.promptContextRange).toBeUndefined();
+  });
+
   it("uses the shared reserve-token shape while preserving small-model prompt budget", () => {
     expect(resolveCodexContextEngineProjectionMaxChars({ contextTokenBudget: 80_000 })).toBe(
       240_000,
@@ -379,6 +397,16 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(resolveCodexContextEngineProjectionMaxChars({ contextTokenBudget: 16_000 })).toBe(
       32_000,
     );
+  });
+
+  it("can honor small residual context-engine budgets without the legacy projection floor", () => {
+    expect(resolveCodexContextEngineProjectionMaxChars({ contextTokenBudget: 100 })).toBe(24_000);
+    expect(
+      resolveCodexContextEngineProjectionMaxChars({
+        contextTokenBudget: 100,
+        minimumRenderedContextChars: 0,
+      }),
+    ).toBe(200);
   });
 
   it("maps OpenClaw compaction reserve config onto Codex projection reserves", () => {

@@ -9,6 +9,7 @@ import {
   embeddedAgentLog,
   resolveBootstrapFilesForRun,
   type AgentMessage,
+  type ContextEnginePromptBudget,
   type ContextEngineProjection,
   type EmbeddedContextFile,
   type EmbeddedRunAttemptParams,
@@ -377,6 +378,42 @@ export function buildCodexSystemPromptReport(params: {
       schemaChars,
       entries: toolEntries,
     },
+  };
+}
+
+/** Builds the host-owned prompt floor budget exposed to context engines. */
+export function buildCodexContextEnginePromptBudget(params: {
+  promptTokenBudget?: number | null;
+  systemPromptReport: CodexSystemPromptReport;
+  turnPrompt: string;
+  developerInstructions: string;
+  baseInstructions?: string;
+  openClawPromptContext?: string;
+}): ContextEnginePromptBudget {
+  const promptTokenBudget =
+    typeof params.promptTokenBudget === "number" && Number.isFinite(params.promptTokenBudget)
+      ? Math.max(0, Math.floor(params.promptTokenBudget))
+      : null;
+  const toolDescriptionChars = params.systemPromptReport.tools.entries.reduce(
+    (sum, tool) => sum + tool.summaryChars,
+    0,
+  );
+  const toolDefinitionChars = params.systemPromptReport.tools.schemaChars + toolDescriptionChars;
+  const nonEnginePromptChars =
+    params.turnPrompt.length +
+    params.developerInstructions.length +
+    (params.baseInstructions?.length ?? 0) +
+    (params.openClawPromptContext?.length ?? 0) +
+    toolDefinitionChars;
+  const nonEnginePromptTokens = estimateCodexPromptProfileTokens(nonEnginePromptChars);
+  const enginePromptTokenBudget =
+    promptTokenBudget === null ? null : Math.max(0, promptTokenBudget - nonEnginePromptTokens);
+  return {
+    schemaVersion: 1,
+    promptTokenBudget,
+    nonEnginePromptTokens,
+    enginePromptTokenBudget,
+    source: "host_estimate",
   };
 }
 

@@ -127,6 +127,40 @@ describe("harness context engine lifecycle", () => {
     });
   });
 
+  it("passes context-engine budget accounting into assemble settings and runtime context", async () => {
+    const visibleUser = textMessage("user", "visible ask", 1);
+    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }));
+    const contextEngineBudget = {
+      schemaVersion: 1 as const,
+      promptTokenBudget: 128_000,
+      nonEnginePromptTokens: 53_000,
+      enginePromptTokenBudget: 75_000,
+      source: "host_estimate" as const,
+    };
+
+    await assembleHarnessContextEngine({
+      contextEngine: createContextEngine({ assemble }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: sessionParams.sessionKey,
+      messages: [visibleUser],
+      tokenBudget: 128_000,
+      runtimeContext: { contextEngineBudget },
+      contextEngineBudget,
+      modelId: "gpt-5.5",
+      providerId: "openai",
+    });
+
+    const assembleParams = assemble.mock.calls.at(0)?.[0];
+    expect(assembleParams?.runtimeSettings?.limits.contextEngineBudget).toEqual(
+      contextEngineBudget,
+    );
+    expect(assembleParams?.runtimeContext?.contextEngineBudget).toEqual(contextEngineBudget);
+    expect(assembleParams?.tokenBudget).toBe(128_000);
+  });
+
   it("passes runtime settings through a configured context engine across lifecycle hooks", async () => {
     const engineId = uniqueConfiguredProofEngineId();
     const captured: Array<{

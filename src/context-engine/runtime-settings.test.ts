@@ -93,6 +93,30 @@ describe("context engine runtime settings", () => {
     expect(settings.diagnostics.degradedReason).toBe("context_overflow");
   });
 
+  it("normalizes optional context-engine prompt budget accounting", () => {
+    const settings = buildContextEngineRuntimeSettings({
+      contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+      promptTokenBudget: 128_000,
+      contextEngineBudget: {
+        schemaVersion: 1,
+        promptTokenBudget: 128_000.9,
+        nonEnginePromptTokens: 53_200.4,
+        enginePromptTokenBudget: 74_799.6,
+        observedPromptTokens: -1,
+        source: "host_estimate",
+      },
+    });
+
+    expect(settings.limits.contextEngineBudget).toEqual({
+      schemaVersion: 1,
+      promptTokenBudget: 128_000,
+      nonEnginePromptTokens: 53_200,
+      enginePromptTokenBudget: 74_799,
+      observedPromptTokens: null,
+      source: "host_estimate",
+    });
+  });
+
   it("keeps host and selection ids nullable when unknown", () => {
     const settings = buildContextEngineRuntimeSettings({
       contextEngineHost: {

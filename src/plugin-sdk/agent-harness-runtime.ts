@@ -63,6 +63,7 @@ export type {
   ContextEngine as HarnessContextEngine,
   ContextEngineHostCapability,
   ContextEngineOperation,
+  ContextEnginePromptBudget,
   ContextEngineProjection,
 } from "../context-engine/types.js";
 export type {

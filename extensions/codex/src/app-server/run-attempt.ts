@@ -66,6 +66,7 @@ import {
 } from "./attempt-client-cleanup.js";
 import {
   buildCodexOpenClawPromptContext,
+  buildCodexContextEnginePromptBudget,
   buildCodexPromptSurfaceProfile,
   buildCodexSystemPromptReport,
   buildCodexWorkspaceBootstrapContext,
@@ -1108,7 +1109,11 @@ export async function runCodexAppServerAttempt(
   const activeContextEnginePluginId = activeContextEngine
     ? resolveContextEngineOwnerPluginId(activeContextEngine)
     : undefined;
-  const buildActiveContextEngineRuntimeContext = () =>
+  const buildActiveContextEngineRuntimeContext = (
+    contextEngineBudget?: Parameters<
+      typeof buildHarnessContextEngineRuntimeContext
+    >[0]["contextEngineBudget"],
+  ) =>
     buildHarnessContextEngineRuntimeContext({
       attempt: buildActiveRunAttemptParams(),
       workspaceDir: effectiveWorkspace,
@@ -1117,6 +1122,7 @@ export async function runCodexAppServerAttempt(
       activeAgentId: sessionAgentId,
       contextEnginePluginId: activeContextEnginePluginId,
       tokenBudget: params.contextTokenBudget,
+      contextEngineBudget,
     });
   if (activeContextEngine) {
     await bootstrapHarnessContextEngine({
@@ -1184,16 +1190,71 @@ export async function runCodexAppServerAttempt(
     attempt: params,
     skillsPrompt: codexSkillsPrompt,
   });
+  const turnCollaborationDeveloperInstructions =
+    buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
+      skillsCollaborationInstructions,
+      memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
+      heartbeatCollaborationInstructions:
+        workspaceBootstrapContext.heartbeatCollaborationInstructions,
+    }).settings.developer_instructions ?? undefined;
   let promptText = params.prompt;
   let promptContextRange: CodexProjectedContextRange | undefined;
   let developerInstructions = baseDeveloperInstructions;
   let prePromptMessageCount = historyMessages.length;
+  const codexModelInputHistoryMessages: typeof historyMessages = [];
+  const buildCurrentPromptInput = () =>
+    prependCurrentInboundContext(promptText, params.currentInboundContext);
+  const initialPromptInput = buildCurrentPromptInput();
+  const buildPromptFromCurrentInputs = () =>
+    resolveAgentHarnessBeforePromptBuildResult({
+      prompt: buildCurrentPromptInput(),
+      developerInstructions,
+      messages: codexModelInputHistoryMessages,
+      ctx: hookContext,
+      bootstrapContextRunKind: params.bootstrapContextRunKind,
+      suppressPluginHooks: params.suppressPluginHooks,
+      ...("beforeAgentStartResult" in params
+        ? { beforeAgentStartResult: params.beforeAgentStartResult }
+        : {}),
+    });
+  const preContextEnginePromptBuild = await buildPromptFromCurrentInputs();
+  const budgetDeveloperInstructions = joinPresentSections(
+    preContextEnginePromptBuild.developerInstructions,
+    turnCollaborationDeveloperInstructions,
+  );
+  const contextEngineBudgetReport = activeContextEngine
+    ? buildCodexSystemPromptReport({
+        attempt: params,
+        sessionKey: contextSessionKey,
+        workspaceDir: effectiveWorkspace,
+        developerInstructions: budgetDeveloperInstructions,
+        workspaceBootstrapContext,
+        skillsPrompt: skillsCollaborationInstructions ? (codexSkillsPrompt ?? "") : "",
+        tools: toolBridge.availableSpecs,
+      })
+    : undefined;
+  const contextEngineBudget = contextEngineBudgetReport
+    ? buildCodexContextEnginePromptBudget({
+        promptTokenBudget: params.contextTokenBudget,
+        systemPromptReport: contextEngineBudgetReport,
+        turnPrompt: preContextEnginePromptBuild.prompt,
+        developerInstructions: budgetDeveloperInstructions,
+        baseInstructions: appServerBaseInstructions,
+        openClawPromptContext,
+      })
+    : undefined;
+  const contextEngineProjectionTokenBudget =
+    contextEngineBudget?.enginePromptTokenBudget ?? params.contextTokenBudget;
   const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
-    contextTokenBudget: params.contextTokenBudget,
+    contextTokenBudget: contextEngineProjectionTokenBudget,
+    minimumRenderedContextChars: contextEngineBudget ? 0 : undefined,
     reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
       config: params.config,
     }),
   });
+  const boundedContextEngineProjectionMaxChars =
+    contextEngineProjectionTokenBudget === 0 ? 0 : codexContextProjectionMaxChars;
   let contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
   let precomputedStaleBindingContinuityProjectionApplied = false;
   let staleBindingContinuityForcedFreshStart = false;
@@ -1204,7 +1265,7 @@ export async function runCodexAppServerAttempt(
       assembledMessages: historyMessages,
       originalHistoryMessages: historyMessages,
       prompt: params.prompt,
-      maxRenderedContextChars: codexContextProjectionMaxChars,
+      maxRenderedContextChars: boundedContextEngineProjectionMaxChars,
     });
     promptText = projection.promptText;
     promptContextRange = projection.promptContextRange;
@@ -1222,6 +1283,7 @@ export async function runCodexAppServerAttempt(
       sessionKey: contextSessionKey,
       messages: historyMessages,
       tokenBudget: params.contextTokenBudget,
+      runtimeContext: buildActiveContextEngineRuntimeContext(contextEngineBudget),
       availableTools: new Set(
         flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
           .map((tool) => tool.name)
@@ -1230,6 +1292,7 @@ export async function runCodexAppServerAttempt(
       citationsMode: params.config?.memory?.citations,
       modelId: params.modelId,
       contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+      contextEngineBudget,
       providerId: params.provider,
       requestedModelId: params.requestedModelId,
       fallbackReason: params.fallbackReason,
@@ -1247,7 +1310,7 @@ export async function runCodexAppServerAttempt(
       originalHistoryMessages: historyMessages,
       prompt: params.prompt,
       systemPromptAddition: assembled.systemPromptAddition,
-      maxRenderedContextChars: codexContextProjectionMaxChars,
+      maxRenderedContextChars: boundedContextEngineProjectionMaxChars,
       toolPayloadMode: contextEngineProjection ? "preserve" : "elide",
     });
     const projectionDecision = contextEngineProjection
@@ -1256,6 +1319,10 @@ export async function runCodexAppServerAttempt(
           expectedBinding: buildContextEngineBinding(
             buildActiveRunAttemptParams(),
             contextEngineProjection,
+            {
+              contextEngineProjectionTokenBudget,
+              projectionMaxChars: boundedContextEngineProjectionMaxChars,
+            },
           ),
           projection: contextEngineProjection,
           dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
@@ -1302,19 +1369,54 @@ export async function runCodexAppServerAttempt(
   // Codex app-server threads own conversation continuity. The mirrored
   // OpenClaw transcript is persistence/search state. Context-engine output is
   // rendered into the prompt/developer instructions, not parallel history.
-  const codexModelInputHistoryMessages: typeof historyMessages = [];
-  const buildPromptFromCurrentInputs = () =>
-    resolveAgentHarnessBeforePromptBuildResult({
-      prompt: prependCurrentInboundContext(promptText, params.currentInboundContext),
-      developerInstructions,
-      messages: codexModelInputHistoryMessages,
-      ctx: hookContext,
-      bootstrapContextRunKind: params.bootstrapContextRunKind,
-      suppressPluginHooks: params.suppressPluginHooks,
-      ...("beforeAgentStartResult" in params
-        ? { beforeAgentStartResult: params.beforeAgentStartResult }
-        : {}),
-    });
+  const replayPrecomputedPromptBuildFromCurrentInputs = (): typeof preContextEnginePromptBuild => {
+    const currentPromptInput = buildCurrentPromptInput();
+    const promptInputRange = preContextEnginePromptBuild.promptInputRange;
+    const canReplayPromptRange =
+      promptInputRange &&
+      promptInputRange.start >= 0 &&
+      promptInputRange.end >= promptInputRange.start &&
+      promptInputRange.end <= preContextEnginePromptBuild.prompt.length &&
+      preContextEnginePromptBuild.prompt.slice(promptInputRange.start, promptInputRange.end) ===
+        initialPromptInput;
+    const prompt = canReplayPromptRange
+      ? [
+          preContextEnginePromptBuild.prompt.slice(0, promptInputRange.start),
+          currentPromptInput,
+          preContextEnginePromptBuild.prompt.slice(promptInputRange.end),
+        ].join("")
+      : currentPromptInput;
+    const replayedPromptInputRange = canReplayPromptRange
+      ? {
+          start: promptInputRange.start,
+          end: promptInputRange.start + currentPromptInput.length,
+        }
+      : { start: 0, end: currentPromptInput.length };
+    const baseDeveloperInstructionsOffset =
+      baseDeveloperInstructions.length > 0
+        ? preContextEnginePromptBuild.developerInstructions.indexOf(baseDeveloperInstructions)
+        : -1;
+    const replayedDeveloperInstructions =
+      preContextEnginePromptBuild.developerInstructions === baseDeveloperInstructions
+        ? developerInstructions
+        : baseDeveloperInstructionsOffset >= 0
+          ? [
+              preContextEnginePromptBuild.developerInstructions.slice(
+                0,
+                baseDeveloperInstructionsOffset,
+              ),
+              developerInstructions,
+              preContextEnginePromptBuild.developerInstructions.slice(
+                baseDeveloperInstructionsOffset + baseDeveloperInstructions.length,
+              ),
+            ].join("")
+          : preContextEnginePromptBuild.developerInstructions;
+    return {
+      prompt,
+      developerInstructions: replayedDeveloperInstructions,
+      promptInputRange: replayedPromptInputRange,
+    };
+  };
   const resolveShiftedPromptInputRange = (
     prompt: string,
     promptInputRange: { start: number; end: number } | undefined,
@@ -1386,7 +1488,7 @@ export async function runCodexAppServerAttempt(
       },
     };
   };
-  let promptBuild = await buildPromptFromCurrentInputs();
+  let promptBuild = replayPrecomputedPromptBuildFromCurrentInputs();
   const decorateCodexTurnPromptText = (promptBuildResult: {
     prompt: string;
     promptInputRange?: { start: number; end: number };
@@ -1425,25 +1527,14 @@ export async function runCodexAppServerAttempt(
   };
   let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);
   attemptStages.mark("prompt-build");
-  const buildCodexTurnCollaborationDeveloperInstructions = () =>
-    buildTurnCollaborationMode(params, {
-      turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-      skillsCollaborationInstructions,
-      memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
-      heartbeatCollaborationInstructions:
-        workspaceBootstrapContext.heartbeatCollaborationInstructions,
-    }).settings.developer_instructions ?? undefined;
   const buildRenderedCodexDeveloperInstructions = () =>
-    joinPresentSections(
-      promptBuild.developerInstructions,
-      buildCodexTurnCollaborationDeveloperInstructions(),
-    );
-  const rebuildCodexPromptBuildFromCurrentProjection = async () => {
-    promptBuild = await buildPromptFromCurrentInputs();
+    joinPresentSections(promptBuild.developerInstructions, turnCollaborationDeveloperInstructions);
+  const rebuildCodexPromptBuildFromCurrentProjection = () => {
+    promptBuild = replayPrecomputedPromptBuildFromCurrentInputs();
     codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);
   };
-  const rebuildCodexTurnPromptTextFromCurrentProjection = async () => {
-    const nextPromptBuild = await buildPromptFromCurrentInputs();
+  const rebuildCodexTurnPromptTextFromCurrentProjection = () => {
+    const nextPromptBuild = replayPrecomputedPromptBuildFromCurrentInputs();
     // Native Codex thread instructions are fixed once thread/start or
     // thread/resume completes; recovery continuity after that is turn input.
     promptBuild = {
@@ -1493,7 +1584,7 @@ export async function runCodexAppServerAttempt(
       assembledMessages: newerVisibleMessages,
       originalHistoryMessages: historyMessages,
       prompt: params.prompt,
-      maxRenderedContextChars: codexContextProjectionMaxChars,
+      maxRenderedContextChars: boundedContextEngineProjectionMaxChars,
     });
     promptText = projection.promptText;
     promptContextRange = projection.promptContextRange;
@@ -1599,7 +1690,6 @@ export async function runCodexAppServerAttempt(
     });
   };
   await rotateStartupBindingForProjectedTurn();
-  const turnCollaborationDeveloperInstructions = buildCodexTurnCollaborationDeveloperInstructions();
   const renderedCodexDeveloperInstructions =
     joinPresentSections(
       promptBuild.developerInstructions,
@@ -1797,6 +1887,8 @@ export async function runCodexAppServerAttempt(
       sandboxExecServerEnabled,
       sandbox,
       contextEngineProjection,
+      contextEngineProjectionTokenBudget,
+      contextEngineProjectionMaxChars: boundedContextEngineProjectionMaxChars,
       startupTimeoutMs,
       signal: runAbortController.signal,
       onStartupTimeout: () => {
@@ -3462,10 +3554,12 @@ export async function runCodexAppServerAttempt(
           activeAgentId: sessionAgentId,
           contextEnginePluginId: activeContextEnginePluginIdLocal,
           tokenBudget: params.contextTokenBudget,
+          contextEngineBudget,
           lastCallUsage: result.attemptUsage,
           promptCache: result.promptCache,
         }),
         contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+        contextEngineBudget,
         providerId: params.provider,
         requestedModelId: params.requestedModelId,
         modelId: params.modelId,

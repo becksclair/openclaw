@@ -5,6 +5,7 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
+  buildCodexContextEnginePromptBudget,
   buildCodexPromptSurfaceProfile,
   buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
@@ -165,6 +166,81 @@ describe("Codex app-server attempt context", () => {
     expect(profile.topSkills[0]).toMatchObject({ name: "memory-recall" });
     expect(profile.topTools[0]).toMatchObject({ name: "message" });
     expect(JSON.stringify(profile)).not.toContain(sensitiveText);
+  });
+
+  it("builds context-engine budget accounting from host-owned Codex prompt surfaces", () => {
+    const buildReport = (skillsPrompt: string) =>
+      buildCodexSystemPromptReport({
+        attempt: {
+          sessionId: "session-1",
+          provider: "codex",
+          modelId: "gpt-5.4-codex",
+        } as EmbeddedRunAttemptParams,
+        sessionKey: "agent:main:session-1",
+        workspaceDir: path.join("tmp", "workspace"),
+        developerInstructions: "developer instructions".repeat(20),
+        workspaceBootstrapContext: {
+          bootstrapFiles: [],
+          contextFiles: [],
+        },
+        skillsPrompt,
+        tools: [
+          {
+            type: "function",
+            name: "message",
+            description: "Send a message.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                text: { type: "string" },
+              },
+            },
+          },
+        ] as CodexDynamicToolSpec[],
+      });
+    const report = buildReport("");
+    const reportWithSkills = buildReport("<skill>large skill prompt</skill>".repeat(2_000));
+
+    const budget = buildCodexContextEnginePromptBudget({
+      promptTokenBudget: 1_000,
+      systemPromptReport: report,
+      turnPrompt: "current user request",
+      developerInstructions: "developer instructions".repeat(20),
+      baseInstructions: "base instructions".repeat(30),
+      openClawPromptContext: "workspace frame".repeat(10),
+    });
+
+    expect(budget.schemaVersion).toBe(1);
+    expect(budget.source).toBe("host_estimate");
+    expect(budget.promptTokenBudget).toBe(1_000);
+    expect(budget.nonEnginePromptTokens).toBeGreaterThan(0);
+    expect(budget.enginePromptTokenBudget).toBe(
+      Math.max(0, budget.promptTokenBudget! - budget.nonEnginePromptTokens!),
+    );
+
+    const attributedSkillsBudget = buildCodexContextEnginePromptBudget({
+      promptTokenBudget: 1_000,
+      systemPromptReport: reportWithSkills,
+      turnPrompt: "current user request",
+      developerInstructions: "developer instructions".repeat(20),
+      baseInstructions: "base instructions".repeat(30),
+      openClawPromptContext: "workspace frame".repeat(10),
+    });
+    expect(attributedSkillsBudget.nonEnginePromptTokens).toBe(budget.nonEnginePromptTokens);
+
+    const renderedSkillsBudget = buildCodexContextEnginePromptBudget({
+      promptTokenBudget: 1_000,
+      systemPromptReport: reportWithSkills,
+      turnPrompt: "current user request",
+      developerInstructions:
+        "developer instructions".repeat(20) + "<skill>large skill prompt</skill>".repeat(2_000),
+      baseInstructions: "base instructions".repeat(30),
+      openClawPromptContext: "workspace frame".repeat(10),
+    });
+    expect(renderedSkillsBudget.nonEnginePromptTokens).toBeGreaterThan(
+      budget.nonEnginePromptTokens!,
+    );
+    expect(renderedSkillsBudget.enginePromptTokenBudget).toBe(0);
   });
 
   it("keeps MEMORY.md injected when sandbox effective workspace differs", async () => {

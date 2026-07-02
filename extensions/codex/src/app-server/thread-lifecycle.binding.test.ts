@@ -14,6 +14,7 @@ import {
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.js";
 import {
+  buildContextEngineBinding,
   shouldRotateCodexAppServerBindingForRuntime,
   startOrResumeThread,
 } from "./thread-lifecycle.js";
@@ -1179,6 +1180,63 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
     expect(savedBinding?.contextEngine?.policyFingerprint).toContain('"contextTokenBudget":400000');
+  });
+
+  it("includes the effective context-engine projection budget in sidecar fingerprints", () => {
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.contextEngine = {
+      info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
+      assemble: vi.fn(),
+      compact: vi.fn(),
+    } as never;
+    params.contextTokenBudget = 400_000;
+
+    const fullBudgetBinding = buildContextEngineBinding(params, undefined, {
+      contextEngineProjectionTokenBudget: 400_000,
+      projectionMaxChars: 1_000_000,
+    });
+    const hostFloorBinding = buildContextEngineBinding(params, undefined, {
+      contextEngineProjectionTokenBudget: 0,
+      projectionMaxChars: 0,
+    });
+
+    expect(fullBudgetBinding?.policyFingerprint).not.toBe(hostFloorBinding?.policyFingerprint);
+    expect(fullBudgetBinding?.policyFingerprint).toContain(
+      '"contextEngineProjectionTokenBudget":400000',
+    );
+    expect(hostFloorBinding?.policyFingerprint).toContain('"contextEngineProjectionTokenBudget":0');
+    expect(hostFloorBinding?.policyFingerprint).toContain('"projectionMaxChars":0');
+  });
+
+  it("rotates sidecar fingerprints when effective token budgets differ under a saturated char cap", () => {
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.contextEngine = {
+      info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
+      assemble: vi.fn(),
+      compact: vi.fn(),
+    } as never;
+    params.contextTokenBudget = 400_000;
+
+    const fullBudgetBinding = buildContextEngineBinding(params, undefined, {
+      contextEngineProjectionTokenBudget: 400_000,
+      projectionMaxChars: 1_000_000,
+    });
+    const reducedBudgetBinding = buildContextEngineBinding(params, undefined, {
+      contextEngineProjectionTokenBudget: 320_000,
+      projectionMaxChars: 1_000_000,
+    });
+
+    expect(fullBudgetBinding?.policyFingerprint).not.toBe(reducedBudgetBinding?.policyFingerprint);
+    expect(reducedBudgetBinding?.policyFingerprint).toContain(
+      '"contextEngineProjectionTokenBudget":320000',
+    );
+    expect(reducedBudgetBinding?.policyFingerprint).toContain('"projectionMaxChars":1000000');
   });
 
   it("resumes a Codex thread when context-engine sidecar metadata is compatible", async () => {

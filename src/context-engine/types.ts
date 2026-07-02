@@ -102,11 +102,28 @@ export type ContextEngineRuntimeSettings = {
   limits: {
     promptTokenBudget: number | null;
     maxOutputTokens: number | null;
+    contextEngineBudget?: ContextEnginePromptBudget;
   };
   diagnostics: {
     fallbackReason: ContextEngineRuntimeReasonCode | null;
     degradedReason: ContextEngineRuntimeReasonCode | null;
   };
+};
+
+export type ContextEnginePromptBudget = {
+  schemaVersion: 1;
+  /**
+   * Full host-resolved prompt budget for the model call. This keeps the same
+   * semantics as limits.promptTokenBudget and the top-level tokenBudget fields.
+   */
+  promptTokenBudget: number | null;
+  /** Host-owned prompt floor outside the context engine's compactable transcript. */
+  nonEnginePromptTokens: number | null;
+  /** Remaining prompt budget the context engine may spend on assembled context. */
+  enginePromptTokenBudget: number | null;
+  /** Provider-reported prompt/input tokens after a call, when available. */
+  observedPromptTokens?: number | null;
+  source: "host_estimate" | "provider_usage";
 };
 
 export class ContextEngineRuntimeSettingsUnavailableError extends Error {
@@ -274,6 +291,8 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   currentTokenCount?: number;
   /** Optional prompt-cache telemetry for cache-aware engines. */
   promptCache?: ContextEnginePromptCacheInfo;
+  /** Optional prompt budget split for engines that distinguish host and engine-owned context. */
+  contextEngineBudget?: ContextEnginePromptBudget;
   /**
    * Safe transcript rewrite helper implemented by the runtime.
    *
@@ -389,6 +408,7 @@ export interface ContextEngine {
     /** The incoming user prompt for this turn (useful for retrieval-oriented engines). */
     prompt?: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
+    runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<AssembleResult>;
 
   /**

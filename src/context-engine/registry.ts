@@ -80,15 +80,15 @@ const SESSION_KEY_COMPAT_METHODS = [
   "assemble",
   "compact",
 ] as const;
-const LEGACY_COMPAT_PARAMS = ["sessionKey", "prompt", "runtimeSettings"] as const;
+const LEGACY_COMPAT_PARAMS = ["sessionKey", "prompt", "runtimeSettings", "runtimeContext"] as const;
 const LEGACY_COMPAT_METHOD_KEYS = {
   bootstrap: ["sessionKey", "runtimeSettings"],
-  maintain: ["sessionKey", "runtimeSettings"],
+  maintain: ["sessionKey", "runtimeSettings", "runtimeContext"],
   ingest: ["sessionKey"],
   ingestBatch: ["sessionKey"],
-  afterTurn: ["sessionKey", "runtimeSettings"],
-  assemble: ["sessionKey", "prompt", "runtimeSettings"],
-  compact: ["sessionKey", "runtimeSettings"],
+  afterTurn: ["sessionKey", "runtimeSettings", "runtimeContext"],
+  assemble: ["sessionKey", "prompt", "runtimeSettings", "runtimeContext"],
+  compact: ["sessionKey", "runtimeSettings", "runtimeContext"],
 } as const;
 
 type SessionKeyCompatMethodName = (typeof SESSION_KEY_COMPAT_METHODS)[number];
@@ -96,6 +96,7 @@ type SessionKeyCompatParams = {
   sessionKey?: string;
   prompt?: string;
   runtimeSettings?: unknown;
+  runtimeContext?: unknown;
 };
 type LegacyCompatKey = (typeof LEGACY_COMPAT_PARAMS)[number];
 type LegacyCompatParamMap = Partial<Record<LegacyCompatKey, unknown>>;
@@ -185,6 +186,15 @@ const LEGACY_UNKNOWN_FIELD_PATTERNS: Record<LegacyCompatKey, readonly RegExp[]> 
     /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeSettings['"`]/i,
     /['"`]runtimeSettings['"`].*\b(?:was|is)\s+not allowed\b/i,
     /"code"\s*:\s*"unrecognized_keys"[^]*"runtimeSettings"/i,
+  ],
+  runtimeContext: [
+    /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]runtimeContext['"`]/i,
+    /\badditional propert(?:y|ies)\b.*['"`]runtimeContext['"`]/i,
+    /\bmust not have additional propert(?:y|ies)\b.*['"`]runtimeContext['"`]/i,
+    /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeContext['"`]/i,
+    /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeContext['"`]/i,
+    /['"`]runtimeContext['"`].*\b(?:was|is)\s+not allowed\b/i,
+    /"code"\s*:\s*"unrecognized_keys"[^]*"runtimeContext"/i,
   ],
 } as const;
 
