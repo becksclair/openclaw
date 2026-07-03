@@ -343,6 +343,38 @@ Rebase notes:
 - Keep `commitReplySessionInitialization()` CAS and one-retry recovery. The per-session queue is a same-process contention reducer, not a replacement for stale-snapshot protection across process boundaries or future SQLite transactions.
 - Keep concurrency regression coverage as a burst of several same-session initializers and assert they all converge on one persisted session id. A two-turn test is insufficient because the old one-retry path could already hide a simple two-way race.
 
+### Status-only command progress text
+
+Carry behavior: `channels.<channel>.streaming.preview.commandText: "status"` must keep command-execution tool lines label-only (`🛠️ Exec` / `🛠️ Bash`) across every channel progress lane, not just the structured draft-line renderer. Two lanes previously leaked raw command text into Telegram progress drafts: (1) runner item events pre-fill `meta` with the compacted/explain-mode command pipeline and `summary` with live exec output, which short-circuited past the status suppression in `buildChannelProgressDraftLine`; (2) progress mode sets `forceToolResultProgress`, which forces `shouldEmitToolResult()` on with verbose off, and the resulting `formatToolAggregate` tool-summary text (raw explain pipeline, e.g. `print text → run … (+1 steps) (agent)`) was pushed verbatim into the draft by the channel `onToolResult` handler. The fix suppresses all detail sources for command items in status mode in the draft-line renderer, and threads a channel-owned `toolResultCommandText?: "raw" | "status"` reply option from the telegram dispatcher through `GetReplyOptions` → `agent-runner-execution` → `RunEmbeddedAgentParams` → attempt subscription params into both tool-summary emitters (embedded `emitToolSummary` and CLI `createCliToolSummaryTracker`), which emit label-only aggregates for `exec`/`shell`/`bash` (case-insensitive) under `"status"`.
+
+Primary seam files:
+
+- `src/channels/streaming.ts`
+- `src/auto-reply/tool-meta.ts`
+- `src/auto-reply/get-reply-options.types.ts`
+- `src/auto-reply/reply/agent-runner-execution.ts`
+- `src/auto-reply/reply/agent-runner-cli-dispatch.ts`
+- `src/agents/embedded-agent-subscribe.ts`
+- `src/agents/embedded-agent-subscribe.types.ts`
+- `src/agents/embedded-agent-runner/run/params.ts`
+- `src/agents/embedded-agent-runner/run.ts`
+- `src/agents/embedded-agent-runner/run/attempt.ts`
+- `extensions/telegram/src/bot-message-dispatch.ts`
+
+Primary seam tests:
+
+- `node scripts/run-vitest.mjs src/channels/streaming.test.ts src/auto-reply/tool-meta.test.ts src/auto-reply/reply/agent-runner-cli-dispatch.test.ts`
+- `pnpm tsgo:core`, `pnpm tsgo:test:src`, `pnpm tsgo:extensions`
+
+Rebase notes:
+
+- Keep both suppression points. The draft-line fix alone is insufficient: forced tool summaries arrive at the channel as pre-formatted text with no structure left to filter, so the emitters must format label-only at the source.
+- Non-command tools keep their meta/detail under status mode; `emitToolOutput` (verbose `"full"`) and tool failure warnings (`⚠️ … failed`) intentionally stay raw as explicit opt-ins and error evidence.
+- `isCommandToolName` (exec/shell/bash, lowercase-normalized) is exported from `src/auto-reply/tool-meta.ts` and must stay in sync with the private matcher in `src/channels/streaming.ts`.
+- Only telegram wires `onToolResult`/`forceToolResultProgress` today; if another channel adopts the forced tool-summary lane, it must also resolve and pass `toolResultCommandText` from its streaming config.
+- Known upstream gap, not part of this seam: `attempt.ts` never forwarded `toolProgressDetail` into subscribe params, so embedded runs always use the `"explain"` default; `toolResultCommandText` is forwarded explicitly.
+- Candidate for upstreaming; if upstream lands an equivalent contract, drop this seam and adopt theirs.
+
 ### Persistent Codex memory recall
 
 Carry behavior: Active Memory hidden recall runs should be fast, private, and isolated. OpenAI recall models run through the Codex harness with `reasoningLevel: "off"` and a compact memory-recall profile, while keeping the Codex app-server client warm across recalls. Each recall still uses a fresh hidden session key, native Codex thread, session id, run id, and temp transcript file so stale hidden memory cannot bleed into later queries. When `persistTranscripts: false`, private runtime transcript files live under `os.tmpdir()` and are removed in `finally` after result or partial-timeout evidence recovery. Hidden runs must not call Honcho, auto-TTS, generic plugin hooks, native Codex hooks, native Copilot hooks, skills, MCP servers, Codex plugins, message tools, or the context engine.
