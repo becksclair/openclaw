@@ -867,6 +867,38 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.toolSpokenText).toBe("spoken reply");
   });
 
+  it("keeps command tool summaries label-only in status commandText mode", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "on",
+      toolResultCommandText: "status",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-status-1",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    const payload = mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string };
+    expect(payload.text).toBe("🛠️ Bash");
+  });
+
   it("does not promote repeated tool progress text to the final assistant reply", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({

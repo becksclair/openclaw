@@ -136,7 +136,7 @@ export {
   resolveNodeIdFromList,
   selectDefaultNodeFromList,
 } from "../agents/tools/nodes-utils.js";
-export { formatToolAggregate } from "../auto-reply/tool-meta.js";
+export { formatToolAggregate, isCommandToolName } from "../auto-reply/tool-meta.js";
 export {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,

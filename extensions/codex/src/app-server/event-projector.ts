@@ -7,6 +7,7 @@ import {
   formatToolAggregate,
   formatToolProgressOutput,
   inferToolMetaFromArgs,
+  isCommandToolName,
   normalizeUsage,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessAfterToolCallHook,
@@ -1420,7 +1421,10 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.toolResultSummaryItemIds.add(itemId);
-    const meta = itemMeta(item, this.toolProgressDetailMode());
+    // commandText "status" promises label-only command lines; drop the raw
+    // command meta so channel-progress summaries do not leak it.
+    const labelOnly = this.params.toolResultCommandText === "status" && isCommandToolName(toolName);
+    const meta = labelOnly ? undefined : itemMeta(item, this.toolProgressDetailMode());
     this.emitToolResultMessage({
       itemId,
       text: formatToolSummary(toolName, meta),
@@ -1681,9 +1685,15 @@ export class CodexAppServerEventProjector {
     }
     this.transcriptToolProgressCallIds.add(params.id);
     const args = normalizeToolTranscriptArguments(params.arguments);
-    const meta = inferToolMetaFromArgs(params.name, args, {
-      detailMode: this.toolProgressDetailMode(),
-    });
+    // commandText "status" promises label-only command lines; drop the raw
+    // command meta so channel-progress summaries do not leak it.
+    const labelOnly =
+      this.params.toolResultCommandText === "status" && isCommandToolName(params.name);
+    const meta = labelOnly
+      ? undefined
+      : inferToolMetaFromArgs(params.name, args, {
+          detailMode: this.toolProgressDetailMode(),
+        });
     if (
       !this.params.onToolResult ||
       !this.shouldEmitToolResult() ||
