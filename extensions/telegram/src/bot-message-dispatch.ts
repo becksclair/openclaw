@@ -27,6 +27,7 @@ import {
   type ChannelProgressDraftCompositorLine,
   createChannelProgressDraftCompositor,
   resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewToolProgress,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -2413,6 +2414,7 @@ export const dispatchTelegramMessage = async ({
                   suppressDefaultToolProgressMessages:
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
                   forceToolResultProgress: streamMode === "progress" && streamToolProgressEnabled,
+                  toolResultCommandText: resolveChannelStreamingPreviewCommandText(telegramCfg),
                   allowProgressCallbacksWhenSourceDeliverySuppressed:
                     !isRoomEvent && Boolean(answerLane.stream),
                   onVerboseProgressVisibility: (isActive) => {

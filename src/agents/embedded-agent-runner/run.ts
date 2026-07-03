@@ -2244,6 +2244,7 @@ async function runEmbeddedAgentInternal(
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
             toolProgressDetail: params.toolProgressDetail,
+            toolResultCommandText: params.toolResultCommandText,
             execOverrides: params.execOverrides,
             bashElevated: params.bashElevated,
             timeoutMs: params.timeoutMs,

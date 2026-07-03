@@ -7,6 +7,12 @@ type ToolAggregateOptions = {
   markdown?: boolean;
 };
 
+/** Matches command-execution tools whose meta/detail is the raw command text. */
+export function isCommandToolName(toolName?: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(toolName);
+  return normalized === "exec" || normalized === "shell" || normalized === "bash";
+}
+
 /** Formats one grouped tool-progress label from a tool name and metadata entries. */
 export function formatToolAggregate(
   toolName?: string,

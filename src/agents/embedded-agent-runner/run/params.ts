@@ -191,6 +191,8 @@ export type RunEmbeddedAgentParams = {
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
   toolProgressDetail?: ToolProgressDetailMode;
+  /** Channel commandText mode for tool summaries: "status" keeps command tools label-only. */
+  toolResultCommandText?: "raw" | "status";
   /** If true, suppress tool error warning payloads for this run (including mutating tools). */
   suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   /** Bootstrap context mode for workspace file injection. */

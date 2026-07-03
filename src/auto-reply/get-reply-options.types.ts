@@ -242,6 +242,8 @@ export type GetReplyOptions = {
   onObservedReplyDelivery?: () => Promise<void> | void;
   /** Emit tool result summaries for channel-owned progress UI even when verbose is off. */
   forceToolResultProgress?: boolean;
+  /** Channel commandText mode for tool summaries: "status" keeps command tools label-only. */
+  toolResultCommandText?: "raw" | "status";
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;

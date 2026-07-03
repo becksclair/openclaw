@@ -47,6 +47,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
   toolProgressDetail?: ToolProgressDetailMode;
+  /** Channel commandText mode for tool summaries: "status" keeps command tools label-only. */
+  toolResultCommandText?: "raw" | "status";
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;

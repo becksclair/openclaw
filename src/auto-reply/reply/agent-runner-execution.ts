@@ -2325,6 +2325,7 @@ export async function runAgentTurnWithFallback(params: {
                 : (params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid);
               const cliToolSummaryTracker = createCliToolSummaryTracker({
                 detailMode: params.toolProgressDetail,
+                commandText: params.opts?.toolResultCommandText,
                 shouldEmitToolResult: params.shouldEmitToolResult,
                 shouldEmitToolOutput: params.shouldEmitToolOutput,
                 deliver: async (payload) => {
@@ -2607,6 +2608,7 @@ export async function runAgentTurnWithFallback(params: {
                       return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
                     })(),
                     toolProgressDetail: params.toolProgressDetail,
+                    toolResultCommandText: params.opts?.toolResultCommandText,
                     suppressToolErrorWarnings:
                       params.opts?.shouldSuppressToolErrorWarnings ??
                       params.opts?.suppressToolErrorWarnings,

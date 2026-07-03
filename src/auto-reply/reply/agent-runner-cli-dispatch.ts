@@ -29,7 +29,7 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
-import { formatToolAggregate } from "../tool-meta.js";
+import { formatToolAggregate, isCommandToolName } from "../tool-meta.js";
 import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
 
 function isClaudeCliProvider(provider: string): boolean {
@@ -253,6 +253,8 @@ function createToolEventBridge(params: {
  */
 export function createCliToolSummaryTracker(params: {
   detailMode?: "explain" | "raw";
+  /** Channel commandText mode: "status" keeps command tools label-only. */
+  commandText?: "raw" | "status";
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   deliver: (payload: { text: string; isError?: boolean }) => Promise<void> | void;
@@ -281,7 +283,10 @@ export function createCliToolSummaryTracker(params: {
       if (!params.shouldEmitToolResult()) {
         return;
       }
-      const aggregate = formatToolAggregate(payload.name, meta ? [meta] : undefined, {
+      // commandText "status" promises label-only command lines; drop the raw
+      // command meta so channel-progress summaries do not leak it.
+      const labelOnly = params.commandText === "status" && isCommandToolName(payload.name);
+      const aggregate = formatToolAggregate(payload.name, !labelOnly && meta ? [meta] : undefined, {
         markdown: true,
       });
       let text = aggregate;

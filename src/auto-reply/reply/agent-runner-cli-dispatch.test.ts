@@ -249,6 +249,39 @@ describe("createCliToolSummaryTracker", () => {
     expect(payload.isError).toBeUndefined();
   });
 
+  it("keeps command summaries label-only in status commandText mode", async () => {
+    const deliver = vi.fn();
+    const tracker = createCliToolSummaryTracker({
+      commandText: "status",
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      deliver,
+    });
+    await tracker.noteToolEvent(startEvent);
+    await tracker.noteToolEvent(resultEvent);
+    const payload = deliver.mock.calls[0]?.[0] as { text: string };
+    expect(payload.text).toBe("🛠️ Exec");
+  });
+
+  it("keeps non-command summaries detailed in status commandText mode", async () => {
+    const deliver = vi.fn();
+    const tracker = createCliToolSummaryTracker({
+      commandText: "status",
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      deliver,
+    });
+    await tracker.noteToolEvent({
+      name: "read",
+      phase: "start" as const,
+      args: { path: "/tmp/notes.md" },
+      toolCallId: "tool-2",
+    });
+    await tracker.noteToolEvent({ ...resultEvent, name: "read", toolCallId: "tool-2" });
+    const payload = deliver.mock.calls[0]?.[0] as { text: string };
+    expect(payload.text).toContain("notes.md");
+  });
+
   it("appends the tool output block when full verbose output is enabled", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({

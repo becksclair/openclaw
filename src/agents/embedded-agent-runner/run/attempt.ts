@@ -3668,6 +3668,7 @@ export async function runEmbeddedAttempt(
           reasoningMode: params.reasoningLevel ?? "off",
           thinkingLevel: params.thinkLevel,
           toolResultFormat: params.toolResultFormat,
+          toolResultCommandText: params.toolResultCommandText,
           shouldEmitToolResult: params.shouldEmitToolResult,
           shouldEmitToolOutput: params.shouldEmitToolOutput,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
