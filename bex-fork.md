@@ -345,7 +345,7 @@ Rebase notes:
 
 ### Status-only command progress text
 
-Carry behavior: `channels.<channel>.streaming.preview.commandText: "status"` must keep command-execution tool lines label-only (`🛠️ Exec` / `🛠️ Bash`) across every channel progress lane, not just the structured draft-line renderer. Two lanes previously leaked raw command text into Telegram progress drafts: (1) runner item events pre-fill `meta` with the compacted/explain-mode command pipeline and `summary` with live exec output, which short-circuited past the status suppression in `buildChannelProgressDraftLine`; (2) progress mode sets `forceToolResultProgress`, which forces `shouldEmitToolResult()` on with verbose off, and the resulting `formatToolAggregate` tool-summary text (raw explain pipeline, e.g. `print text → run … (+1 steps) (agent)`) was pushed verbatim into the draft by the channel `onToolResult` handler. The fix suppresses all detail sources for command items in status mode in the draft-line renderer, and threads a channel-owned `toolResultCommandText?: "raw" | "status"` reply option from the telegram dispatcher through `GetReplyOptions` → `agent-runner-execution` → `RunEmbeddedAgentParams` → attempt subscription params into both tool-summary emitters (embedded `emitToolSummary` and CLI `createCliToolSummaryTracker`), which emit label-only aggregates for `exec`/`shell`/`bash` (case-insensitive) under `"status"`.
+Carry behavior: `channels.<channel>.streaming.preview.commandText: "status"` must keep command-execution tool lines label-only (`🛠️ Exec` / `🛠️ Bash`) across every channel progress lane, not just the structured draft-line renderer. Three lanes previously leaked raw command text into Telegram progress drafts: (1) runner item events pre-fill `meta` with the compacted/explain-mode command pipeline and `summary` with live exec output, which short-circuited past the status suppression in `buildChannelProgressDraftLine`; (2) progress mode sets `forceToolResultProgress`, which forces `shouldEmitToolResult()` on with verbose off, and the resulting `formatToolAggregate` tool-summary text (raw explain pipeline, e.g. `print text → run … (+1 steps) (agent)`) was pushed verbatim into the draft by the channel `onToolResult` handler; (3) the Codex app-server event projector (`extensions/codex/src/app-server/event-projector.ts`) is a sibling harness-side implementation of the same tool-summary lane with two emitters (`emitToolResultSummary` for native thread items, `emitTranscriptToolCallProgress` for transcript-recorded tool calls) that formatted raw command meta independently. The fix suppresses all detail sources for command items in status mode in the draft-line renderer, and threads a channel-owned `toolResultCommandText?: "raw" | "status"` reply option from the telegram dispatcher through `GetReplyOptions` → `agent-runner-execution` → `RunEmbeddedAgentParams` → attempt subscription params into all tool-summary emitters (embedded `emitToolSummary`, CLI `createCliToolSummaryTracker`, and both Codex projector emitters via `EmbeddedRunAttemptParams`), which emit label-only aggregates for `exec`/`shell`/`bash` (case-insensitive) under `"status"`. `isCommandToolName` is exported through the `agent-harness-runtime` SDK seam for harness plugins.
 
 Primary seam files:
 
@@ -360,10 +360,12 @@ Primary seam files:
 - `src/agents/embedded-agent-runner/run.ts`
 - `src/agents/embedded-agent-runner/run/attempt.ts`
 - `extensions/telegram/src/bot-message-dispatch.ts`
+- `extensions/codex/src/app-server/event-projector.ts`
+- `src/plugin-sdk/agent-harness-runtime.ts`
 
 Primary seam tests:
 
-- `node scripts/run-vitest.mjs src/channels/streaming.test.ts src/auto-reply/tool-meta.test.ts src/auto-reply/reply/agent-runner-cli-dispatch.test.ts`
+- `node scripts/run-vitest.mjs src/channels/streaming.test.ts src/auto-reply/tool-meta.test.ts src/auto-reply/reply/agent-runner-cli-dispatch.test.ts extensions/codex/src/app-server/event-projector.test.ts`
 - `pnpm tsgo:core`, `pnpm tsgo:test:src`, `pnpm tsgo:extensions`
 
 Rebase notes:
