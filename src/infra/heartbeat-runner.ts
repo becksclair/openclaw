@@ -1151,9 +1151,18 @@ type HeartbeatPromptResolution = {
   usesHeartbeatResponseTool: boolean;
 };
 
+// Notifications tagged by the gateway as authored by one of our own agents
+// (e.g. Sky's own channel message echoed to the phone) carry a
+// `notification:self:` context key and are routed through the ignorable path so
+// they never wake the model.
+function isSelfAuthoredNotificationEntry(event: SystemEvent): boolean {
+  return event.contextKey?.startsWith("notification:self:") === true;
+}
+
 function isNotificationSystemEventEntry(event: SystemEvent): boolean {
   return (
     event.contextKey?.startsWith("notification:") === true &&
+    !isSelfAuthoredNotificationEntry(event) &&
     isNotificationSystemEvent(event.text) &&
     !isIgnorableNotificationSystemEvent(event.text)
   );
@@ -1163,7 +1172,7 @@ function isIgnorableNotificationSystemEventEntry(event: SystemEvent): boolean {
   return (
     event.contextKey?.startsWith("notification:") === true &&
     isNotificationSystemEvent(event.text) &&
-    isIgnorableNotificationSystemEvent(event.text)
+    (isSelfAuthoredNotificationEntry(event) || isIgnorableNotificationSystemEvent(event.text))
   );
 }
 

@@ -21,6 +21,10 @@ import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
+import {
+  collectOwnNotificationIdentities,
+  isSelfAuthoredNotification,
+} from "./self-notification.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
@@ -703,6 +707,24 @@ export const handleNodeEvent = async (
         sanitizeInboundSystemTags(normalizeOptionalString(obj.text) ?? ""),
       );
 
+      // Notifications that are actually one of our own agents posting on an
+      // active channel (e.g. Sky's Telegram message echoed back to Bex's phone)
+      // must not wake the heartbeat into reacting to its own output. Tag them so
+      // the runner routes them through the ignorable path.
+      const selfAuthoredNotification =
+        change === "posted" &&
+        isSelfAuthoredNotification({
+          title,
+          text,
+          identities: collectOwnNotificationIdentities({
+            cfg,
+            runtimeSnapshot: ctx.getRuntimeSnapshot?.() ?? null,
+          }),
+        });
+      const notificationContextKey = selfAuthoredNotification
+        ? `notification:self:${keyRaw}`
+        : `notification:${keyRaw}`;
+
       let summary = `Notification ${change} (node=${nodeId} key=${key}`;
       if (packageName) {
         summary += ` package=${packageName}`;
@@ -731,7 +753,7 @@ export const handleNodeEvent = async (
       );
       const queued = enqueueSystemEvent(summary, {
         sessionKey: eventSessionKey,
-        contextKey: `notification:${keyRaw}`,
+        contextKey: notificationContextKey,
       });
       if (queued) {
         const wakeDedupeSessionKey =
