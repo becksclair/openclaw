@@ -950,7 +950,6 @@ export async function sendMessageTelegram(
       );
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
       recordSentMessage(chatId, messageId, cfg);
-      const messageThreadId = acceptedParams?.message_thread_id;
       await recordOutboundMessageForPromptContext({
         cfg,
         account,

@@ -271,12 +271,14 @@ export async function runCodexAppServerSideQuestion(
       env: process.env,
       agentDir: params.agentDir,
     });
-    const approvalPolicy = forcedFullAccess || useModelScopedPolicy
-      ? modelScopedAppServer.approvalPolicy
-      : (binding.approvalPolicy ?? modelScopedAppServer.approvalPolicy);
-    const sandbox = forcedFullAccess || useModelScopedPolicy
-      ? modelScopedAppServer.sandbox
-      : (binding.sandbox ?? modelScopedAppServer.sandbox);
+    const approvalPolicy =
+      forcedFullAccess || useModelScopedPolicy
+        ? modelScopedAppServer.approvalPolicy
+        : (binding.approvalPolicy ?? modelScopedAppServer.approvalPolicy);
+    const sandbox =
+      forcedFullAccess || useModelScopedPolicy
+        ? modelScopedAppServer.sandbox
+        : (binding.sandbox ?? modelScopedAppServer.sandbox);
     const nativeProviderWebSearchSupport =
       resolveCodexWebSearchPlan({
         config: params.cfg,

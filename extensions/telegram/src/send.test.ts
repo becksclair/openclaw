@@ -1776,12 +1776,16 @@ describe("sendMessageTelegram", () => {
       replyToMode: "first",
     });
 
+    // Fork caption seam (findCaptionBoundary): an oversized caption stays attached to the
+    // media up to the 1024 boundary and only the overflow becomes follow-up text. The first-mode
+    // reply-to is still used once on the media and not reused on the follow-up send.
     expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
-      caption: undefined,
+      caption: "A".repeat(1024),
+      parse_mode: "HTML",
       reply_to_message_id: 500,
       allow_sending_without_reply: true,
     });
-    expect(sendMessage).toHaveBeenCalledWith(chatId, longText, {
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "A".repeat(76), {
       parse_mode: "HTML",
     });
   });

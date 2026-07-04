@@ -1281,7 +1281,6 @@ export function buildAgentSystemPrompt(params: {
         acpEnabled,
         fullAccessBlockedReasonLabel,
       }),
-      ...buildUserIdentitySection(ownerLine, isMinimal),
       ...buildTimeSection({
         userTimezone,
       }),

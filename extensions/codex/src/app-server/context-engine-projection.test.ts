@@ -379,7 +379,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
           role: "assistant",
           content: "older assembled context",
           timestamp: 1,
-        } as AgentMessage,
+        } as unknown as AgentMessage,
       ],
       originalHistoryMessages: [],
       prompt: "current request",

@@ -1328,6 +1328,8 @@ function resolveHeartbeatRunPrompt(params: {
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
+        hasNotificationEvents: false,
+        hasIgnorableNotificationEvents: false,
         hasDueCommitments,
         usesHeartbeatResponseTool: false,
       };
@@ -1337,6 +1339,8 @@ function resolveHeartbeatRunPrompt(params: {
       hasExecCompletion: false,
       hasRelayableExecCompletion: false,
       hasCronEvents: false,
+      hasNotificationEvents: false,
+      hasIgnorableNotificationEvents: false,
       hasDueCommitments: false,
       usesHeartbeatResponseTool: false,
     };

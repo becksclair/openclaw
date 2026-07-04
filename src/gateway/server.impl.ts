@@ -1391,6 +1391,11 @@ export async function startGatewayServer(
         // If an in-process restart signalled abort during beforeReplace,
         // stop before any plugin metadata/runtime side effects continue.
         if (params.isAborted?.()) {
+          // clearPluginMetadataLifecycleCaches() above wiped the global snapshot; the
+          // old plugin runtime is still active on abort, so restore it (mirroring the
+          // catch path) instead of leaving getCurrentPluginMetadataSnapshot() undefined
+          // during the drain/restart window.
+          restoreCurrentPluginMetadataSnapshotState(previousPluginMetadataState);
           return {
             restartChannels: new Set(),
             activeChannels: new Set(beforeChannelIds),

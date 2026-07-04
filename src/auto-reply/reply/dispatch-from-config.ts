@@ -3085,8 +3085,7 @@ export async function dispatchReplyFromConfig(
             suppressTyping: typing.suppressTyping,
             onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply),
             onReasoningStream: wrapProgressCallback(params.replyOptions?.onReasoningStream),
-            streamReasoningInNonStreamModes:
-              params.replyOptions?.streamReasoningInNonStreamModes,
+            streamReasoningInNonStreamModes: params.replyOptions?.streamReasoningInNonStreamModes,
             onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),
             onAssistantMessageStart: wrapProgressCallback(
               params.replyOptions?.onAssistantMessageStart,
