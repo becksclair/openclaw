@@ -463,6 +463,9 @@ class GatewaySession(
       params: JsonElement?,
       timeoutMs: Long,
     ): RpcResponse {
+      if (method != "connect") {
+        awaitHandshakeReady(timeoutMs)
+      }
       val id = UUID.randomUUID().toString()
       val deferred = CompletableDeferred<RpcResponse>()
       pending[id] = deferred
@@ -490,6 +493,9 @@ class GatewaySession(
       timeoutMs: Long,
       onError: (ErrorShape) -> Unit,
     ) {
+      if (method != "connect") {
+        awaitHandshakeReady(timeoutMs)
+      }
       val id = UUID.randomUUID().toString()
       val deferred = CompletableDeferred<RpcResponse>()
       pending[id] = deferred
@@ -520,6 +526,23 @@ class GatewaySession(
         if (socket?.send(jsonString) != true) {
           throw IllegalStateException("gateway send failed")
         }
+      }
+    }
+
+    // Non-connect frames must not reach the wire before the connect handshake
+    // resolves; the gateway rejects the whole connection ("first request must be
+    // connect") otherwise. connectDeferred completes after hello-ok and completes
+    // exceptionally on close, so pre-hello callers either flush after connect or
+    // fail fast on a dead socket instead of racing ahead of the connect frame.
+    private suspend fun awaitHandshakeReady(timeoutMs: Long) {
+      if (connectDeferred.isCompleted) {
+        connectDeferred.await()
+        return
+      }
+      try {
+        withTimeout(timeoutMs) { connectDeferred.await() }
+      } catch (err: TimeoutCancellationException) {
+        throw IllegalStateException("gateway handshake incomplete")
       }
     }
 

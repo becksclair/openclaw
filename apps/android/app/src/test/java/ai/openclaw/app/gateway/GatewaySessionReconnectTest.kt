@@ -5,7 +5,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
@@ -122,6 +124,51 @@ class GatewaySessionReconnectTest {
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { secondClosed.await() }
       } finally {
         shutdownReconnectHarness(harness, firstServer, secondServer)
+      }
+    }
+
+  @Test
+  fun nodeEventBeforeHelloWaitsForConnectHandshake() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val frameOrder = ConcurrentLinkedQueue<String>()
+      val connectFrame = CompletableDeferred<Pair<WebSocket, String>>()
+      val nodeEventReceived = CompletableDeferred<Unit>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          frameOrder += method
+          when (method) {
+            // Hold the hello-ok response so the connection stays pre-hello while the
+            // test fires a node.event.
+            "connect" -> connectFrame.complete(webSocket to id)
+            "node.event" -> {
+              webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{}}""")
+              nodeEventReceived.complete(Unit)
+            }
+          }
+        }
+      val harness = createReconnectHarness()
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        val (socket, connectId) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connectFrame.await() }
+
+        // Fire a node.event while the handshake is still incomplete (pre-hello).
+        val nodeEvent = async { harness.session.sendNodeEvent("presence", "{}") }
+
+        // The gate must hold it: connect stays the only frame on the wire and the
+        // connection is not rejected.
+        delay(200)
+        assertFalse(nodeEventReceived.isCompleted)
+        assertEquals(listOf("connect"), frameOrder.toList())
+
+        // Completing the handshake flushes the queued event after connect.
+        socket.send(connectResponseFrame(connectId))
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { nodeEventReceived.await() }
+        assertTrue(nodeEvent.await())
+        assertEquals(listOf("connect", "node.event"), frameOrder.toList())
+      } finally {
+        shutdownReconnectHarness(harness, server)
       }
     }
 
