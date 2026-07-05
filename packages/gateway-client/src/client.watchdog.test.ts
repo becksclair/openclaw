@@ -54,6 +54,8 @@ function createOpenGatewayClient(requestTimeoutMs: number): {
     send,
     close: vi.fn(),
   };
+  // These tests model an already-connected client; skip the pre-hello send gate.
+  (client as unknown as { helloOkReceived: boolean }).helloOkReceived = true;
   return { client, send };
 }
 
@@ -333,6 +335,7 @@ describe("GatewayClient", () => {
       }),
       close: vi.fn(),
     };
+    (client as unknown as { helloOkReceived: boolean }).helloOkReceived = true;
 
     await expect(client.request("status")).rejects.toThrow("synthetic send failure");
     expect(getPendingCount(client)).toBe(0);
@@ -373,6 +376,7 @@ describe("GatewayClient", () => {
       send,
       close: vi.fn(),
     };
+    (client as unknown as { helloOkReceived: boolean }).helloOkReceived = true;
 
     const onAccepted = vi.fn();
     const requestPromise = client.request<{ status: string }>("agent", undefined, {
@@ -428,6 +432,7 @@ describe("GatewayClient", () => {
       send,
       close: vi.fn(),
     };
+    (client as unknown as { helloOkReceived: boolean }).helloOkReceived = true;
 
     const controller = new AbortController();
     const requestPromise = client.request("status", undefined, {
