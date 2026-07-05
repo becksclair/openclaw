@@ -628,6 +628,7 @@ let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acp-runtime.js").tr
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
+let detachedTtsTasks: typeof import("./detached-tts-tasks.js");
 type DispatchReplyArgs = Parameters<
   typeof import("./dispatch-from-config.js").dispatchReplyFromConfig
 >[0];
@@ -646,6 +647,7 @@ beforeAll(async () => {
     replyRunRegistry,
     __testing: replyRunTesting,
   } = await import("./reply-run-registry.js"));
+  detachedTtsTasks = await import("./detached-tts-tasks.js");
 });
 
 function createDispatcher(): ReplyDispatcher {
@@ -5614,6 +5616,8 @@ describe("dispatchReplyFromConfig", () => {
       Provider: "feishu",
       Surface: "feishu",
       SessionKey: "agent:main:feishu:ou_user",
+      // Detached voice-note delivery routes to the originating target.
+      OriginatingTo: "feishu:ou_user",
     });
     const replyResolver = async (
       _ctx: MsgContext,
@@ -5624,17 +5628,28 @@ describe("dispatchReplyFromConfig", () => {
     };
 
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    // The supplement synthesizes + delivers off-turn after the reply operation
+    // clears its lane, so it lands on a later tick; poll (bounded) until the
+    // route-reply send is observed.
+    for (let attempt = 0; attempt < 50 && mocks.routeReply.mock.calls.length === 0; attempt++) {
+      await detachedTtsTasks.waitForDetachedTtsTasks(50);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
 
     const normalizerOptions = replyMediaPathMocks.createReplyMediaPathNormalizer.mock
       .calls[0]?.[0] as { messageProvider?: unknown } | undefined;
     expect(normalizerOptions?.messageProvider).toBe("feishu");
-    const finalPayload = firstFinalReplyPayload(dispatcher);
-    expect(finalPayload?.mediaUrl).toBe("/tmp/openclaw-media/normalized-tts.ogg");
-    expect(finalPayload?.mediaUrls).toStrictEqual(["/tmp/openclaw-media/normalized-tts.ogg"]);
-    expect(finalPayload?.audioAsVoice).toBe(true);
-    expect(finalPayload?.trustedLocalMedia).toBe(true);
-    expect(finalPayload?.spokenText).toBe("Hello from block streaming.");
-    expect(finalPayload?.trustedLocalMedia).toBe(true);
+    // Audio ships as a detached voice-note supplement via route-reply, never as an
+    // inline final on the per-turn dispatcher.
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    const supplement = firstRouteReplyCall().payload as ReplyPayload;
+    expect(supplement.mediaUrl).toBe("/tmp/openclaw-media/normalized-tts.ogg");
+    expect(supplement.mediaUrls).toStrictEqual(["/tmp/openclaw-media/normalized-tts.ogg"]);
+    expect(supplement.audioAsVoice).toBe(true);
+    expect(supplement.trustedLocalMedia).toBe(true);
+    expect(supplement.spokenText).toBe("Hello from block streaming.");
+    expect(supplement.ttsSupplement?.visibleTextAlreadyDelivered).toBe(true);
+    detachedTtsTasks.__testing.reset();
   });
 
   it("closes oneshot ACP sessions after the turn completes", async () => {
@@ -8218,7 +8233,7 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const ctx = buildTestCtx({ Provider: "whatsapp", OriginatingTo: "whatsapp:12345" });
     const blockReplySentTexts: string[] = [];
     const replyResolver = async (
       _ctx: MsgContext,
@@ -8238,6 +8253,12 @@ describe("dispatchReplyFromConfig", () => {
     );
 
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    // Final synthesis + voice-note delivery run off-turn after lane clear; poll
+    // (bounded) until the route-reply send is observed.
+    for (let attempt = 0; attempt < 50 && mocks.routeReply.mock.calls.length === 0; attempt++) {
+      await detachedTtsTasks.waitForDetachedTtsTasks(50);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
 
     expect(blockReplySentTexts).toEqual(["Intro ", " visible"]);
     expect(blockReplySentTexts.join("")).not.toContain("[[tts");
@@ -8247,9 +8268,10 @@ describe("dispatchReplyFromConfig", () => {
       .find((call) => call.kind === "final");
     expect(ttsCall?.kind).toBe("final");
     expect(ttsCall?.payload).toEqual({ text: "Intro [[tts:text]]hidden[[/tts:text]] visible" });
-    const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[0] as ReplyPayload | undefined;
-    expect(finalPayload?.mediaUrl).toBe("/tmp/openclaw/tts-synth.opus");
+    // Audio is delivered as a detached voice-note supplement via route-reply.
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    const supplement = firstRouteReplyCall().payload as ReplyPayload;
+    expect(supplement.mediaUrl).toBe("/tmp/openclaw/tts-synth.opus");
   });
 
   it("forwards generated-media block replies in WhatsApp group sessions", async () => {
@@ -9831,6 +9853,64 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses no-visible-reply fallback and detaches TTS for block-only final TTS turns", async () => {
+    setNoAbort();
+    // ttsMode "final" is the beforeEach default. Leave synthesizeFinalAudio off so
+    // the real detached task's synthesize() yields no mediaUrl and early-returns
+    // (no deliver/dispatcher pollution) while still proving detach ran off-turn.
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    ttsMocks.maybeApplyTtsToPayload.mockClear();
+    const dispatcher = createDispatcher();
+    // Block-only turn: a visible block is delivered and the resolver returns no
+    // final payload, so the block-final TTS branch runs.
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "Hello from streaming." });
+      return undefined;
+    };
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "feishu",
+        Surface: "feishu",
+        SessionKey: "agent:main:feishu:ou_user",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    // Regression lock: detaching the audio (dropping the old inline counts.final
+    // bump) must not resurrect no-visible-reply fallback eligibility.
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+    // Suppression comes from the block-only visible-delivery flag, not a final send.
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+
+    // TTS is detached off the turn, not applied inline: the detached synthesize()
+    // hits the tts runtime with kind "final" and the delivered visible text.
+    // The detach fires after the reply operation clears its lane, so the
+    // synthesize call lands on a later microtask/timer. Poll (bounded) until the
+    // detached kind:"final" synthesize is observed, proving the audio was handed
+    // to the detached task rather than applied inline on the dispatch turn.
+    const collectDetachedSynthCalls = () =>
+      ttsMocks.maybeApplyTtsToPayload.mock.calls
+        .map(([params]) => params as { payload: ReplyPayload; kind: string })
+        .filter((params) => params.kind === "final");
+    for (let attempt = 0; attempt < 50 && collectDetachedSynthCalls().length === 0; attempt++) {
+      await detachedTtsTasks.waitForDetachedTtsTasks(50);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const detachedSynthCalls = collectDetachedSynthCalls();
+    expect(detachedSynthCalls).toHaveLength(1);
+    expect(detachedSynthCalls[0]?.payload.text).toContain("Hello from streaming.");
+    // No inline final send: the visible text shipped as a block, audio detached.
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    detachedTtsTasks.__testing.reset();
   });
 
   it("preserves hook-blocked metadata when source delivery is message-tool-only", async () => {

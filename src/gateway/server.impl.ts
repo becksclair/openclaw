@@ -5,6 +5,7 @@ import {
   getActiveEmbeddedRunCount,
   resolveActiveEmbeddedRunSessionId,
 } from "../agents/embedded-agent-runner/run-state.js";
+import { getDetachedTtsTaskCount } from "../auto-reply/reply/detached-tts-tasks.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import {
   getLoadedChannelPluginEntryById,
@@ -661,6 +662,7 @@ export async function startGatewayServer(
     () =>
       getTotalQueueSize() +
       getTotalPendingReplies() +
+      getDetachedTtsTaskCount() +
       getActiveEmbeddedRunCount() +
       getActiveCronJobCount() +
       getActiveTaskCount(),
@@ -1108,7 +1110,7 @@ export async function startGatewayServer(
           reason,
         });
       },
-      getPendingReplyCount: getTotalPendingReplies,
+      getPendingReplyCount: () => getTotalPendingReplies() + getDetachedTtsTaskCount(),
       clients,
       configReloader: runtimeState.configReloader,
       wss,

@@ -327,6 +327,15 @@ async function finalizeAcpTurnOutput(params: {
     ttsStatus != null && !(ttsStatus.autoMode === "inbound" && !params.inboundAudio);
 
   let finalMediaDelivered = false;
+  // NOTE: TTS synthesis stays inline (awaited) on the ACP path, unlike the main
+  // dispatch path which detaches it off the reply operation's lane. The ACP path
+  // has no ReplyOperation and no runAfterReplyOperationClear seam to start a
+  // detached task after the lane frees, and `delivery.deliver` mutates
+  // turn-local coordinator state (routedCounts/deliveredFinalReply) that is
+  // snapshotted synchronously at turn end (finishAcpDispatchAttempt ->
+  // applyRoutedCounts). A detached send here would deliver after that snapshot
+  // and could drop audio or corrupt the reported outcome. Deferred as a
+  // documented follow-up; see attach-swift-adleman.md ACP-direct caveat.
   if (ttsMode === "final" && hasAccumulatedBlockText && canAttemptFinalTts) {
     try {
       const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();

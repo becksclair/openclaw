@@ -400,6 +400,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return false;
     }
 
+    // TTS synthesis stays inline here (and in dispatch-acp.ts finalizeAcpTurnOutput):
+    // this coordinator has no ReplyOperation lane-clear hook to detach onto, and the
+    // deliver result feeds turn-local counters read synchronously at turn end. The
+    // main dispatch path (dispatch-from-config.ts) detaches final TTS; the ACP detach
+    // is a documented follow-up (attach-swift-adleman.md ACP-direct caveat).
     const ttsPayload = await maybeApplyAcpTts({
       payload: visiblePayload,
       cfg: params.cfg,
