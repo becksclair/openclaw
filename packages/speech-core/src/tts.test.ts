@@ -954,6 +954,75 @@ describe("speech-core native voice-note routing", () => {
     expect(request.text).toBe("<enriched>");
     expect(request.providerOverrides).toEqual({ applyTextNormalization: "off" });
   });
+
+  it("fails open to the original text when the prepareHook throws", async () => {
+    // speech-core must swallow a thrown Layer-A hook and synthesize the original.
+    installSpeechProviders([createMockSpeechProvider("mock", { prepareSynthesis: undefined })]);
+    const prepareHook = vi.fn(async () => {
+      throw new Error("hook boom");
+    });
+
+    const result = await synthesizeSpeech({
+      text: "Original text before enrichment.",
+      cfg: createTtsConfig("openclaw-speech-core-prepare-hook-throw-test"),
+      disableFallback: true,
+      prepareHook,
+    });
+
+    expect(result.success).toBe(true);
+    expect(prepareHook).toHaveBeenCalledOnce();
+    expect(requireFirstSynthesisRequest("prepare-hook throw synthesis request").text).toBe(
+      "Original text before enrichment.",
+    );
+  });
+
+  it("lets provider prepareSynthesis overrides win over hook overrides on conflict", async () => {
+    // Merge precedence: hook overrides apply first, then the provider's own
+    // prepareSynthesis overrides spread last and win on any shared key.
+    const prepareSynthesis = vi.fn(async () => ({
+      providerOverrides: { shared: "from-provider" },
+    }));
+    installSpeechProviders([createMockSpeechProvider("mock", { prepareSynthesis })]);
+    const prepareHook = vi.fn(async () => ({
+      text: "<hook-text>",
+      providerOverrides: { shared: "from-hook", onlyHook: "kept" },
+    }));
+
+    const result = await synthesizeSpeech({
+      text: "Original.",
+      cfg: createTtsConfig("openclaw-speech-core-prepare-hook-merge-test"),
+      disableFallback: true,
+      prepareHook,
+    });
+
+    expect(result.success).toBe(true);
+    const request = requireFirstSynthesisRequest("prepare-hook merge synthesis request");
+    // Provider returned no text → hook text carried; provider override wins the
+    // conflict; the hook's non-conflicting override survives.
+    expect(request.text).toBe("<hook-text>");
+    expect(request.providerOverrides).toEqual({ shared: "from-provider", onlyHook: "kept" });
+  });
+
+  it("threads providerId and the attempt index into the hook input", async () => {
+    installSpeechProviders([createMockSpeechProvider("mock", { prepareSynthesis: undefined })]);
+    const seen: Array<{ providerId: string; attempt: number }> = [];
+    const prepareHook = vi.fn(async (input: { providerId: string; attempt: number }) => {
+      seen.push({ providerId: input.providerId, attempt: input.attempt });
+      return undefined;
+    });
+
+    const result = await synthesizeSpeech({
+      text: "Original.",
+      cfg: createTtsConfig("openclaw-speech-core-prepare-hook-input-test"),
+      disableFallback: true,
+      prepareHook,
+    });
+
+    expect(result.success).toBe(true);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.providerId).toBe("mock");
+    expect(seen[0]?.attempt).toBe(0);
+  });
 });
 
 describe("speech-core per-agent TTS config", () => {

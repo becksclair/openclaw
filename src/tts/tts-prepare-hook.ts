@@ -15,6 +15,29 @@ import type {
 } from "../plugins/hook-types.js";
 import type { TtsPrepareHook } from "./tts.js";
 
+// Compile-time lock on the Layer-A → Layer-B mapping below. If a field is added to
+// the speech-core `TtsPrepareHook` input, this fails to compile until the author
+// either maps it into the Layer-B event/context or adds it to the intentionally-
+// dropped list. Consumed: text, providerId, providerModel, persona, personaId,
+// attempt. NOT forwarded to Layer B (host-only / agent-agnostic): target, timeoutMs.
+type _AssertNever<T extends never> = T;
+// Exported only so `noUnusedLocals` does not flag it; the `T extends never`
+// constraint makes this fail to compile the moment a new (unmapped) field is
+// added to the Layer-A input above.
+export type _TtsPrepareBridgeMappingComplete = _AssertNever<
+  Exclude<
+    keyof Parameters<TtsPrepareHook>[0],
+    | "text"
+    | "providerId"
+    | "providerModel"
+    | "persona"
+    | "personaId"
+    | "attempt"
+    | "target"
+    | "timeoutMs"
+  >
+>;
+
 /**
  * Build the injectable `tts_prepare` callback for a synthesis call site, or
  * `undefined` when no `tts_prepare` hook is registered so speech-core skips the
