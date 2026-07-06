@@ -1239,7 +1239,13 @@ async function prepareSpeechSynthesis(params: {
       const hookResult = await params.prepareHook({
         text,
         providerId: params.provider.id,
-        providerModel: params.providerModel,
+        // Prefer the model actually resolved from provider config/overrides (e.g.
+        // Google's gemini-*-tts lives in providerConfig, not the candidate
+        // voiceModel), falling back to the candidate model ref. The hook selects
+        // its strategy by this id, so an empty value would misroute enrichment.
+        providerModel:
+          resolveTtsResultModel(params.providerConfig, params.providerOverrides) ??
+          params.providerModel,
         persona: params.persona,
         personaId: params.persona?.id,
         target: params.target,
