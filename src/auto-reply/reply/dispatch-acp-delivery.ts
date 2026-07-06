@@ -13,6 +13,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
+import { buildTtsPrepareHook } from "../../tts/tts-prepare-hook.js";
 import { isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -147,6 +148,11 @@ async function maybeApplyAcpTts(params: {
     ttsAuto: params.ttsAuto,
     agentId: params.agentId,
     accountId: params.accountId,
+    prepareHook: buildTtsPrepareHook({
+      agentId: params.agentId,
+      channelId: params.channel,
+      accountId: params.accountId,
+    }),
   });
   return markGeneratedTtsLocalMediaTrusted({ input: params.payload, output: payload });
 }

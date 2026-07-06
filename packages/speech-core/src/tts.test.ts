@@ -925,6 +925,35 @@ describe("speech-core native voice-note routing", () => {
     expect(successAttempt.persona).toBe("alfred");
     expect(successAttempt.personaBinding).toBe("applied");
   });
+
+  it("carries prepareHook text and provider overrides to a provider with no prepareSynthesis", async () => {
+    // Guards the passthrough-return branch of prepareSpeechSynthesis: for a
+    // provider that registers no prepareSynthesis (ElevenLabs' shape), the
+    // tts_prepare hook result is the ONLY carrier of the enriched text and
+    // per-request provider overrides into synthesize(). A stub provider with
+    // prepareSynthesis explicitly unset exercises exactly that path.
+    installSpeechProviders([createMockSpeechProvider("mock", { prepareSynthesis: undefined })]);
+    const prepareHook = vi.fn(async () => ({
+      text: "<enriched>",
+      providerOverrides: { applyTextNormalization: "off" },
+    }));
+
+    const result = await synthesizeSpeech({
+      text: "Original text before enrichment.",
+      cfg: createTtsConfig("openclaw-speech-core-prepare-hook-passthrough-test"),
+      disableFallback: true,
+      prepareHook,
+    });
+
+    expect(result.success).toBe(true);
+    expect(prepareHook).toHaveBeenCalledOnce();
+    // The provider has no prepareSynthesis, so the shared prepareSynthesis mock
+    // must not fire — proving synthesize() received the hook result directly.
+    expect(prepareSynthesisMock).not.toHaveBeenCalled();
+    const request = requireFirstSynthesisRequest("prepare-hook passthrough synthesis request");
+    expect(request.text).toBe("<enriched>");
+    expect(request.providerOverrides).toEqual({ applyTextNormalization: "off" });
+  });
 });
 
 describe("speech-core per-agent TTS config", () => {

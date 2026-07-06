@@ -1422,6 +1422,52 @@ Rebase notes:
 - A literal single quote in a value does not round-trip through `parseEnvironmentFileLine` (it does not decode `'\''`); acceptable because real tokens/keys/secrets do not contain single quotes.
 - The `#88274` operator-secret test now expects the literal-`$` value single-quoted (`LOWERCASE_LITERAL_API_KEY='$ecret123'`); the value is still preserved, just shell-safe.
 
+### tts_prepare synthesis-seam plugin hook
+
+Carry behavior: a new first-class `tts_prepare` plugin hook fires at the speech-synthesis chokepoint — inside `prepareSpeechSynthesis` in `packages/speech-core/src/tts.ts`, once per non-skipped provider fallback candidate, before the provider's own `prepareSynthesis`. It carries the text about to be spoken plus the resolved provider id, provider model id, persona (id and full object), attempt index, and the owning `agentId` (when the host call site knows it), and lets a plugin return `{ text?, providerOverrides? }` to enrich delivery (e.g. ElevenLabs v3 inline audio tags, or a Gemini per-message style instruction). The `agentId` lets a plugin resolve model/credentials against the bound agent (e.g. `runtime.llm.complete`); it is surfaced purely through the host bridge's `ctxInfo`, not the Layer-A `TtsPrepareHook` input, since agent scope is a host-call-site concern. This is the fork seam the out-of-tree `voice-emotion` plugin binds to; without it the plugin cannot see the resolved synthesis target, so an emotion-enrichment plugin would have to guess the model and risk speaking bracket tags aloud. Transform-only (no cancel), fail-open: a thrown or timed-out handler logs at `logger.error` via `handleHookError` and synthesis proceeds with the original text. Upstream-PR candidate — the hook is generic and provider-agnostic.
+
+Mechanism note (why it is threaded, not a direct import): `packages/speech-core` is import-restricted to `openclaw/plugin-sdk/*` and physically cannot reach the plugin hook dispatcher (`getGlobalHookRunner`). So the hook is a threaded callback (`TtsPrepareHook`, Layer A) injected from host call sites; a single host bridge file (`src/tts/tts-prepare-hook.ts`, `buildTtsPrepareHook`) is the only code that touches `getGlobalHookRunner` and maps Layer A ↔ the Layer-B plugin event/context. The bridge returns `undefined` when no `tts_prepare` hook is registered, so the hook path costs nothing when unused. Every real agent/tool voice-note synthesis path is wired for consistent enrichment: the `tts` tool (`tts-tool.ts`), the gateway `tts.convert` RPC (`gateway/server-methods/tts.ts`), the main reply dispatch (`dispatch-from-config.ts`), the ACP block-tail and per-kind delivery paths (`dispatch-acp.ts`, `dispatch-acp-delivery.ts`), isolated cron delivery (`cron/isolated-agent/delivery-dispatch.ts`), message-action sends including the deferred source-reply supplement (`infra/outbound/message-action-tts.ts`), embedded agent-command delivery (`agents/command/delivery.ts`), and the `/tts` command's direct `textToSpeech` calls (`auto-reply/reply/commands-tts.ts`). Each threads `buildTtsPrepareHook({ agentId, channelId, accountId })` into its existing `maybeApplyTtsToPayload`/`textToSpeech` call without altering the surrounding gates (hidden-recall, tool/block kind exclusions, auto-mode/inbound checks) that decide whether TTS runs at all. Talk (`streamSpeech`) and telephony (`textToSpeechTelephony`) pass no `prepareHook`, so the hook never fires there.
+
+A second, small consented Google-provider carry rides with this seam: `extensions/google/speech-provider.ts` now reads a `personaPrompt` (alias `instruction`) from `providerOverrides`, extends its wrap gate, and concatenates it into the audio-profile prompt's DIRECTOR'S NOTES (TRANSCRIPT untouched, double-wrap guard intact). Without it the Gemini style-instruction strategy is a silent no-op, because the Google provider otherwise reads its persona prompt only from static `providerConfig`.
+
+Primary seam files:
+
+- `src/plugins/hook-types.ts`
+- `src/plugins/hooks.ts`
+- `packages/speech-core/src/tts.ts`
+- `packages/speech-core/runtime-api.ts`
+- `src/plugin-sdk/tts-runtime.ts`
+- `src/tts/tts.ts`
+- `src/tts/tts-prepare-hook.ts`
+- `src/agents/tools/tts-tool.ts`
+- `src/gateway/server-methods/tts.ts`
+- `src/auto-reply/reply/dispatch-from-config.ts`
+- `src/auto-reply/reply/dispatch-acp.ts`
+- `src/auto-reply/reply/dispatch-acp-delivery.ts`
+- `src/cron/isolated-agent/delivery-dispatch.ts`
+- `src/infra/outbound/message-action-tts.ts`
+- `src/agents/command/delivery.ts`
+- `src/auto-reply/reply/commands-tts.ts`
+- `extensions/google/speech-provider.ts`
+- `src/plugins/wired-hooks-tts-prepare.test.ts`
+- `packages/speech-core/src/tts.test.ts`
+- `bex-fork.md`
+
+Primary seam tests:
+
+- `node scripts/run-vitest.mjs run src/plugins/wired-hooks-tts-prepare.test.ts`
+- `node scripts/run-vitest.mjs run packages/speech-core/src/tts.test.ts`
+
+Rebase notes:
+
+- `tts_prepare` must be added to BOTH the `PluginHookName` union AND the `PLUGIN_HOOK_NAMES` array in `hook-types.ts`, or the compile-time exhaustiveness assert fails. It also needs a `PluginHookHandlerMap` entry and a `DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK` entry (`15_000`, above the plugin's own ~12s total budget).
+- `runTtsPrepare` in `hooks.ts` is modeled on `runReplyPayloadSending`: sequential-modifying, text last-writer-wins, `providerOverrides` shallow spread-merge, void/undefined handler results skipped, `undefined` returned when nothing changed. Register it in the `createHookRunner` return object.
+- The hook result must be applied in THREE spots inside `prepareSpeechSynthesis` via merged local `text`/`providerOverrides` copies: the passthrough return for providers with no `prepareSynthesis` (the ONLY path that carries the result for ElevenLabs, which registers none), the `provider.prepareSynthesis` ctx, and the final merged return. Dropping the passthrough application silently disables ElevenLabs enrichment.
+- `providerModel` (= `voiceModel?.model`) and `attempt` (per non-skipped candidate) are threaded into `prepareSpeechSynthesis` from the `synthesizeSpeech` fallback loop. `providerModel` is load-bearing: the plugin selects its strategy by model id (`eleven_v3` vs Gemini TTS).
+- Keep the Google `personaPrompt`/`instruction` override read in `readGoogleTtsOverrides` and the `|| Boolean(overrides.personaPrompt)` gate + `[config.personaPrompt, overrides.personaPrompt].filter(Boolean).join("\n\n")` merge in `prepareSynthesis`. If upstream ever adds native per-request Google style prompts, re-evaluate this half of the carry.
+- `PluginHookTtsPrepareEvent.agentId` is optional and is set from the bridge's `ctxInfo.agentId` in `buildTtsPrepareHook` (not from the Layer-A `TtsPrepareHook` input, which has no agent scope). Do not add `agentId` to the speech-core `TtsPrepareHook` input shape; keep it a bridge-only field so speech-core stays import-restricted and agent-agnostic.
+- The `prepareHook` must be threaded into EVERY agent/tool synthesis call site, not just `dispatch-from-config.ts`, or enrichment is inconsistent depending on which path speaks. Wired call sites: `tts-tool.ts`, `gateway/server-methods/tts.ts`, `dispatch-from-config.ts`, `dispatch-acp.ts`, `dispatch-acp-delivery.ts`, `cron/isolated-agent/delivery-dispatch.ts`, `infra/outbound/message-action-tts.ts` (both the deferred source-reply supplement and the direct send), `agents/command/delivery.ts`, and `commands-tts.ts`. Never thread it into `streamSpeech` (Talk) or `textToSpeechTelephony`.
+
 ## Narrow validation set
 
 - `pnpm test src/plugins/bundled-plugin-metadata.test.ts test/scripts/tracked-bundled-plugin-dirs.test.ts`

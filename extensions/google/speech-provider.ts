@@ -83,6 +83,12 @@ type GoogleTtsProviderOverrides = {
   voiceName?: string;
   audioProfile?: string;
   speakerName?: string;
+  /**
+   * Per-request delivery direction merged into the audio-profile prompt's
+   * DIRECTOR'S NOTES. Supplied by the tts_prepare hook (e.g. the voice-emotion
+   * plugin's Gemini style-instruction strategy). Accepts an `instruction` alias.
+   */
+  personaPrompt?: string;
 };
 
 type Maybe<T> = T | undefined;
@@ -277,6 +283,7 @@ function readGoogleTtsOverrides(
     voiceName: normalizeOptionalString(overrides.voiceName ?? overrides.voice),
     audioProfile: normalizeOptionalString(overrides.audioProfile),
     speakerName: normalizeOptionalString(overrides.speakerName),
+    personaPrompt: normalizeOptionalString(overrides.personaPrompt ?? overrides.instruction),
   };
 }
 
@@ -664,9 +671,11 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
       Boolean(resolveGoogleTtsApiKey({ cfg, providerConfig })),
     prepareSynthesis: (ctx) => {
       const config = readGoogleTtsProviderConfig(ctx.providerConfig);
+      const overrides = readGoogleTtsOverrides(ctx.providerOverrides);
       const shouldWrap =
         config.promptTemplate === GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE ||
-        Boolean(config.personaPrompt);
+        Boolean(config.personaPrompt) ||
+        Boolean(overrides.personaPrompt);
       if (!shouldWrap || isOpenClawGoogleAudioProfilePrompt(ctx.text)) {
         return undefined;
       }
@@ -674,7 +683,9 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
         text: renderGoogleAudioProfilePrompt({
           text: ctx.text,
           persona: ctx.persona,
-          personaPrompt: config.personaPrompt,
+          personaPrompt:
+            [config.personaPrompt, overrides.personaPrompt].filter(Boolean).join("\n\n") ||
+            undefined,
         }),
       };
     },

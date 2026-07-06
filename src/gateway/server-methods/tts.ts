@@ -6,6 +6,7 @@ import {
   getSpeechProvider,
   listSpeechProviders,
 } from "../../tts/provider-registry.js";
+import { buildTtsPrepareHook } from "../../tts/tts-prepare-hook.js";
 import {
   getResolvedSpeechProviderConfig,
   getTtsPersona,
@@ -128,6 +129,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         channel,
         overrides,
         disableFallback: Boolean(overrides.provider || modelId || voiceId),
+        prepareHook: buildTtsPrepareHook({ channelId: channel }),
       });
       if (result.success && result.audioPath) {
         respond(true, {

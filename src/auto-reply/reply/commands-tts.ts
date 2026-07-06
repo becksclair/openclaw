@@ -11,6 +11,7 @@ import {
   getSpeechProvider,
   listSpeechProviders,
 } from "../../tts/provider-registry.js";
+import { buildTtsPrepareHook } from "../../tts/tts-prepare-hook.js";
 import {
   getResolvedSpeechProviderConfig,
   getLastTtsAttempt,
@@ -132,6 +133,11 @@ async function buildTtsAudioReply(params: {
     accountId: params.accountId,
     prefsPath: params.prefsPath,
     agentId: params.agentId,
+    prepareHook: buildTtsPrepareHook({
+      agentId: params.agentId,
+      channelId: params.channel,
+      accountId: params.accountId,
+    }),
   });
 
   if (result.success && result.audioPath) {

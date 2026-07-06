@@ -33,6 +33,7 @@ import {
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
+import { buildTtsPrepareHook } from "../../tts/tts-prepare-hook.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
@@ -280,6 +281,11 @@ async function applyAgentDeliveryTts(params: {
         ttsAuto: ttsStatus.autoMode,
         agentId: params.agentId,
         accountId: params.accountId,
+        prepareHook: buildTtsPrepareHook({
+          agentId: params.agentId,
+          channelId: params.channel,
+          accountId: params.accountId,
+        }),
       }),
     });
     if (!hasReplyMediaPayload(ttsPayload)) {

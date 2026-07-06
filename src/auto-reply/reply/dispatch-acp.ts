@@ -32,6 +32,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+import { buildTtsPrepareHook } from "../../tts/tts-prepare-hook.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -348,6 +349,11 @@ async function finalizeAcpTurnOutput(params: {
         ttsAuto: params.sessionTtsAuto,
         agentId: params.agentId,
         accountId: params.ttsAccountId,
+        prepareHook: buildTtsPrepareHook({
+          agentId: params.agentId,
+          channelId: params.ttsChannel,
+          accountId: params.ttsAccountId,
+        }),
       });
       if (ttsSyntheticReply.mediaUrl) {
         const delivered = await params.delivery.deliver(

@@ -103,6 +103,7 @@ import {
   shouldCleanTtsDirectiveText,
   shouldAttemptTtsPayload,
 } from "../../tts/tts-config.js";
+import { buildTtsPrepareHook } from "../../tts/tts-prepare-hook.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import {
@@ -1915,6 +1916,11 @@ export async function dispatchReplyFromConfig(
             ttsAuto: sessionTtsAuto,
             agentId: sessionAgentId,
             accountId: replyRoute.accountId,
+            prepareHook: buildTtsPrepareHook({
+              agentId: sessionAgentId,
+              channelId: deliveryChannel,
+              accountId: replyRoute.accountId,
+            }),
           }),
         normalize: normalizeReplyMediaPayload,
         deliver: deliverTtsSupplementToOriginating,
@@ -2609,6 +2615,11 @@ export async function dispatchReplyFromConfig(
               ttsAuto: sessionTtsAuto,
               agentId: sessionAgentId,
               accountId: replyRoute.accountId,
+              prepareHook: buildTtsPrepareHook({
+                agentId: sessionAgentId,
+                channelId: deliveryChannel,
+                accountId: replyRoute.accountId,
+              }),
             });
       throwIfFinalDeliveryAborted();
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
@@ -3287,6 +3298,11 @@ export async function dispatchReplyFromConfig(
                   ttsAuto: sessionTtsAuto,
                   agentId: sessionAgentId,
                   accountId: replyRoute.accountId,
+                  prepareHook: buildTtsPrepareHook({
+                    agentId: sessionAgentId,
+                    channelId: deliveryChannel,
+                    accountId: replyRoute.accountId,
+                  }),
                 });
                 const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
                 const deliveryPayload = isForcedToolProgress
@@ -3517,6 +3533,11 @@ export async function dispatchReplyFromConfig(
                         ttsAuto: sessionTtsAuto,
                         agentId: sessionAgentId,
                         accountId: replyRoute.accountId,
+                        prepareHook: buildTtsPrepareHook({
+                          agentId: sessionAgentId,
+                          channelId: deliveryChannel,
+                          accountId: replyRoute.accountId,
+                        }),
                       });
                 const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
                 if (isDispatchOperationAborted()) {

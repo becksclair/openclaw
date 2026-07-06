@@ -43,6 +43,7 @@ import {
 } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
+import { buildTtsPrepareHook } from "../../tts/tts-prepare-hook.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
@@ -364,6 +365,11 @@ async function maybeApplyTtsToCronPayloads(params: {
         ttsAuto: params.ttsAuto,
         agentId: params.agentId,
         accountId: params.delivery.accountId,
+        prepareHook: buildTtsPrepareHook({
+          agentId: params.agentId,
+          channelId: params.delivery.channel,
+          accountId: params.delivery.accountId,
+        }),
       }),
     ),
   );

@@ -9,7 +9,7 @@ import type {
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { TtsAutoMode } from "../config/types.tts.js";
+import type { ResolvedTtsPersona, TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type {
   PluginHookBeforeAgentStartEvent,
@@ -98,6 +98,7 @@ export type PluginHookName =
   | "message_received"
   | "message_sending"
   | "reply_payload_sending"
+  | "tts_prepare"
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
@@ -145,6 +146,7 @@ export const PLUGIN_HOOK_NAMES = [
   "message_received",
   "message_sending",
   "reply_payload_sending",
+  "tts_prepare",
   "message_sent",
   "before_tool_call",
   "after_tool_call",
@@ -611,6 +613,43 @@ export type PluginHookReplyPayloadSendingResult = {
   payload?: PluginHookReplyPayload;
   cancel?: boolean;
   reason?: string;
+};
+
+/**
+ * tts_prepare — fires at the speech-synthesis seam, once per non-skipped
+ * provider fallback candidate, before the provider's own `prepareSynthesis`.
+ * Lets a plugin enrich the text about to be spoken (e.g. inline audio tags) or
+ * supply per-request provider overrides, with full knowledge of the resolved
+ * provider, model, and persona. Transform-only: there is no cancel path, and
+ * hook failures are fail-open (the original text is spoken).
+ */
+export type PluginHookTtsPrepareEvent = {
+  /** Text about to be synthesized for this attempt. */
+  text: string;
+  /** Resolved speech provider id for this attempt (e.g. `google`, `elevenlabs`). */
+  providerId: string;
+  /** Resolved provider model id for this attempt, when known (strategy-load-bearing). */
+  providerModelId?: string;
+  /** Active persona id, when a persona is bound. */
+  personaId?: string;
+  /** Full resolved persona object, when a persona is bound. */
+  persona?: ResolvedTtsPersona;
+  /** Zero-based fallback attempt index; increments per provider candidate tried. */
+  attempt: number;
+  /**
+   * Owning agent id for this synthesis call, when the host call site knows it.
+   * Surfaced so a plugin can resolve model/credentials against the bound agent
+   * (e.g. `runtime.llm.complete`). Absent on agent-less call sites like the
+   * gateway `tts.convert` RPC.
+   */
+  agentId?: string;
+};
+
+export type PluginHookTtsPrepareContext = PluginHookMessageContext;
+
+export type PluginHookTtsPrepareResult = {
+  text?: string;
+  providerOverrides?: Record<string, unknown>;
 };
 
 export type PluginHookToolKind = "code_mode_exec";
@@ -1166,6 +1205,10 @@ export type PluginHookHandlerMap = {
     | Promise<PluginHookReplyPayloadSendingResult | void>
     | PluginHookReplyPayloadSendingResult
     | void;
+  tts_prepare: (
+    event: PluginHookTtsPrepareEvent,
+    ctx: PluginHookTtsPrepareContext,
+  ) => Promise<PluginHookTtsPrepareResult | void> | PluginHookTtsPrepareResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

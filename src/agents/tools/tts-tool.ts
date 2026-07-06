@@ -6,6 +6,7 @@
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildTtsPrepareHook } from "../../tts/tts-prepare-hook.js";
 import { textToSpeech } from "../../tts/tts.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import type { AnyAgentTool } from "./common.js";
@@ -69,6 +70,11 @@ export function createTtsTool(opts?: {
         timeoutMs,
         agentId: opts?.agentId,
         accountId: opts?.agentAccountId,
+        prepareHook: buildTtsPrepareHook({
+          agentId: opts?.agentId,
+          channelId: channel ?? opts?.agentChannel,
+          accountId: opts?.agentAccountId,
+        }),
       });
 
       if (result.success && result.audioPath) {

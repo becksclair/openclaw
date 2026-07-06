@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { hasTtsDirective } from "../../tts/directives.js";
 import { resolveEffectiveTtsAutoMode } from "../../tts/tts-config.js";
+import { buildTtsPrepareHook } from "../../tts/tts-prepare-hook.js";
 
 let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
 
@@ -130,6 +131,11 @@ export async function maybeApplyTtsToMessageActionSendPayload(params: {
             ttsAuto: effectiveAutoMode,
             agentId: params.agentId,
             accountId: params.accountId ?? undefined,
+            prepareHook: buildTtsPrepareHook({
+              agentId: params.agentId,
+              channelId: params.channel,
+              accountId: params.accountId ?? undefined,
+            }),
           });
           if (!hasMediaPayload(ttsPayload)) {
             return null;
@@ -151,6 +157,11 @@ export async function maybeApplyTtsToMessageActionSendPayload(params: {
     ttsAuto: shouldHonorExplicitDirective ? "tagged" : effectiveAutoMode,
     agentId: params.agentId,
     accountId: params.accountId ?? undefined,
+    prepareHook: buildTtsPrepareHook({
+      agentId: params.agentId,
+      channelId: params.channel,
+      accountId: params.accountId ?? undefined,
+    }),
   });
   return { payload: ttsPayload };
 }
