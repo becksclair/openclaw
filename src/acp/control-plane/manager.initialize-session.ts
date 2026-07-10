@@ -68,6 +68,17 @@ export async function runManagerInitializeSession(params: {
     fallbackCode: "ACP_SESSION_INIT_FAILED",
     fallbackMessage: "Could not initialize ACP session runtime.",
   });
+  if (input.signal?.aborted) {
+    await cleanupAbortedInitialization({
+      input,
+      sessionKey,
+      runtime,
+      handle,
+      writeSessionMeta: params.writeSessionMeta,
+      clearPersistedMeta: false,
+    });
+    throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session initialization aborted.");
+  }
   const effectiveCwd = normalizeText(handle.cwd) ?? requestedCwd;
   const effectiveRuntimeOptions = normalizeRuntimeOptions({
     ...initialRuntimeOptions,
@@ -111,6 +122,17 @@ export async function runManagerInitializeSession(params: {
     handle,
     writeSessionMeta: params.writeSessionMeta,
   });
+  if (input.signal?.aborted) {
+    await cleanupAbortedInitialization({
+      input,
+      sessionKey,
+      runtime,
+      handle,
+      writeSessionMeta: params.writeSessionMeta,
+      clearPersistedMeta: true,
+    });
+    throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session initialization aborted.");
+  }
   if (!persisted?.acp) {
     throw new AcpRuntimeError(
       "ACP_SESSION_INIT_FAILED",
@@ -132,6 +154,41 @@ export async function runManagerInitializeSession(params: {
     handle,
     meta,
   };
+}
+
+async function cleanupAbortedInitialization(params: {
+  input: AcpInitializeSessionInput;
+  sessionKey: string;
+  runtime: AcpRuntime;
+  handle: AcpRuntimeHandle;
+  writeSessionMeta: WriteManagerSessionMeta;
+  clearPersistedMeta: boolean;
+}): Promise<void> {
+  await params.runtime
+    .close({
+      handle: params.handle,
+      reason: "session-init-aborted",
+    })
+    .catch((closeError: unknown) => {
+      logVerbose(
+        `acp-manager: cleanup close failed after aborted initialization for ${params.sessionKey}: ${String(closeError)}`,
+      );
+    });
+  if (!params.clearPersistedMeta) {
+    return;
+  }
+  await params
+    .writeSessionMeta({
+      cfg: params.input.cfg,
+      sessionKey: params.sessionKey,
+      mutate: () => null,
+      failOnError: true,
+    })
+    .catch((clearError: unknown) => {
+      logVerbose(
+        `acp-manager: metadata cleanup failed after aborted initialization for ${params.sessionKey}: ${String(clearError)}`,
+      );
+    });
 }
 
 async function persistInitializedSessionMeta(params: {

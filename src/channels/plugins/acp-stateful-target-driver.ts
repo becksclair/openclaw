@@ -75,6 +75,7 @@ function toAcpStatefulBindingTargetDescriptor(params: {
 async function ensureAcpTargetReady(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;
+  signal?: AbortSignal;
 }): Promise<StatefulBindingTargetReadyResult> {
   const configuredBinding = resolveConfiguredAcpBindingSpecFromRecord(
     params.bindingResolution.record,
@@ -87,6 +88,7 @@ async function ensureAcpTargetReady(params: {
   }
   return await ensureConfiguredAcpBindingReady({
     cfg: params.cfg,
+    signal: params.signal,
     configuredBinding: {
       spec: configuredBinding,
       record: params.bindingResolution.record,

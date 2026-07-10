@@ -62,6 +62,7 @@ function sessionMatchesConfiguredBinding(params: {
 export async function ensureConfiguredAcpBindingSession(params: {
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;
+  signal?: AbortSignal;
 }): Promise<{ ok: true; sessionKey: string } | { ok: false; sessionKey: string; error: string }> {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
   const acpManager = getAcpSessionManager();
@@ -95,6 +96,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
       });
     }
 
+    params.signal?.throwIfAborted();
     await acpManager.initializeSession({
       cfg: params.cfg,
       sessionKey,
@@ -103,6 +105,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
       cwd: params.spec.cwd,
       target: params.spec.target,
       backendId: params.spec.backend,
+      signal: params.signal,
     });
 
     return {
@@ -126,6 +129,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
 export async function ensureConfiguredAcpBindingReady(params: {
   cfg: OpenClawConfig;
   configuredBinding: ResolvedConfiguredAcpBinding | null;
+  signal?: AbortSignal;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!params.configuredBinding) {
     return { ok: true };
@@ -133,6 +137,7 @@ export async function ensureConfiguredAcpBindingReady(params: {
   const ensured = await ensureConfiguredAcpBindingSession({
     cfg: params.cfg,
     spec: params.configuredBinding.spec,
+    signal: params.signal,
   });
   if (ensured.ok) {
     return { ok: true };

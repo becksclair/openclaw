@@ -14,11 +14,15 @@ import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
-import { resolveConfiguredBinding } from "./binding-registry.js";
+import {
+  resolveConfiguredBinding,
+  resolveConfiguredBindingRecordBySessionKey,
+} from "./binding-registry.js";
 import { ensureConfiguredBindingTargetReady } from "./binding-targets.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
 
 const CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS = 30_000;
+const CONFIGURED_BINDING_SESSION_READY_TIMEOUT_MS = 20_000;
 
 /**
  * Route resolution after applying a configured channel binding.
@@ -221,5 +225,62 @@ export async function ensureConfiguredBindingRouteReady(params: {
     return { ok: false, error: "Configured binding route ready check timed out" };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** Resolves a generated session key and waits until its stateful target work has settled. */
+export async function ensureConfiguredBindingSessionKeyReady(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  signal?: AbortSignal;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const recordResolution = resolveConfiguredBindingRecordBySessionKey(params);
+  if (!recordResolution) {
+    return { ok: true };
+  }
+  const bindingResolution = resolveConfiguredBinding({
+    cfg: params.cfg,
+    conversation: recordResolution.record.conversation,
+  });
+  if (bindingResolution?.statefulTarget.sessionKey !== params.sessionKey.trim()) {
+    return { ok: false, error: "Configured binding session key no longer matches its route" };
+  }
+  // chat.send clients commonly use a 30s RPC deadline; leave time to return the structured error.
+  const timeoutSignal = AbortSignal.timeout(CONFIGURED_BINDING_SESSION_READY_TIMEOUT_MS);
+  const signal = params.signal ? AbortSignal.any([params.signal, timeoutSignal]) : timeoutSignal;
+  // Lifecycle-admitted callers need cancellation to reach the target owner so late initialization
+  // cannot persist state after the caller releases its admission.
+  const readyPromise = ensureConfiguredBindingTargetReady({
+    cfg: params.cfg,
+    bindingResolution,
+    signal,
+  });
+  const abortedToken = Symbol("configured-binding-session-ready-aborted");
+  let onAbort: (() => void) | undefined;
+  const abortedPromise = new Promise<typeof abortedToken>((resolve) => {
+    onAbort = () => resolve(abortedToken);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
+  });
+  try {
+    const result = await Promise.race([readyPromise, abortedPromise]);
+    if (result !== abortedToken) {
+      return result;
+    }
+    readyPromise.catch((error: unknown) => {
+      logVerbose(`configured binding session readiness settled after abort: ${String(error)}`);
+    });
+    return {
+      ok: false,
+      error: params.signal?.aborted
+        ? "Configured binding session readiness aborted"
+        : "Configured binding session readiness timed out",
+    };
+  } finally {
+    if (onAbort) {
+      signal.removeEventListener("abort", onAbort);
+    }
   }
 }

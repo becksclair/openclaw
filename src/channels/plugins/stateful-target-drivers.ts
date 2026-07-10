@@ -23,6 +23,7 @@ export type StatefulBindingTargetDriver = {
   ensureReady: (params: {
     cfg: OpenClawConfig;
     bindingResolution: ConfiguredBindingResolution;
+    signal?: AbortSignal;
   }) => Promise<StatefulBindingTargetReadyResult>;
   ensureSession: (params: {
     cfg: OpenClawConfig;

@@ -64,6 +64,7 @@ import {
   type StageSandboxMediaResult,
 } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
+import { ensureConfiguredBindingSessionKeyReady } from "../../channels/plugins/binding-routing.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import {
   resolveSessionRoutingContract,
@@ -3868,8 +3869,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requestedSpawnedBy = normalizeOptionalText(p.spawnedBy);
     const clientRunId = p.idempotencyKey;
     const pendingChatSendKey = pendingChatSendDedupeKey(clientRunId);
+    const runtimeCfg =
+      (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.() ??
+      ({} as OpenClawConfig);
     const requestedAgentId = resolveRequestedChatAgentId({
-      cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
+      cfg: runtimeCfg,
       requestedSessionKey: rawSessionKey,
       agentId: agentIdOverride,
     });
@@ -4338,6 +4342,58 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId: admittedSessionId,
       lifecycleGeneration,
     });
+    const respondIfAdmittedRunAborted = (): boolean => {
+      if (!activeRunAbort.controller.signal.aborted) {
+        return false;
+      }
+      const stopReason = activeRunAbort.entry?.abortStopReason ?? "rpc";
+      const endedAt = Date.now();
+      const payload = buildAbortedChatSendPayload({
+        runId: clientRunId,
+        stopReason,
+        endedAt,
+      });
+      setGatewayDedupeEntry({
+        dedupe: context.dedupe,
+        key: `chat:${clientRunId}`,
+        entry: {
+          ts: endedAt,
+          ok: true,
+          payload,
+        },
+      });
+      cleanupAdmittedRun({ force: true });
+      clearAgentRunContext(clientRunId, lifecycleGeneration);
+      respond(true, payload, undefined, { runId: clientRunId });
+      return true;
+    };
+    // Stateful target preparation must run while session lifecycle admission is held. Otherwise
+    // a concurrent reset can close the target and have this send recreate stale state afterward.
+    let configuredBindingReady: { ok: true } | { ok: false; error: string };
+    try {
+      configuredBindingReady = await ensureConfiguredBindingSessionKeyReady({
+        cfg,
+        sessionKey,
+        signal: activeRunAbort.controller.signal,
+      });
+    } catch (error) {
+      if (respondIfAdmittedRunAborted()) {
+        return;
+      }
+      cleanupAdmittedRun({ force: true });
+      clearAgentRunContext(clientRunId, lifecycleGeneration);
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)));
+      return;
+    }
+    if (respondIfAdmittedRunAborted()) {
+      return;
+    }
+    if (!configuredBindingReady.ok) {
+      cleanupAdmittedRun({ force: true });
+      clearAgentRunContext(clientRunId, lifecycleGeneration);
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, configuredBindingReady.error));
+      return;
+    }
     const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
       explicitOriginResult.value,
     );
@@ -4423,26 +4479,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    if (activeRunAbort.controller.signal.aborted) {
-      const stopReason = activeRunAbort.entry?.abortStopReason ?? "rpc";
-      const endedAt = Date.now();
-      const payload = buildAbortedChatSendPayload({
-        runId: clientRunId,
-        stopReason,
-        endedAt,
-      });
-      setGatewayDedupeEntry({
-        dedupe: context.dedupe,
-        key: `chat:${clientRunId}`,
-        entry: {
-          ts: endedAt,
-          ok: true,
-          payload,
-        },
-      });
-      cleanupAdmittedRun({ force: true });
-      clearAgentRunContext(clientRunId, lifecycleGeneration);
-      respond(true, payload, undefined, { runId: clientRunId });
+    if (respondIfAdmittedRunAborted()) {
       return;
     }
 

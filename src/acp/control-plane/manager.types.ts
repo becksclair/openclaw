@@ -51,6 +51,7 @@ export type AcpInitializeSessionInput = {
   cwd?: string;
   target?: string;
   backendId?: string;
+  signal?: AbortSignal;
 };
 
 export type AcpTurnAttachment = {

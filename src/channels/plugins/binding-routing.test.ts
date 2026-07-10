@@ -1,20 +1,25 @@
 // Binding routing tests cover channel binding selection and message routing behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildConfiguredAcpSessionKey } from "../../acp/persistent-bindings.types.js";
 import {
   testing,
   registerSessionBindingAdapter,
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import {
   ensureConfiguredBindingRouteReady,
+  ensureConfiguredBindingSessionKeyReady,
   resolveRuntimeConversationBindingRoute,
 } from "./binding-routing.js";
 import {
   registerStatefulBindingTargetDriver,
   unregisterStatefulBindingTargetDriver,
 } from "./stateful-target-drivers.js";
+import type { ChannelConfiguredBindingProvider } from "./types.adapters.js";
 
 function createRoute(): ResolvedAgentRoute {
   return {
@@ -150,6 +155,8 @@ describe("ensureConfiguredBindingRouteReady", () => {
   afterEach(() => {
     vi.useRealTimers();
     unregisterStatefulBindingTargetDriver("slow");
+    unregisterStatefulBindingTargetDriver("acp");
+    resetPluginRuntimeStateForTest();
   });
 
   it("returns a bounded failure when target readiness never settles", async () => {
@@ -175,5 +182,70 @@ describe("ensureConfiguredBindingRouteReady", () => {
       ok: false,
       error: "Configured binding route ready check timed out",
     });
+  });
+
+  it("prepares configured ACP bindings resolved from their generated session key", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.channels = [
+      {
+        pluginId: "discord",
+        plugin: {
+          id: "discord",
+          meta: { label: "Discord" },
+          bindings: {
+            compileConfiguredBinding: ({ conversationId }) => ({ conversationId }),
+            matchInboundConversation: ({ compiledBinding, conversationId }) =>
+              compiledBinding.conversationId === conversationId
+                ? { conversationId, matchPriority: 2 }
+                : null,
+          } satisfies ChannelConfiguredBindingProvider,
+        } as never,
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const sessionKey = buildConfiguredAcpSessionKey({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "channel-1",
+      agentId: "codex",
+      acpAgentId: "codex",
+      mode: "persistent",
+      backend: "acpx",
+    });
+    const ensureReady = vi.fn(async () => ({ ok: true as const }));
+    registerStatefulBindingTargetDriver({
+      id: "acp",
+      ensureReady,
+      ensureSession: async () => ({ ok: true, sessionKey }),
+    });
+
+    await expect(
+      ensureConfiguredBindingSessionKeyReady({
+        cfg: {
+          agents: { list: [{ id: "main" }, { id: "codex" }] },
+          bindings: [
+            {
+              type: "acp",
+              agentId: "codex",
+              match: {
+                channel: "discord",
+                accountId: "*",
+                peer: { kind: "channel", id: "channel-1" },
+              },
+              acp: { mode: "persistent", backend: "acpx" },
+            },
+          ],
+        },
+        sessionKey,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(ensureReady).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bindingResolution: expect.objectContaining({
+          statefulTarget: expect.objectContaining({ sessionKey }),
+        }),
+      }),
+    );
   });
 });

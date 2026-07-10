@@ -12,17 +12,19 @@
 // reply to itself in the same thread.
 //
 // Prerequisites:
-//   - --session-key or OPENCLAW_CODEX_DEVBOX_ACP_SESSION_KEY
-//   - --thread-id or OPENCLAW_CODEX_DEVBOX_ACP_DISCORD_THREAD_ID
+//   - One configured Discord ACP binding, or selectors when multiple bindings exist
 //   - For --live-discord: rbw must be unlocked and --rbw-item or
 //     OPENCLAW_CODEX_DEVBOX_ACP_DISCORD_TOKEN_RBW_ITEM must name the token item
 //   - Gateway must be running with the codex-devbox ACP binding configured
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { resolveConfiguredAcpBindingRecord } from "../src/acp/persistent-bindings.resolve.ts";
+import { loadConfig } from "../src/config/config.ts";
 import { callGateway } from "../src/gateway/call.ts";
+import { normalizeAccountId } from "../src/routing/session-key.ts";
 
-const TEST_PHRASE = "LIVE-ACP-VERIFY-OK";
+const TEST_PHRASE_PREFIX = "LIVE-ACP-VERIFY-OK";
 const TIMEOUT_MS = 120_000;
 const DISCORD_POST_TIMEOUT_MS = 10_000;
 
@@ -37,13 +39,86 @@ function argValue(flag) {
 
 function usage() {
   return (
-    "Usage: scripts/verify-codex-devbox-acp.js --session-key <key> --thread-id <discord-thread-id> [--account-id default] [--live-discord --rbw-item <item>]\n" +
+    "Usage: scripts/verify-codex-devbox-acp.js [--session-key <key>] [--thread-id <discord-thread-id>] [--account-id default] [--binding-label <label>] [--live-discord --rbw-item <item>]\n" +
+    "When session/thread are omitted, the verifier discovers one configured Discord ACP binding.\n" +
     "Environment fallbacks:\n" +
     "  OPENCLAW_CODEX_DEVBOX_ACP_SESSION_KEY\n" +
     "  OPENCLAW_CODEX_DEVBOX_ACP_DISCORD_THREAD_ID\n" +
     "  OPENCLAW_CODEX_DEVBOX_ACP_DISCORD_ACCOUNT_ID\n" +
     "  OPENCLAW_CODEX_DEVBOX_ACP_DISCORD_TOKEN_RBW_ITEM"
   );
+}
+
+function discoverConfiguredDiscordBinding({ accountId, label, threadId }) {
+  const cfg = loadConfig();
+  const requestedAccountId = accountId ? normalizeAccountId(accountId) : undefined;
+  const candidates = (cfg.bindings ?? []).filter((binding) => {
+    if (
+      binding.type !== "acp" ||
+      binding.match?.channel !== "discord" ||
+      binding.match.peer?.kind !== "channel"
+    ) {
+      return false;
+    }
+    if (label && binding.acp?.label !== label) {
+      return false;
+    }
+    const accountPattern = binding.match.accountId?.trim();
+    if (
+      requestedAccountId &&
+      accountPattern !== "*" &&
+      normalizeAccountId(accountPattern) !== requestedAccountId
+    ) {
+      return false;
+    }
+    return !threadId || binding.match.peer?.id === threadId;
+  });
+  const conversationIds = [
+    ...new Set(candidates.map((binding) => binding.match.peer?.id?.trim()).filter(Boolean)),
+  ];
+  if (conversationIds.length !== 1) {
+    fail(
+      `Expected exactly one configured Discord ACP conversation, found ${conversationIds.length}. ` +
+        `Pass --thread-id or --binding-label to disambiguate.\n${usage()}`,
+    );
+  }
+  const discoveredThreadId = conversationIds[0];
+  const conversationBindings = candidates.filter(
+    (binding) => binding.match.peer?.id?.trim() === discoveredThreadId,
+  );
+  const exactAccountIds = [
+    ...new Set(
+      conversationBindings
+        .map((binding) => binding.match.accountId?.trim())
+        .filter((value) => value && value !== "*"),
+    ),
+  ];
+  let discoveredAccountId = requestedAccountId;
+  if (!discoveredAccountId) {
+    if (exactAccountIds.length === 1) {
+      discoveredAccountId = exactAccountIds[0];
+    } else if (exactAccountIds.length > 1) {
+      fail(`Multiple Discord accounts match this ACP conversation; pass --account-id.\n${usage()}`);
+    } else if (conversationBindings.some((binding) => !binding.match.accountId?.trim())) {
+      discoveredAccountId = "default";
+    } else {
+      fail(`Wildcard Discord ACP bindings require a concrete --account-id.\n${usage()}`);
+    }
+  }
+  const resolved = resolveConfiguredAcpBindingRecord({
+    cfg,
+    channel: "discord",
+    accountId: discoveredAccountId,
+    conversationId: discoveredThreadId,
+  });
+  if (!resolved) {
+    fail(`Configured Discord ACP binding could not be materialized.\n${usage()}`);
+  }
+  return {
+    sessionKey: resolved.record.targetSessionKey,
+    threadId: discoveredThreadId,
+    accountId: resolved.record.conversation.accountId,
+  };
 }
 
 function requiredConfigValue(name, value) {
@@ -117,6 +192,7 @@ async function runGatewaySimulationTest(config) {
     scopes: ["operator.admin"],
   };
 
+  const testPhrase = `${TEST_PHRASE_PREFIX}-${randomUUID()}`;
   log(`Sending simulated Discord inbound to ${config.bindingSessionKey} ...`);
 
   const started = await callGateway({
@@ -124,13 +200,13 @@ async function runGatewaySimulationTest(config) {
     method: "chat.send",
     params: {
       sessionKey: config.bindingSessionKey,
-      message: `Reply with exactly ${TEST_PHRASE}`,
+      message: `Reply with exactly ${testPhrase}`,
       idempotencyKey: randomUUID(),
       originatingChannel: "discord",
       originatingTo: `channel:${config.discordThreadId}`,
       originatingAccountId: config.discordAccountId,
     },
-    timeoutMs: 10_000,
+    timeoutMs: TIMEOUT_MS + 10_000,
   });
 
   const runId = typeof started?.runId === "string" ? started.runId : undefined;
@@ -165,7 +241,7 @@ async function runGatewaySimulationTest(config) {
     if (m.role !== "assistant") {
       return false;
     }
-    return readMessageText(m).includes(TEST_PHRASE);
+    return readMessageText(m).includes(testPhrase);
   });
 
   if (!targetAssistant) {
@@ -182,8 +258,8 @@ async function runGatewaySimulationTest(config) {
     fail(`Expected model "acp-runtime", got "${model}"`);
   }
 
-  if (!text.includes(TEST_PHRASE)) {
-    fail(`Response did not contain "${TEST_PHRASE}" (got: "${text}")`);
+  if (!text.includes(testPhrase)) {
+    fail(`Response did not contain "${testPhrase}" (got: "${text}")`);
   }
 
   return { model, text };
@@ -195,24 +271,29 @@ async function main() {
     return;
   }
   const liveDiscord = process.argv.includes("--live-discord");
+  const explicitSessionKey =
+    argValue("--session-key") || process.env.OPENCLAW_CODEX_DEVBOX_ACP_SESSION_KEY;
+  const explicitThreadId =
+    argValue("--thread-id") || process.env.OPENCLAW_CODEX_DEVBOX_ACP_DISCORD_THREAD_ID;
+  const explicitAccountId =
+    argValue("--account-id") || process.env.OPENCLAW_CODEX_DEVBOX_ACP_DISCORD_ACCOUNT_ID;
+  const discovered = discoverConfiguredDiscordBinding({
+    accountId: explicitAccountId,
+    label: argValue("--binding-label"),
+    threadId: explicitThreadId,
+  });
+  if (explicitSessionKey && explicitSessionKey.trim() !== discovered.sessionKey) {
+    fail("Explicit ACP session key does not match the configured Discord binding.");
+  }
   const config = {
-    bindingSessionKey: requiredConfigValue(
-      "ACP binding session key",
-      argValue("--session-key") || process.env.OPENCLAW_CODEX_DEVBOX_ACP_SESSION_KEY,
-    ),
-    discordThreadId: requiredConfigValue(
-      "Discord thread id",
-      argValue("--thread-id") || process.env.OPENCLAW_CODEX_DEVBOX_ACP_DISCORD_THREAD_ID,
-    ),
-    discordAccountId:
-      argValue("--account-id") ||
-      process.env.OPENCLAW_CODEX_DEVBOX_ACP_DISCORD_ACCOUNT_ID ||
-      "default",
+    bindingSessionKey: requiredConfigValue("ACP binding session key", discovered.sessionKey),
+    discordThreadId: requiredConfigValue("Discord thread id", discovered.threadId),
+    discordAccountId: discovered.accountId,
     discordTokenRbwItem:
       argValue("--rbw-item") || process.env.OPENCLAW_CODEX_DEVBOX_ACP_DISCORD_TOKEN_RBW_ITEM,
   };
 
-  console.log("=== codex-devbox ACP binding verification ===\n");
+  console.log("=== configured Discord ACP binding verification ===\n");
 
   if (liveDiscord) {
     const rbwItem = requiredConfigValue("Discord token rbw item", config.discordTokenRbwItem);

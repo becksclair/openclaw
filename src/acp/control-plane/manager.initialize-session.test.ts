@@ -1,5 +1,5 @@
 /** Tests ACP manager session initialization limits and persisted runtime options. */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AcpSessionManager,
   baseCfg,
@@ -163,5 +163,89 @@ describe("AcpSessionManager initializeSession", () => {
     expectRecordFields(closeInput.handle, {
       sessionKey: "agent:codex:acp:session-1",
     });
+  });
+
+  it("closes late runtime initialization without persisting metadata after abort", async () => {
+    const runtimeState = createRuntime();
+    let resolveEnsure:
+      | ((value: Awaited<ReturnType<typeof runtimeState.ensureSession>>) => void)
+      | undefined;
+    runtimeState.ensureSession.mockImplementationOnce(
+      async () =>
+        await new Promise((resolve) => {
+          resolveEnsure = resolve;
+        }),
+    );
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const controller = new AbortController();
+    const manager = new AcpSessionManager();
+    const initialization = manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:abort-init",
+      agent: "codex",
+      mode: "persistent",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(runtimeState.ensureSession).toHaveBeenCalledOnce());
+
+    controller.abort();
+    await expect(initialization).rejects.toThrow("ACP session initialization aborted");
+
+    resolveEnsure?.({
+      sessionKey: "agent:codex:acp:abort-init",
+      backend: "acpx",
+      runtimeSessionName: "late-runtime",
+    });
+    await vi.waitFor(() => expect(runtimeState.close).toHaveBeenCalledOnce());
+    expectRecordFields(mockCallArg(runtimeState.close), {
+      reason: "session-init-aborted",
+    });
+    expect(hoisted.upsertAcpSessionMetaMock).not.toHaveBeenCalled();
+  });
+
+  it("clears metadata persisted concurrently with an initialization abort", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    let resolvePersist: ((value: ReturnType<typeof readySessionMeta>) => void) | undefined;
+    hoisted.upsertAcpSessionMetaMock
+      .mockImplementationOnce(
+        async () =>
+          await new Promise((resolve) => {
+            resolvePersist = (acp) =>
+              resolve({
+                sessionKey: "agent:codex:acp:abort-persist",
+                storeSessionKey: "agent:codex:acp:abort-persist",
+                acp,
+              });
+          }),
+      )
+      .mockResolvedValueOnce(null);
+    const controller = new AbortController();
+    const manager = new AcpSessionManager();
+    const initialization = manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:abort-persist",
+      agent: "codex",
+      mode: "persistent",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledOnce());
+
+    controller.abort();
+    await expect(initialization).rejects.toThrow("ACP session initialization aborted");
+    resolvePersist?.(readySessionMeta());
+
+    await vi.waitFor(() => expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(2));
+    expect(runtimeState.close).toHaveBeenCalledOnce();
+    const cleanupCall = mockCallArg(hoisted.upsertAcpSessionMetaMock, 1) as {
+      mutate: () => unknown;
+    };
+    expect(cleanupCall.mutate()).toBeNull();
   });
 });

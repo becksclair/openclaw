@@ -157,8 +157,10 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
+    this.throwIfAborted(input.signal);
     await this.evictIdleRuntimeHandles(input.cfg);
-    return await this.withSessionActor(sessionKey, async () => {
+    const operation = this.withSessionActor(sessionKey, async () => {
+      this.throwIfAborted(input.signal);
       return await runManagerInitializeSession({
         input,
         sessionKey,
@@ -167,6 +169,37 @@ export class AcpSessionManager {
         enforceConcurrentSessionLimit: this.enforceConcurrentSessionLimit.bind(this),
         writeSessionMeta: this.writeSessionMeta.bind(this),
       });
+    });
+    const signal = input.signal;
+    if (!signal) {
+      return await operation;
+    }
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => signal.removeEventListener("abort", onAbort);
+      const settle = (callback: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        callback();
+      };
+      const onAbort = () => {
+        settle(() =>
+          reject(
+            new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session initialization aborted."),
+          ),
+        );
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      operation.then(
+        (value) => settle(() => resolve(value)),
+        (error: unknown) => settle(() => reject(error)),
+      );
+      if (signal.aborted) {
+        onAbort();
+      }
     });
   }
 

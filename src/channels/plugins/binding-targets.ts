@@ -21,6 +21,7 @@ import {
 export async function ensureConfiguredBindingTargetReady(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution | null;
+  signal?: AbortSignal;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!params.bindingResolution) {
     return { ok: true };
@@ -42,6 +43,7 @@ export async function ensureConfiguredBindingTargetReady(params: {
   return await driver.ensureReady({
     cfg: params.cfg,
     bindingResolution: params.bindingResolution,
+    signal: params.signal,
   });
 }
 
