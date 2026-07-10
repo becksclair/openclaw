@@ -632,6 +632,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(resolved.agents.codex).toContain(quoteArg("-c"));
     expect(resolved.agents.codex).toContain(quoteArg('model="gpt-5.4"'));
     const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
+    expect(isolatedConfig).toContain("[features]\ncode_mode = true\ncode_mode_host = true");
     expect(isolatedConfig).not.toContain("notify");
     expect(isolatedConfig).not.toContain("SkyComputerUseClient");
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");

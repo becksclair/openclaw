@@ -590,7 +590,11 @@ function parseCodexConfigValue(value) {
   try {
     return parseToml("value = " + value).value;
   } catch {
-    return value.trim().replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, "$1$2");
+    const trimmed = value.trim();
+    const quote = trimmed[0];
+    return (quote === '"' || quote === "'") && trimmed.at(-1) === quote
+      ? trimmed.slice(1, -1)
+      : trimmed;
   }
 }
 
