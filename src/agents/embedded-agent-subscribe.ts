@@ -11,7 +11,7 @@ import type { FenceScanState } from "../../packages/markdown-core/src/fences.js"
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { formatToolAggregate, isCommandToolName } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { findFinalTagMatches } from "../shared/text/final-tags.js";
@@ -238,6 +238,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     pendingToolAudioAsVoice: false,
     pendingToolTrustedLocalMedia: false,
     hasToolMediaBlockReply: false,
+    pendingToolSpokenText: undefined,
     visibleBlockReplyCount: 0,
     pendingAssistantReplyDirectives: undefined,
     deterministicApprovalPromptPending: false,
@@ -739,7 +740,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
   };
   const emitToolSummary = (toolName?: string, meta?: string) => {
-    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
+    // commandText "status" promises label-only command lines; drop the raw
+    // command meta so forced channel-progress summaries do not leak it.
+    const labelOnly = params.toolResultCommandText === "status" && isCommandToolName(toolName);
+    const agg = formatToolAggregate(toolName, !labelOnly && meta ? [meta] : undefined, {
       markdown: useMarkdown,
     });
     emitToolResultMessage(toolName, agg);
@@ -1245,6 +1249,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingToolMediaUrls = [];
     state.pendingToolAudioAsVoice = false;
     state.pendingToolTrustedLocalMedia = false;
+    state.pendingToolSpokenText = undefined;
     state.visibleBlockReplyCount = 0;
     state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
     clearDeferredAssistantEvents();

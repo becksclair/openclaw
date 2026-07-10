@@ -5,6 +5,7 @@ import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-opti
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
 } from "../../../auto-reply/reply-payload.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 
@@ -21,6 +22,7 @@ export function mergeAttemptToolMediaPayloads(params: {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
+  toolSpokenText?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): EmbeddedRunPayload[] | undefined {
   // Trim and dedupe tool media before merging with assistant-owned payload media.
@@ -32,6 +34,29 @@ export function mergeAttemptToolMediaPayloads(params: {
   }
 
   const payloads = params.payloads?.length ? [...params.payloads] : [];
+  const shouldDeliverTrustedVoiceMedia =
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    params.toolTrustedLocalMedia === true &&
+    params.toolAudioAsVoice === true &&
+    mediaUrls.length > 0;
+  if (shouldDeliverTrustedVoiceMedia) {
+    const existingMediaUrls = new Set(payloads.flatMap((payload) => payload.mediaUrls ?? []));
+    const deliverableMediaUrls = mediaUrls.filter((url) => !existingMediaUrls.has(url));
+    if (deliverableMediaUrls.length === 0) {
+      return payloads;
+    }
+    return [
+      ...payloads,
+      markReplyPayloadForSourceSuppressionDelivery({
+        mediaUrls: deliverableMediaUrls,
+        mediaUrl: deliverableMediaUrls[0],
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+        ...(params.toolSpokenText ? { spokenText: params.toolSpokenText } : {}),
+      }),
+    ];
+  }
+
   const payloadIndex = payloads.findIndex((payload) => !payload.isReasoning);
   if (payloadIndex >= 0) {
     const payload = payloads[payloadIndex];
@@ -51,6 +76,9 @@ export function mergeAttemptToolMediaPayloads(params: {
       mediaUrl: payload.mediaUrl ?? mergedMediaUrls[0],
       audioAsVoice: payload.audioAsVoice || params.toolAudioAsVoice || undefined,
       trustedLocalMedia: payload.trustedLocalMedia || params.toolTrustedLocalMedia || undefined,
+      ...((payload.spokenText ?? params.toolSpokenText)
+        ? { spokenText: payload.spokenText ?? params.toolSpokenText }
+        : {}),
     });
     return payloads;
   }
@@ -63,6 +91,7 @@ export function mergeAttemptToolMediaPayloads(params: {
       mediaUrl: mediaUrls[0],
       audioAsVoice: params.toolAudioAsVoice || undefined,
       trustedLocalMedia: params.toolTrustedLocalMedia || undefined,
+      ...(params.toolSpokenText ? { spokenText: params.toolSpokenText } : {}),
     },
   ];
 }

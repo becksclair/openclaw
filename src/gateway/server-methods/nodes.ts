@@ -1639,6 +1639,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         getHealthCache: context.getHealthCache,
         refreshHealthSnapshot: context.refreshHealthSnapshot,
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        getRuntimeSnapshot: context.getRuntimeSnapshot,
         authorizeNodeSystemRunEvent: (eventParams) =>
           context.nodeRegistry.authorizeSystemRunEvent({
             nodeId: eventParams.nodeId,

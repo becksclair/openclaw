@@ -930,6 +930,7 @@ async function resumeThread(
         model: response.model,
         modelProvider,
         historyCoveredThrough: new Date().toISOString(),
+        baseInstructionsSource: "external-thread",
       },
     });
     if (!committed) {

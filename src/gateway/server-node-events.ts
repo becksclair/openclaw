@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -16,10 +17,15 @@ import {
 } from "../infra/event-session-routing.js";
 import { updatePairedNodeMetadata } from "../infra/node-pairing.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
+import {
+  collectOwnNotificationIdentities,
+  isSelfAuthoredNotification,
+} from "./self-notification.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
@@ -55,11 +61,17 @@ const VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS = 1500;
 const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
 const EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
 const MAX_RECENT_EXEC_FINISHED_RUNS = 2000;
+const NOTIFICATION_WAKE_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
+const MAX_RECENT_NOTIFICATION_WAKE_SESSIONS = 2000;
 const NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS = 60_000;
 const MAX_RECENT_NODE_PRESENCE_KEYS = 1024;
 
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
 const recentExecFinishedRuns = new Map<string, number>();
+const recentNotificationWakeBySession = new Map<
+  string,
+  { fingerprint: string | null; ts: number }
+>();
 const recentNodePresencePersistAt = new Map<string, number>();
 
 export type NodeEventHandleResult = {
@@ -73,6 +85,31 @@ type NodeAgentCommandInput = Parameters<typeof agentCommandFromIngress>[0];
 
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
+}
+
+function shouldSuppressConsecutiveNotificationWake(
+  sessionKey: string,
+  fingerprint: string | null,
+  now = Date.now(),
+): boolean {
+  const previous = recentNotificationWakeBySession.get(sessionKey);
+  recentNotificationWakeBySession.set(sessionKey, { fingerprint, ts: now });
+
+  for (const [key, entry] of recentNotificationWakeBySession) {
+    if (
+      now - entry.ts > NOTIFICATION_WAKE_DEDUPE_WINDOW_MS ||
+      recentNotificationWakeBySession.size > MAX_RECENT_NOTIFICATION_WAKE_SESSIONS
+    ) {
+      recentNotificationWakeBySession.delete(key);
+    }
+  }
+
+  return (
+    fingerprint !== null &&
+    previous !== undefined &&
+    previous.fingerprint === fingerprint &&
+    now - previous.ts <= NOTIFICATION_WAKE_DEDUPE_WINDOW_MS
+  );
 }
 
 function dispatchNodeAgentCommand(
@@ -222,6 +259,7 @@ function pruneBoundedTimestampMap(
 export function resetNodeEventDeduplicationForTests() {
   recentVoiceTranscripts.clear();
   recentExecFinishedRuns.clear();
+  recentNotificationWakeBySession.clear();
   recentNodePresencePersistAt.clear();
 }
 
@@ -251,6 +289,32 @@ function compactNotificationEventText(raw: string) {
   }
   const safe = Math.max(1, MAX_NOTIFICATION_EVENT_TEXT_CHARS - 1);
   return `${sliceUtf16Safe(normalized, 0, safe)}…`;
+}
+
+type NotificationEventSessionTarget = {
+  sessionKey: string;
+  agentId?: string;
+};
+
+function resolveNotificationEventSessionTarget(params: {
+  cfg: OpenClawConfig;
+  explicitSessionKey?: string | null;
+}): NotificationEventSessionTarget {
+  const fallbackSessionKey = resolveMainSessionKey(params.cfg);
+  const sessionKeyRaw = normalizeOptionalString(params.explicitSessionKey) ?? fallbackSessionKey;
+  const loaded = loadSessionEntry(sessionKeyRaw);
+  if (sessionKeyRaw === fallbackSessionKey) {
+    return { sessionKey: fallbackSessionKey };
+  }
+  if (loaded.canonicalKey === "global") {
+    const parsed = parseAgentSessionKey(sessionKeyRaw);
+    return parsed
+      ? { sessionKey: loaded.canonicalKey, agentId: parsed.agentId }
+      : { sessionKey: loaded.canonicalKey };
+  }
+  return {
+    sessionKey: loaded.canonicalKey,
+  };
 }
 
 type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
@@ -646,8 +710,11 @@ export const handleNodeEvent = async (
         return undefined;
       }
       const key = sanitizeInboundSystemTags(keyRaw);
-      const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
-      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
+      const cfg = getRuntimeConfig();
+      const sessionTarget = resolveNotificationEventSessionTarget({
+        cfg,
+        explicitSessionKey: normalizeOptionalString(obj.sessionKey),
+      });
       const packageNameRaw = normalizeOptionalString(obj.packageName);
       const packageName = packageNameRaw ? sanitizeInboundSystemTags(packageNameRaw) : null;
       const title = compactNotificationEventText(
@@ -657,29 +724,79 @@ export const handleNodeEvent = async (
         sanitizeInboundSystemTags(normalizeOptionalString(obj.text) ?? ""),
       );
 
+      // Notifications that are actually one of our own agents posting on an
+      // active channel (e.g. Sky's Telegram message echoed back to Bex's phone)
+      // must not wake the heartbeat into reacting to its own output. Tag them so
+      // the runner routes them through the ignorable path.
+      const selfAuthoredNotification =
+        change === "posted" &&
+        isSelfAuthoredNotification({
+          title,
+          text,
+          identities: collectOwnNotificationIdentities({
+            cfg,
+            runtimeSnapshot: ctx.getRuntimeSnapshot?.() ?? null,
+          }),
+        });
+      const notificationContextKey = selfAuthoredNotification
+        ? `notification:self:${keyRaw}`
+        : `notification:${keyRaw}`;
+
       let summary = `Notification ${change} (node=${nodeId} key=${key}`;
       if (packageName) {
         summary += ` package=${packageName}`;
       }
       summary += ")";
+      let wakeDedupeFingerprint: string | null = null;
       if (change === "posted") {
         const messageParts = [title, text].filter(Boolean);
         if (messageParts.length > 0) {
           summary += `: ${messageParts.join(" - ")}`;
+          wakeDedupeFingerprint = `Notification ${change} (node=${nodeId}`;
+          if (packageName) {
+            wakeDedupeFingerprint += ` package=${packageName}`;
+          }
+          wakeDedupeFingerprint += `): ${messageParts.join(" - ")}`;
         }
       }
 
+      const eventRouting = resolveEventSessionRoutingPolicy({
+        cfg,
+        sessionKey: sessionTarget.sessionKey,
+      });
+      const eventSessionKey = resolveEventSessionKeyForPolicy(
+        sessionTarget.sessionKey,
+        eventRouting,
+      );
       const queued = enqueueSystemEvent(summary, {
-        sessionKey,
-        contextKey: `notification:${keyRaw}`,
+        sessionKey: eventSessionKey,
+        contextKey: notificationContextKey,
       });
       if (queued) {
-        requestHeartbeat({
+        const wakeDedupeSessionKey =
+          sessionTarget.agentId && eventSessionKey === "global"
+            ? `${eventSessionKey}\u0000agent:${sessionTarget.agentId}`
+            : eventSessionKey;
+        if (
+          shouldSuppressConsecutiveNotificationWake(wakeDedupeSessionKey, wakeDedupeFingerprint)
+        ) {
+          return undefined;
+        }
+        const notificationWakeOptions = {
           source: "notifications-event",
-          intent: "event",
+          intent: "immediate",
           reason: "notifications-event",
-          sessionKey,
-        });
+        } as const;
+        const wakeOptions = scopedHeartbeatWakeOptionsForPolicy(
+          sessionTarget.sessionKey,
+          notificationWakeOptions,
+          eventRouting,
+        );
+        requestHeartbeat(
+          sessionTarget.agentId && eventSessionKey === "global"
+            ? { ...wakeOptions, agentId: sessionTarget.agentId, sessionKey: eventSessionKey }
+            : wakeOptions,
+        );
       }
       return undefined;
     }

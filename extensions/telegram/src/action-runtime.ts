@@ -495,7 +495,7 @@ export async function handleTelegramAction(
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
       quoteText: quoteText ?? undefined,
-      asVoice: readBooleanParam(params, "asVoice"),
+      asVoice: readBooleanParam(params, "asVoice") ?? readBooleanParam(params, "audioAsVoice"),
       silent: readBooleanParam(params, "silent"),
       forceDocument:
         readBooleanParam(params, "forceDocument") ??

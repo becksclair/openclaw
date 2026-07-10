@@ -18,7 +18,10 @@ Native Talk is a continuous loop: listen for speech, send the transcript to the 
 
 Client-owned realtime Talk forwards provider tool calls through `talk.client.toolCall` instead of calling `chat.send` directly. While a realtime consult is active, clients can call `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`. Accepted steering queues into the active embedded run; rejected steering returns a reason such as `no_active_run`, `not_streaming`, or `compacting`.
 
-Transcription-only Talk emits the same Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. All Talk sessions broadcast events on the `talk.event` channel; clients subscribe to it for partial/final transcript updates (`transcript.delta`/`transcript.done`) and other session telemetry.
+Browser realtime Talk forwards provider tool calls through `talk.client.toolCall`; browser clients do not call `chat.send` directly for realtime consults. Gateway-owned realtime relay sessions execute opt-in direct tools server-side. Browser/client-owned realtime sessions remain consult/control-only.
+While a realtime consult is active, Talk clients can use `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`. Accepted steering is queued into the active embedded run; rejected steering returns a structured reason such as `no_active_run`, `not_streaming`, or `compacting`.
+
+Transcription-only Talk emits the same Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. All Talk sessions broadcast events on the `talk.event` channel; clients subscribe to it for partial/final transcript updates (`transcript.delta`/`transcript.done`) and other session telemetry. It is for captions, dictation, and observe-only speech capture; one-shot uploaded voice notes still use the [media understanding](/nodes/media-understanding) audio path.
 
 ## Behavior (macOS)
 
@@ -76,35 +79,77 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
       },
       instructions: "Speak warmly and keep answers brief.",
       mode: "realtime",
-      transport: "webrtc",
+      transport: "gateway-relay",
       brain: "agent-consult",
+      tools: {
+        profile: "voice",
+        deny: ["message"],
+      },
     },
   },
 }
 ```
 
-| Key                                      | Default                                    | Notes                                                                                                                                                                                                                                                                      |
-| ---------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `provider`                               | -                                          | Active Talk TTS provider. Use `elevenlabs`, `mlx`, or `system` for macOS-local playback paths.                                                                                                                                                                             |
-| `providers.<id>.voiceId`                 | -                                          | ElevenLabs falls back to `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID`, or the first available voice with an API key.                                                                                                                                                             |
-| `providers.elevenlabs.modelId`           | `eleven_v3`                                |                                                                                                                                                                                                                                                                            |
-| `providers.mlx.modelId`                  | `mlx-community/Soprano-80M-bf16`           |                                                                                                                                                                                                                                                                            |
-| `providers.elevenlabs.apiKey`            | -                                          | Falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).                                                                                                                                                                                                |
-| `speechLocale`                           | device default                             | BCP 47 locale id for on-device Talk speech recognition on iOS/macOS.                                                                                                                                                                                                       |
-| `silenceTimeoutMs`                       | `700` ms macOS/Android, `900` ms iOS       | Pause window before Talk sends the transcript.                                                                                                                                                                                                                             |
-| `interruptOnSpeech`                      | `true`                                     |                                                                                                                                                                                                                                                                            |
-| `outputFormat`                           | `pcm_44100` macOS/iOS, `pcm_24000` Android | Set `mp3_*` to force MP3 streaming.                                                                                                                                                                                                                                        |
-| `consultThinkingLevel`                   | unset                                      | Thinking level override for the agent run behind realtime `openclaw_agent_consult` calls.                                                                                                                                                                                  |
-| `consultFastMode`                        | unset                                      | Fast-mode override for realtime `openclaw_agent_consult` calls.                                                                                                                                                                                                            |
-| `realtime.provider`                      | -                                          | `openai` for WebRTC, `google` for provider WebSocket, or a bridge-only provider through Gateway relay.                                                                                                                                                                     |
-| `realtime.providers.<id>`                | -                                          | Provider-owned realtime config. Browsers receive only ephemeral/constrained session credentials, never a standard API key.                                                                                                                                                 |
-| `realtime.providers.openai.speakerVoice` | `alloy`                                    | Built-in OpenAI Realtime voice id (the older `voice` key still works but is deprecated). Current `gpt-realtime-2.1` voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse`; `marin` and `cedar` are recommended for best quality. |
-| `realtime.transport`                     | -                                          | `webrtc`: client-owned OpenAI WebRTC on iOS and in the browser. `provider-websocket`: browser-owned, stays on Gateway relay on iOS. `gateway-relay`: keeps provider audio on the Gateway; Android uses realtime only with this transport.                                  |
-| `realtime.brain`                         | -                                          | `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility; `none` is for transcription/external orchestration.                                                                                                 |
-| `realtime.consultRouting`                | -                                          | `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` routes finalized user transcripts through OpenClaw instead.                                                                                          |
-| `realtime.instructions`                  | -                                          | Appends provider-facing system instructions to OpenClaw's built-in realtime prompt (voice style/tone); the default `openclaw_agent_consult` guidance stays.                                                                                                                |
+| Key                                                                       | Default                                    | Notes                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`                                                                | -                                          | Active Talk TTS provider. Use `elevenlabs`, `mlx`, or `system` for macOS-local playback paths.                                                                                                                                                                             |
+| `providers.<id>.voiceId`                                                  | -                                          | ElevenLabs falls back to `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID`, or the first available voice with an API key.                                                                                                                                                             |
+| `providers.elevenlabs.modelId`                                            | `eleven_v3`                                |                                                                                                                                                                                                                                                                            |
+| `providers.mlx.modelId`                                                   | `mlx-community/Soprano-80M-bf16`           |                                                                                                                                                                                                                                                                            |
+| `providers.elevenlabs.apiKey`                                             | -                                          | Falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).                                                                                                                                                                                                |
+| `speechLocale`                                                            | device default                             | BCP 47 locale id for on-device Talk speech recognition on iOS/macOS.                                                                                                                                                                                                       |
+| `silenceTimeoutMs`                                                        | `700` ms macOS/Android, `900` ms iOS       | Pause window before Talk sends the transcript.                                                                                                                                                                                                                             |
+| `interruptOnSpeech`                                                       | `true`                                     |                                                                                                                                                                                                                                                                            |
+| `outputFormat`                                                            | `pcm_44100` macOS/iOS, `pcm_24000` Android | Set `mp3_*` to force MP3 streaming.                                                                                                                                                                                                                                        |
+| `consultThinkingLevel`                                                    | unset                                      | Thinking level override for the agent run behind realtime `openclaw_agent_consult` calls.                                                                                                                                                                                  |
+| `consultFastMode`                                                         | unset                                      | Fast-mode override for realtime `openclaw_agent_consult` calls.                                                                                                                                                                                                            |
+| `realtime.provider`                                                       | -                                          | `openai` for WebRTC, `google` for provider WebSocket, or a bridge-only provider through Gateway relay.                                                                                                                                                                     |
+| `realtime.providers.<id>`                                                 | -                                          | Provider-owned realtime config. Browsers receive only ephemeral/constrained session credentials, never a standard API key.                                                                                                                                                 |
+| `realtime.providers.openai.speakerVoice`                                  | `alloy`                                    | Built-in OpenAI Realtime voice id (the older `voice` key still works but is deprecated). Current `gpt-realtime-2.1` voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse`; `marin` and `cedar` are recommended for best quality. |
+| `realtime.transport`                                                      | -                                          | `webrtc`: client-owned OpenAI WebRTC on iOS and in the browser. `provider-websocket`: browser-owned, stays on Gateway relay on iOS. `gateway-relay`: keeps provider audio on the Gateway; Android uses realtime only with this transport.                                  |
+| `realtime.brain`                                                          | -                                          | `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility; `none` is for transcription/external orchestration.                                                                                                 |
+| `realtime.consultRouting`                                                 | -                                          | `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` routes finalized user transcripts through OpenClaw instead.                                                                                          |
+| `realtime.instructions`                                                   | -                                          | Appends provider-facing system instructions to OpenClaw's built-in realtime prompt (voice style/tone); the default `openclaw_agent_consult` guidance stays.                                                                                                                |
+| `realtime.tools`                                                          | -                                          | Optional direct-tool policy for Gateway-owned realtime relay sessions. When unset, realtime Talk exposes only `openclaw_agent_consult` and `openclaw_agent_control`.                                                                                                       |
+| `realtime.tools.profile`                                                  | -                                          | Accepts the normal tool profiles, including `voice`. It is applied inside the already-effective agent/provider/global policy boundary. The `voice` profile starts broad for local-user voice use and can be trimmed with `deny`.                                           |
+| `realtime.tools.allow`, `realtime.tools.alsoAllow`, `realtime.tools.deny` | -                                          | Use the same policy semantics as agent tool config. `deny` wins over profile, allow, alsoAllow, plugin, and MCP grants.                                                                                                                                                    |
+| `providers.google.volumeGain`                                             | `1.2`                                      | Local PCM gain for Google batch TTS Talk playback. Use a higher value such as `2` for quiet small-speaker devices.                                                                                                                                                         |
 
 `talk.catalog` exposes canonical provider ids and registry aliases, each provider's valid modes/transports/brain strategies/realtime audio formats/capability flags, and the runtime-selected readiness result. First-party Talk clients should read that catalog instead of maintaining provider aliases locally; treat an older Gateway that omits group readiness as unverified rather than definitively unconfigured. Streaming transcription providers are discovered through `talk.catalog.transcription`; the current Gateway relay uses the Voice Call streaming provider config until a dedicated Talk transcription config surface ships.
+
+## Gateway Realtime Context
+
+Gateway-owned realtime relay sessions can use an agent-owned voice prompt file at `<agentDir>/voice-agent-base.md`. OpenClaw reads the file exactly when it exists and never generates, migrates, overwrites, or patches it. Runtime session context is appended outside that file.
+
+Realtime context is built from the current OpenClaw session when a session key is available. The context packet includes bounded projected recent history, session metadata, and the latest successful projected `message` tool mirror when present. The model can use that mirror as context, but realtime voice never exposes message-sending tools.
+
+Large sessions switch to summary mode after `100000` fresh session tokens. OpenClaw uses existing compaction summaries first, then falls back to a fast summary helper, then to a last-10-message summary, and finally to a plain degraded-context note with the exact recent tail. Summary failures do not fail realtime session startup.
+
+## Direct Realtime Tools
+
+Direct realtime tools are opt-in and available only for Gateway-owned `gateway-relay` sessions. The relay builds tools from `talk.realtime.tools`, sends the provider compact JSON schemas, executes matching tool calls on the server, and submits compact JSON-safe tool results back to the provider.
+
+Message-sending tools are excluded even when `profile: "full"` or `profile: "voice"` would otherwise allow them. `openclaw_agent_consult` and `openclaw_agent_control` are reserved for the built-in consult/control flow.
+
+Example:
+
+```json5
+{
+  talk: {
+    realtime: {
+      provider: "openai",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      tools: {
+        profile: "voice",
+        deny: ["exec"],
+      },
+    },
+  },
+}
+```
+
+Use `profile: "full"` only when the voice surface should intentionally expose the broad effective local-user tool set. Keep `deny` rules close to the Talk config so voice-specific trims stay visible.
 
 ## macOS UI
 

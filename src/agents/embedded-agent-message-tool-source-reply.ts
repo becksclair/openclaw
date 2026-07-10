@@ -558,6 +558,12 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
     return false;
   }
   const args = asRecord(params.args);
+  // progress:true marks a mid-turn status ping, not the final source reply.
+  // Without this opt-out, a delivered progress send terminates the agent turn
+  // in message_tool_only mode (Codex app-server releases on source-reply delivery).
+  if (args.progress === true) {
+    return false;
+  }
   const sourceRouteReplyAction =
     params.allowExplicitSourceRoute === true && isMessageToolSourceReplyActionName(args.action);
   if (!isMessageToolSendActionName(args.action) && !sourceRouteReplyAction) {

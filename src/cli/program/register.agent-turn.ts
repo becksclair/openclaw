@@ -43,7 +43,7 @@ export function registerAgentTurnCommand(
     .option("--model <id>", "Model override for this run (provider/model or model id)")
     .option(
       "--thinking <level>",
-      "Thinking level: off | minimal | low | medium | high | xhigh | adaptive | max where supported",
+      "Thinking level: off | minimal | low | medium | high | xhigh | adaptive | max | ultra where supported",
     )
     .option("--verbose <on|off>", "Persist agent verbose level for the session")
     .option(

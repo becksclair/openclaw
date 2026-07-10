@@ -3,6 +3,7 @@ package ai.openclaw.app
 import android.content.Context
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -156,6 +157,80 @@ class SecurePrefsTest {
     assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
     assertEquals("light", plainPrefs.getString("appearance.themeMode", null))
     assertEquals(AppearanceThemeMode.Light, SecurePrefs(context, securePrefs).appearanceThemeMode.value)
+  }
+
+  @Test
+  fun wearTargetSessionKey_defaultsToCurrentSessionAndPersistsOverride() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    assertNull(prefs.wearTargetSessionKey.value)
+
+    prefs.setWearTargetSessionKey(" custom-session ")
+
+    assertEquals("custom-session", prefs.wearTargetSessionKey.value)
+    assertEquals("custom-session", SecurePrefs(context).wearTargetSessionKey.value)
+
+    prefs.setWearTargetSessionKey("")
+
+    assertNull(prefs.wearTargetSessionKey.value)
+    assertFalse(plainPrefs.contains("wear.targetSessionKey"))
+
+    prefs.setWearTargetSessionKey(" global ")
+
+    assertEquals("global", prefs.wearTargetSessionKey.value)
+    assertEquals("global", plainPrefs.getString("wear.targetSessionKey", null))
+
+    prefs.setWearTargetSessionKey("main")
+
+    assertNull(prefs.wearTargetSessionKey.value)
+    assertFalse(plainPrefs.contains("wear.targetSessionKey"))
+
+    plainPrefs.edit().putString("wear.targetSessionKey", " main ").commit()
+    val migratedPrefs = SecurePrefs(context)
+
+    assertNull(migratedPrefs.wearTargetSessionKey.value)
+    assertFalse(plainPrefs.contains("wear.targetSessionKey"))
+  }
+
+  @Test
+  fun sessionTargetMode_defaultsToFollowSelectedAndPersistsSelection() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    assertEquals(SessionTargetMode.FollowSelected, prefs.sessionTargetMode.value)
+    assertEquals("followSelected", plainPrefs.getString("session.targetMode", null))
+
+    prefs.setSessionTargetMode(SessionTargetMode.Device)
+
+    assertEquals(SessionTargetMode.Device, prefs.sessionTargetMode.value)
+    assertEquals("device", plainPrefs.getString("session.targetMode", null))
+    assertEquals(SessionTargetMode.Device, SecurePrefs(context).sessionTargetMode.value)
+  }
+
+  @Test
+  fun sessionTargetModeMigrationClearsLegacyWearOverrideOnce() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs
+      .edit()
+      .clear()
+      .putString("wear.targetSessionKey", "agent:sky:direct:bex")
+      .commit()
+
+    val migratedPrefs = SecurePrefs(context)
+
+    assertEquals(SessionTargetMode.FollowSelected, migratedPrefs.sessionTargetMode.value)
+    assertNull(migratedPrefs.wearTargetSessionKey.value)
+    assertFalse(plainPrefs.contains("wear.targetSessionKey"))
+
+    migratedPrefs.setWearTargetSessionKey("agent:sky:direct:bex")
+
+    assertEquals("agent:sky:direct:bex", SecurePrefs(context).wearTargetSessionKey.value)
   }
 
   @Test

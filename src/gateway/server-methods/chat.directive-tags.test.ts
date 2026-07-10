@@ -26,6 +26,7 @@ import { getAgentRunContext } from "../../infra/agent-events.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createChatFinalAudioRegistry } from "../chat-final-audio.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -68,6 +69,7 @@ const mockState = vi.hoisted(() => ({
       isError?: boolean;
     };
   }>,
+  routeFinalViaReplyOptions: false,
   dispatchError: null as Error | null,
   dispatchWait: null as Promise<void> | null,
   dispatchErrorAfterAgentRunStart: null as Error | null,
@@ -88,6 +90,12 @@ const mockState = vi.hoisted(() => ({
   lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
   lastDispatchImageOrder: undefined as string[] | undefined,
   lastDispatchThinkingLevelOverride: undefined as string | undefined,
+  lastDispatchReplyOptions: undefined as
+    | {
+        thinkingLevelOverride?: string;
+        fastModeOverride?: unknown;
+      }
+    | undefined,
   lastDispatchUserTurnInput: undefined as unknown,
   modelCatalog: null as ModelCatalogEntry[] | null,
   emittedTranscriptUpdates: [] as Array<{
@@ -235,6 +243,17 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       ) => void;
       replyOptions?: {
         onAgentRunStart?: (runId: string) => void;
+        onFinalReplyPayload?: (payload: {
+          text?: string;
+          mediaUrl?: string;
+          mediaUrls?: string[];
+          spokenText?: string;
+          ttsSupplement?: { spokenText: string };
+          audioAsVoice?: boolean;
+          trustedLocalMedia?: boolean;
+          isReasoning?: boolean;
+          isError?: boolean;
+        }) => Promise<void> | void;
         userTurnTranscriptRecorder?: {
           message?: unknown;
           resolveMessage?: () => Promise<unknown>;
@@ -244,12 +263,14 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         images?: Array<{ mimeType: string; data: string }>;
         imageOrder?: string[];
         thinkingLevelOverride?: string;
+        fastModeOverride?: unknown;
       };
     }) => {
       mockState.lastDispatchCtx = params.ctx;
       mockState.lastDispatchImages = params.replyOptions?.images;
       mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
       mockState.lastDispatchThinkingLevelOverride = params.replyOptions?.thinkingLevelOverride;
+      mockState.lastDispatchReplyOptions = params.replyOptions;
       const recorder = params.replyOptions?.userTurnTranscriptRecorder;
       mockState.lastDispatchUserTurnInput = recorder?.resolveMessage
         ? await recorder.resolveMessage()
@@ -289,6 +310,10 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           }
           if (reply.kind === "block") {
             params.dispatcher.sendBlockReply(reply.payload);
+            continue;
+          }
+          if (mockState.routeFinalViaReplyOptions) {
+            await params.replyOptions?.onFinalReplyPayload?.(reply.payload);
             continue;
           }
           params.dispatcher.sendFinalReply(reply.payload);
@@ -689,6 +714,7 @@ function createChatContext(): Pick<
   | "chatDeltaLastBroadcastText"
   | "agentDeltaSentAt"
   | "bufferedAgentEvents"
+  | "chatFinalAudio"
   | "chatAbortedRuns"
   | "clearChatRunState"
   | "addChatRun"
@@ -713,6 +739,7 @@ function createChatContext(): Pick<
     chatDeltaLastBroadcastText: new Map(),
     agentDeltaSentAt: new Map(),
     bufferedAgentEvents: new Map(),
+    chatFinalAudio: createChatFinalAudioRegistry(),
     chatAbortedRuns: new Map(),
     clearChatRunState: vi.fn(),
     addChatRun: vi.fn(),
@@ -745,6 +772,7 @@ function createChatContext(): Pick<
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
     logGateway: {
+      info: vi.fn(),
       warn: vi.fn(),
       debug: vi.fn(),
       error: vi.fn(),
@@ -830,6 +858,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.finalText = "[[reply_to_current]]";
     mockState.finalPayload = null;
     mockState.dispatchedReplies = [];
+    mockState.routeFinalViaReplyOptions = false;
     mockState.dispatchError = null;
     mockState.dispatchWait = null;
     mockState.dispatchErrorAfterAgentRunStart = null;
@@ -847,6 +876,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.lastDispatchImages = undefined;
     mockState.lastDispatchImageOrder = undefined;
     mockState.lastDispatchThinkingLevelOverride = undefined;
+    mockState.lastDispatchReplyOptions = undefined;
     mockState.lastDispatchUserTurnInput = undefined;
     mockState.modelCatalog = null;
     mockState.emittedTranscriptUpdates = [];
@@ -1355,6 +1385,228 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(assistantUpdates[0]?.message)).not.toContain(
       "This text is already in the model transcript.",
     );
+
+    const finalAudioRespond = vi.fn();
+    await chatHandlers["chat.finalAudio.get"]({
+      params: {
+        sessionKey: "main",
+        runId: "idem-agent-tts",
+      },
+      respond: finalAudioRespond as unknown as Parameters<
+        (typeof chatHandlers)["chat.finalAudio.get"]
+      >[0]["respond"],
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const finalAudioCall = lastRespondCall(finalAudioRespond);
+    expect(finalAudioCall?.[0]).toBe(true);
+    expect(finalAudioCall?.[1]).toEqual({
+      found: true,
+      audioBase64: Buffer.from([0xff, 0xfb, 0x90, 0x00]).toString("base64"),
+      outputFormat: "mp3",
+      mimeType: "audio/mpeg",
+      fileExtension: ".mp3",
+      spokenText: "This text is already in the model transcript.",
+    });
+    expect(finalAudioCall?.[2]).toBeUndefined();
+  });
+
+  it("registers default global final audio without requiring a hidden default agent id", async () => {
+    const transcriptDir = await createTranscriptFixture("openclaw-chat-send-global-tts-final-");
+    const audioPath = path.join(transcriptDir, "global-tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+        list: [{ id: "main", default: true }],
+      },
+      session: { scope: "global" },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          spokenText: "Global speech.",
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+          ttsSupplement: { spokenText: "Global speech." },
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "global",
+      idempotencyKey: "idem-global-tts",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const finalAudioRespond = vi.fn();
+    await chatHandlers["chat.finalAudio.get"]({
+      params: {
+        sessionKey: "global",
+        runId: "idem-global-tts",
+      },
+      respond: finalAudioRespond as unknown as Parameters<
+        (typeof chatHandlers)["chat.finalAudio.get"]
+      >[0]["respond"],
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const finalAudioCall = lastRespondCall(finalAudioRespond);
+    expect(finalAudioCall?.[0]).toBe(true);
+    expect(finalAudioCall?.[1]).toEqual({
+      found: true,
+      audioBase64: Buffer.from([0xff, 0xfb, 0x90, 0x00]).toString("base64"),
+      outputFormat: "mp3",
+      mimeType: "audio/mpeg",
+      fileExtension: ".mp3",
+      spokenText: "Global speech.",
+    });
+    expect(finalAudioCall?.[2]).toBeUndefined();
+  });
+
+  it("registers trusted TTS tool audio even when spoken text is not on the media payload", async () => {
+    const transcriptDir = await createTranscriptFixture("openclaw-chat-send-agent-tts-tool-");
+    const audioPath = path.join(transcriptDir, "tool-tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "tool",
+        payload: {
+          text: "(spoken) Tool generated speech.",
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-tool-tts",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const finalAudioRespond = vi.fn();
+    await chatHandlers["chat.finalAudio.get"]({
+      params: {
+        sessionKey: "main",
+        runId: "idem-agent-tool-tts",
+      },
+      respond: finalAudioRespond as unknown as Parameters<
+        (typeof chatHandlers)["chat.finalAudio.get"]
+      >[0]["respond"],
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const finalAudioCall = lastRespondCall(finalAudioRespond);
+    expect(finalAudioCall?.[0]).toBe(true);
+    expect(finalAudioCall?.[1]).toEqual({
+      found: true,
+      audioBase64: Buffer.from([0xff, 0xfb, 0x90, 0x00]).toString("base64"),
+      outputFormat: "mp3",
+      mimeType: "audio/mpeg",
+      fileExtension: ".mp3",
+      spokenText: "Tool generated speech.",
+    });
+    expect(finalAudioCall?.[2]).toBeUndefined();
+  });
+
+  it("registers trusted final TTS audio before routed delivery bypasses the webchat dispatcher", async () => {
+    const transcriptDir = await createTranscriptFixture("openclaw-chat-send-routed-tts-");
+    const audioPath = path.join(transcriptDir, "routed-tts.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.routeFinalViaReplyOptions = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          mediaUrl: audioPath,
+          mediaUrls: [audioPath],
+          spokenText: "Routed speech.",
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+          ttsSupplement: { spokenText: "Routed speech." },
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-routed-tts",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const finalAudioRespond = vi.fn();
+    await chatHandlers["chat.finalAudio.get"]({
+      params: {
+        sessionKey: "main",
+        runId: "idem-routed-tts",
+      },
+      respond: finalAudioRespond as unknown as Parameters<
+        (typeof chatHandlers)["chat.finalAudio.get"]
+      >[0]["respond"],
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const finalAudioCall = lastRespondCall(finalAudioRespond);
+    expect(finalAudioCall?.[0]).toBe(true);
+    expect(finalAudioCall?.[1]).toEqual({
+      found: true,
+      audioBase64: Buffer.from([0xff, 0xfb, 0x90, 0x00]).toString("base64"),
+      outputFormat: "mp3",
+      mimeType: "audio/mpeg",
+      fileExtension: ".mp3",
+      spokenText: "Routed speech.",
+    });
+    expect(finalAudioCall?.[2]).toBeUndefined();
   });
 
   it("does not mirror agent-run stale media final text from live delivery", async () => {
@@ -4341,6 +4593,74 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx).toBeUndefined();
   });
 
+  it("rejects forged spawnedBy lineage before dispatch", async () => {
+    const fixtureDir = await createTranscriptFixture("openclaw-chat-send-spawned-by-forge-");
+    const storePath = path.join(fixtureDir, "sessions.json");
+    fs.writeFileSync(storePath, JSON.stringify({}), "utf-8");
+    mockState.config = { session: { store: storePath } };
+    mockState.sessionEntry = { canonicalKey: "agent:main:child" };
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "agent:main:child",
+      idempotencyKey: "idem-spawned-by-forge",
+      client: createScopedCliClient(["operator.write"]),
+      requestParams: {
+        spawnedBy: "agent:main:parent",
+      },
+      expectBroadcast: false,
+      waitForCompletion: false,
+    });
+
+    const [ok, _payload, error] = lastRespondCall(respond) ?? [];
+    expect(ok).toBe(false);
+    expect(error?.message).toBe("chat.send spawnedBy does not match session lineage");
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+  });
+
+  it("accepts spawnedBy lineage from an existing visible session row", async () => {
+    const fixtureDir = await createTranscriptFixture("openclaw-chat-send-spawned-by-valid-");
+    const storePath = path.join(fixtureDir, "sessions.json");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:child": {
+          sessionId: mockState.sessionId,
+          sessionFile: mockState.transcriptPath,
+          spawnedBy: "agent:main:parent",
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+    mockState.config = { session: { store: storePath } };
+    mockState.sessionEntry = { canonicalKey: "agent:main:child" };
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "agent:main:child",
+      idempotencyKey: "idem-spawned-by-valid",
+      client: createScopedCliClient(["operator.write"]),
+      requestParams: {
+        spawnedBy: "agent:main:parent",
+      },
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    await waitForAssertion(() => {
+      expect(mockState.lastDispatchCtx?.SpawnedBy).toBe("agent:main:parent");
+    });
+  });
+
   it("rejects reserved system provenance fields for non-ACP clients", async () => {
     await createTranscriptFixture("openclaw-chat-send-system-provenance-reject-");
     mockState.finalText = "ok";
@@ -4479,6 +4799,36 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx?.GatewayClientScopes).toStrictEqual([]);
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("/scopecheck");
+  });
+
+  it("passes thinking as a dispatch override without rewriting the command body", async () => {
+    await createTranscriptFixture("openclaw-chat-send-thinking-override-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-chat-send-thinking-override",
+      message: "reply with pong",
+      requestParams: {
+        thinking: "low",
+        fastMode: true,
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.Body).toBe("reply with pong");
+    expect(mockState.lastDispatchCtx?.CommandBody).toBe("reply with pong");
+    expect(mockState.lastDispatchCtx?.CommandSource).toBeUndefined();
+    expect(mockState.lastDispatchReplyOptions?.thinkingLevelOverride).toBe("low");
+    expect(mockState.lastDispatchReplyOptions?.fastModeOverride).toBe(true);
+    expect(context.logGateway.info).toHaveBeenCalledWith(
+      expect.stringContaining("chat.send thinking override"),
+    );
+    expect(context.logGateway.info).toHaveBeenCalledWith(expect.stringContaining("thinking=low"));
+    expect(context.logGateway.info).toHaveBeenCalledWith(expect.stringContaining("fastMode=true"));
   });
 
   it("injects ACP system provenance into the agent-visible body", async () => {

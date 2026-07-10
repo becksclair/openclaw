@@ -104,6 +104,7 @@ export type RealtimeTalkTransport = {
 export type RealtimeTalkTransportContext = {
   client: GatewayBrowserClient;
   sessionKey: string;
+  spawnedBy?: string;
   callbacks: RealtimeTalkCallbacks;
   inputDeviceId?: string;
   consultThinkingLevel?: string;
@@ -564,6 +565,7 @@ export async function submitRealtimeTalkConsult(params: {
       "talk.client.toolCall",
       {
         sessionKey: ctx.sessionKey,
+        ...(ctx.spawnedBy ? { spawnedBy: ctx.spawnedBy } : {}),
         callId,
         name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
         args,

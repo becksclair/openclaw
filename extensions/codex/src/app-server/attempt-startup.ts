@@ -116,16 +116,22 @@ export async function startCodexAttemptThread(params: {
   dynamicTools: CodexDynamicToolSpec[];
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
+  baseInstructions?: string;
+  baseInstructionsSource?: Parameters<typeof startOrResumeThread>[0]["baseInstructionsSource"];
+  baseInstructionsFingerprint?: string;
   developerInstructions: string | undefined;
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayGeneration?: string;
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
   nativeToolSurfaceEnabled: boolean;
+  userMcpServersEnabled: boolean;
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   sandboxExecServerEnabled: boolean;
   sandbox: CodexSandboxContext;
   contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
+  contextEngineProjectionTokenBudget?: number | null;
+  contextEngineProjectionMaxChars?: number | null;
   startupTimeoutMs: number;
   signal: AbortSignal;
   onStartupTimeout: () => void | Promise<void>;
@@ -170,8 +176,7 @@ export async function startCodexAttemptThread(params: {
           : undefined;
         const computerUseMcpElicitationDelegationRequired = params.computerUseConfig.enabled;
         const mcpElicitationDelegationRequired =
-          resolvedPluginPolicy?.enabled === true ||
-          computerUseMcpElicitationDelegationRequired;
+          resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
         const enabledPluginConfigKeys = resolvedPluginPolicy
           ? resolvedPluginPolicy.pluginPolicies
               .filter((plugin) => plugin.enabled)
@@ -231,12 +236,14 @@ export async function startCodexAttemptThread(params: {
               config: params.config,
             });
             const turnRouter = getCodexAppServerTurnRouter(activeStartupClient);
-            await ensureCodexComputerUse({
-              client: activeStartupClient,
-              pluginConfig: params.pluginConfig,
-              timeoutMs: params.appServer.requestTimeoutMs,
-              signal: startupAbandonController.signal,
-            });
+            if (params.computerUseConfig.enabled === true) {
+              await ensureCodexComputerUse({
+                client: activeStartupClient,
+                pluginConfig: params.pluginConfig,
+                timeoutMs: params.appServer.requestTimeoutMs,
+                signal: startupAbandonController.signal,
+              });
+            }
             const startupRuntimeIdentity = activeStartupClient.getRuntimeIdentity();
             const pluginAppCacheKey = buildCodexPluginAppCacheKey({
               appServer: params.appServer,
@@ -368,6 +375,9 @@ export async function startCodexAttemptThread(params: {
                 persistentWebSearchAllowed: params.persistentWebSearchAllowed,
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
+                baseInstructions: params.baseInstructions,
+                baseInstructionsSource: params.baseInstructionsSource,
+                baseInstructionsFingerprint: params.baseInstructionsFingerprint,
                 developerInstructions: params.developerInstructions,
                 config: threadConfig,
                 finalConfigPatch: params.finalConfigPatch,
@@ -376,12 +386,14 @@ export async function startCodexAttemptThread(params: {
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
-                userMcpServersEnabled: params.nativeToolSurfaceEnabled,
+                userMcpServersEnabled: params.userMcpServersEnabled,
                 mcpServersFingerprint: params.bundleMcpThreadConfig.fingerprint,
                 mcpServersFingerprintEvaluated: params.bundleMcpThreadConfig.evaluated,
                 environmentSelection: startupEnvironmentSelection,
                 appServerRuntimeFingerprint,
                 contextEngineProjection: params.contextEngineProjection,
+                contextEngineProjectionTokenBudget: params.contextEngineProjectionTokenBudget,
+                contextEngineProjectionMaxChars: params.contextEngineProjectionMaxChars,
                 signal,
                 pluginThreadConfig: pluginThreadConfigRequired
                   ? {

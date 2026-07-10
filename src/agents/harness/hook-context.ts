@@ -1,6 +1,7 @@
 /**
  * Builds plugin hook context metadata for native agent harness events.
  */
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { buildAgentHookContextIdentityFields } from "../../plugins/hook-agent-context.js";
@@ -28,6 +29,9 @@ export type AgentHarnessHookContext = {
   modelId?: string;
   messageProvider?: string;
   trigger?: string;
+  fastMode?: FastMode;
+  fastModeStartedAtMs?: number;
+  fastModeAutoOnSeconds?: number;
   channelId?: string;
   contextTokenBudget?: number;
   contextWindowSource?: PluginHookContextWindowSource;
@@ -54,6 +58,13 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
     ...(params.channel ? { channel: params.channel } : {}),
     ...(params.trigger ? { trigger: params.trigger } : {}),
+    ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
+    ...(params.fastModeStartedAtMs !== undefined
+      ? { fastModeStartedAtMs: params.fastModeStartedAtMs }
+      : {}),
+    ...(params.fastModeAutoOnSeconds !== undefined
+      ? { fastModeAutoOnSeconds: params.fastModeAutoOnSeconds }
+      : {}),
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.contextTokenBudget ? { contextTokenBudget: params.contextTokenBudget } : {}),
     ...(params.contextWindowSource ? { contextWindowSource: params.contextWindowSource } : {}),

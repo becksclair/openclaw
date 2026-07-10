@@ -33,6 +33,7 @@ import type {
   TalkRealtimeConfig,
 } from "../../config/types.gateway.js";
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
+import { transcodeAudioBufferToOpus } from "../../media/audio-transcode.js";
 import { resolveProviderRawConfig } from "../../plugin-sdk/provider-selection-runtime.js";
 import { canonicalizeRealtimeTranscriptionProviderId } from "../../realtime-transcription/provider-registry.js";
 import {
@@ -72,6 +73,103 @@ type TalkSpeakReason =
   | "method_unavailable"
   | "synthesis_failed"
   | "invalid_audio_result";
+const MAX_TALK_SPEAK_OPUS_TRANSCODES = 2;
+const MAX_PENDING_TALK_SPEAK_OPUS_TRANSCODES = 8;
+let activeTalkSpeakOpusTranscodes = 0;
+type OpusTranscodeWaiter = {
+  resolve: () => void;
+  reject: (error: Error) => void;
+  cancelled: boolean;
+};
+const pendingTalkSpeakOpusTranscodes: OpusTranscodeWaiter[] = [];
+
+class TalkSpeakOpusTranscodeBusyError extends Error {
+  constructor() {
+    super("talk.speak Opus transcode queue is full");
+    this.name = "TalkSpeakOpusTranscodeBusyError";
+  }
+}
+
+class TalkSpeakOpusTranscodeQueueClearedError extends Error {
+  constructor() {
+    super("talk.speak Opus transcode queue cleared for test");
+    this.name = "TalkSpeakOpusTranscodeQueueClearedError";
+  }
+}
+
+function releaseNextOpusTranscodeWaiter(): void {
+  // Pop dead waiters (e.g. caller went away). Each slot freed only counts once
+  // we hand it to a live waiter, otherwise the slot accounting can leak.
+  while (pendingTalkSpeakOpusTranscodes.length > 0) {
+    const next = pendingTalkSpeakOpusTranscodes.shift();
+    if (!next || next.cancelled) {
+      continue;
+    }
+    activeTalkSpeakOpusTranscodes++;
+    next.resolve();
+    return;
+  }
+}
+
+async function withTalkSpeakOpusTranscodeSlot<T>(
+  fn: () => Promise<T>,
+  timeoutMs?: number,
+): Promise<T> {
+  if (activeTalkSpeakOpusTranscodes >= MAX_TALK_SPEAK_OPUS_TRANSCODES) {
+    if (pendingTalkSpeakOpusTranscodes.length >= MAX_PENDING_TALK_SPEAK_OPUS_TRANSCODES) {
+      throw new TalkSpeakOpusTranscodeBusyError();
+    }
+    // Bound the queue wait to the caller's TTS deadline so a vanished/timed-out
+    // caller is dropped from the queue instead of consuming a real slot later.
+    await new Promise<void>((resolve, reject) => {
+      const waiter: OpusTranscodeWaiter = { resolve, reject, cancelled: false };
+      const timer =
+        timeoutMs && timeoutMs > 0
+          ? setTimeout(() => {
+              const index = pendingTalkSpeakOpusTranscodes.indexOf(waiter);
+              if (index >= 0) {
+                pendingTalkSpeakOpusTranscodes.splice(index, 1);
+              }
+              reject(new TalkSpeakOpusTranscodeBusyError());
+            }, timeoutMs)
+          : undefined;
+      waiter.resolve = () => {
+        if (timer) {
+          clearTimeout(timer);
+        }
+        resolve();
+      };
+      waiter.reject = (error) => {
+        if (timer) {
+          clearTimeout(timer);
+        }
+        reject(error);
+      };
+      pendingTalkSpeakOpusTranscodes.push(waiter);
+    });
+  } else {
+    activeTalkSpeakOpusTranscodes++;
+  }
+  try {
+    return await fn();
+  } finally {
+    activeTalkSpeakOpusTranscodes--;
+    releaseNextOpusTranscodeWaiter();
+  }
+}
+
+/**
+ * Test-only: reset the Opus transcode queue so leaked state from a failing test
+ * does not leak into the next one. Wakes any pending waiters with a typed error.
+ */
+export function clearTalkSpeakOpusTranscodeQueueForTest(): void {
+  for (const waiter of pendingTalkSpeakOpusTranscodes) {
+    waiter.cancelled = true;
+    waiter.reject(new TalkSpeakOpusTranscodeQueueClearedError());
+  }
+  pendingTalkSpeakOpusTranscodes.length = 0;
+  activeTalkSpeakOpusTranscodes = 0;
+}
 
 type TalkSpeakErrorDetails = {
   reason: TalkSpeakReason;
@@ -404,6 +502,46 @@ function talkSpeakError(reason: TalkSpeakReason, message: string) {
     fallbackEligible: isFallbackEligibleTalkReason(reason),
   };
   return errorShape(ErrorCodes.UNAVAILABLE, message, { details });
+}
+
+async function formatTalkSpeakResultAudio(params: {
+  audioBuffer: Buffer;
+  outputFormat?: string;
+  fileExtension?: string;
+  requestedOutputFormat?: string;
+  timeoutMs?: number;
+}): Promise<{ audioBuffer: Buffer; outputFormat?: string; fileExtension?: string }> {
+  const requested = normalizeOptionalLowercaseString(params.requestedOutputFormat);
+  if (requested !== "opus") {
+    return {
+      audioBuffer: params.audioBuffer,
+      outputFormat: params.outputFormat,
+      fileExtension: params.fileExtension,
+    };
+  }
+  const currentFormat = normalizeOptionalLowercaseString(params.outputFormat);
+  const currentExtension = normalizeOptionalLowercaseString(params.fileExtension);
+  if (currentFormat === "opus" || currentExtension === ".opus" || currentExtension === ".ogg") {
+    return {
+      audioBuffer: params.audioBuffer,
+      outputFormat: params.outputFormat ?? "opus",
+      fileExtension: params.fileExtension ?? ".opus",
+    };
+  }
+  return {
+    audioBuffer: await withTalkSpeakOpusTranscodeSlot(
+      () =>
+        transcodeAudioBufferToOpus({
+          audioBuffer: params.audioBuffer,
+          inputExtension: params.fileExtension,
+          tempPrefix: "talk-speak-opus-",
+          timeoutMs: params.timeoutMs,
+        }),
+      params.timeoutMs,
+    ),
+    outputFormat: "opus",
+    fileExtension: ".opus",
+  };
 }
 
 function resolveTalkSpeed(params: TalkSpeakParams): number | undefined {
@@ -838,15 +976,40 @@ export const talkHandlers: GatewayRequestHandlers = {
         return;
       }
 
+      let formattedAudio: { audioBuffer: Buffer; outputFormat?: string; fileExtension?: string };
+      try {
+        formattedAudio = await formatTalkSpeakResultAudio({
+          audioBuffer: result.audioBuffer,
+          outputFormat: result.outputFormat,
+          fileExtension: result.fileExtension,
+          requestedOutputFormat: typedParams.outputFormat,
+          timeoutMs: setup.cfg.messages?.tts?.timeoutMs,
+        });
+      } catch (err) {
+        if (err instanceof TalkSpeakOpusTranscodeBusyError) {
+          respond(false, undefined, talkSpeakError("method_unavailable", err.message));
+          return;
+        }
+        respond(
+          false,
+          undefined,
+          talkSpeakError(
+            "invalid_audio_result",
+            `talk synthesis post-processing failed: ${formatForLog(err)}`,
+          ),
+        );
+        return;
+      }
+
       respond(
         true,
         {
-          audioBase64: result.audioBuffer.toString("base64"),
+          audioBase64: formattedAudio.audioBuffer.toString("base64"),
           provider: result.provider ?? setup.provider,
-          outputFormat: result.outputFormat,
+          outputFormat: formattedAudio.outputFormat,
           voiceCompatible: result.voiceCompatible,
-          mimeType: inferSpeechMimeType(result.outputFormat, result.fileExtension),
-          fileExtension: result.fileExtension,
+          mimeType: inferSpeechMimeType(formattedAudio.outputFormat, formattedAudio.fileExtension),
+          fileExtension: formattedAudio.fileExtension,
         },
         undefined,
       );

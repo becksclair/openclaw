@@ -182,6 +182,23 @@ describe("buildProviderStreamFamilyHooks", () => {
     expect(googleThinkingConfig.thinkingLevel).toBe("HIGH");
     expect(googleThinkingConfig).not.toHaveProperty("thinkingBudget");
 
+    const googleUltraStream = requireStreamFn(
+      requireWrapStreamFn(googleHooks.wrapStreamFn)({
+        streamFn: baseStreamFn,
+        thinkingLevel: "ultra",
+      } as never),
+    );
+    await googleUltraStream(
+      { api: "google-generative-ai", id: "gemini-3.1-pro-preview" } as never,
+      {} as never,
+      {},
+    );
+    const googleUltraPayload = requirePayload(capturedPayload);
+    const googleUltraConfig = requireRecord(googleUltraPayload.config, "google ultra config");
+    expect(
+      requireRecord(googleUltraConfig.thinkingConfig, "google ultra thinking config").thinkingLevel,
+    ).toBe("HIGH");
+
     const minimaxHooks = MINIMAX_FAST_MODE_STREAM_HOOKS;
     const minimaxStream = requireStreamFn(
       requireWrapStreamFn(minimaxHooks.wrapStreamFn)({

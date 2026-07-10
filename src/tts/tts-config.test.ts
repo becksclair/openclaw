@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   resolveConfiguredTtsMode,
+  resolveEffectiveTtsAutoMode,
   resolveEffectiveTtsConfig,
   shouldAttemptTtsPayload,
 } from "./tts-config.js";
@@ -62,6 +63,7 @@ describe("shouldAttemptTtsPayload", () => {
 
     expect(shouldAttemptTtsPayload({ cfg, ttsAuto: "always" })).toBe(true);
     expect(shouldAttemptTtsPayload({ cfg, ttsAuto: "off" })).toBe(false);
+    expect(resolveEffectiveTtsAutoMode({ cfg, ttsAuto: "tagged" })).toBe("tagged");
   });
 
   it("uses local prefs before config auto mode", () => {

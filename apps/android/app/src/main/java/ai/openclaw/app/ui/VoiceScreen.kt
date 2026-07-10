@@ -133,9 +133,15 @@ fun VoiceScreen(
       pendingAction = null
     }
 
-  // Talk mode and dictation use different managers, so choose the transcript
-  // from the mode the user is actually seeing.
-  val activeConversation = if (voiceCaptureMode == VoiceCaptureMode.TalkMode) talkModeConversation else micConversation
+  val landingConversation =
+    landingVoiceConversation(
+      micConversation = micConversation,
+      talkModeConversation = talkModeConversation,
+    )
+  val showLandingThinking =
+    micIsSending &&
+      talkModeConversation.isEmpty() &&
+      landingConversation.none { it.role == VoiceConversationRole.Assistant && it.isStreaming }
   val voiceActive = micEnabled || micIsSending || talkModeEnabled
   val gatewayReady = gatewayStatus.isVoiceGatewayReady()
   val voiceAttentionStatus =
@@ -253,12 +259,17 @@ fun VoiceScreen(
     }
 
     VoiceTranscript(
-      entries = activeConversation,
-      showThinking = micIsSending && activeConversation.none { it.role == VoiceConversationRole.Assistant && it.isStreaming },
+      entries = landingConversation,
+      showThinking = showLandingThinking,
       modifier = Modifier.weight(1f),
     )
   }
 }
+
+internal fun landingVoiceConversation(
+  micConversation: List<VoiceConversationEntry>,
+  talkModeConversation: List<VoiceConversationEntry>,
+): List<VoiceConversationEntry> = talkModeConversation.ifEmpty { micConversation }
 
 /** Full-screen dictation capture and send state. */
 @Composable

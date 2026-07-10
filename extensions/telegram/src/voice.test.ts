@@ -18,11 +18,20 @@ describe("splitTelegramCaption", () => {
     });
   });
 
-  it("moves oversized captions into follow-up text", () => {
-    const text = "x".repeat(TELEGRAM_MAX_CAPTION_LENGTH + 1);
+  it("splits oversized captions into a voice caption and follow-up text", () => {
+    const text = `${"x".repeat(TELEGRAM_MAX_CAPTION_LENGTH - 4)} rest of message`;
     expect(splitTelegramCaption(text)).toEqual({
-      caption: undefined,
-      followUpText: text,
+      caption: "x".repeat(TELEGRAM_MAX_CAPTION_LENGTH - 4),
+      followUpText: "rest of message",
+    });
+  });
+
+  it("keeps a surrogate pair intact at the fallback boundary", () => {
+    const prefix = "x".repeat(TELEGRAM_MAX_CAPTION_LENGTH - 1);
+
+    expect(splitTelegramCaption(`${prefix}😀tail`)).toEqual({
+      caption: prefix,
+      followUpText: "😀tail",
     });
   });
 });

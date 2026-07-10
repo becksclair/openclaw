@@ -421,15 +421,36 @@ function parseEnvironmentFileLine(rawLine: string): { key: string; value: string
   if (!key) {
     return null;
   }
-  let value = trimmed.slice(eq + 1).trim();
-  if (
-    value.length >= 2 &&
-    ((value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'")))
-  ) {
-    value = value.slice(1, -1);
+  return { key, value: decodeSystemdEnvFileValue(trimmed.slice(eq + 1).trim()) };
+}
+
+const SHELL_SAFE_ENV_VALUE = /^[A-Za-z0-9_./:@%+=,-]*$/;
+
+function encodeSystemdEnvFileValue(value: string): string {
+  if (SHELL_SAFE_ENV_VALUE.test(value)) {
+    return value;
   }
-  return { key, value };
+  const escaped = value
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("$", "\\$")
+    .replaceAll("`", "\\`");
+  return `"${escaped}"`;
+}
+
+function decodeSystemdEnvFileValue(value: string): string {
+  if (value.length < 2) {
+    return value;
+  }
+  if (value.startsWith("'") && value.endsWith("'")) {
+    // Decode the legacy POSIX-shell concatenation emitted by older OpenClaw
+    // restages (`'it'\''s'`) before rewriting with the current codec.
+    return value.slice(1, -1).replaceAll("'\\''", "'");
+  }
+  if (!value.startsWith('"') || !value.endsWith('"')) {
+    return value;
+  }
+  return value.slice(1, -1).replace(/\\(["\\$`])/gu, "$1");
 }
 
 async function readSystemdEnvironmentFile(pathname: string): Promise<Record<string, string>> {
@@ -1031,7 +1052,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   }
 
   const content = Object.entries(merged)
-    .map(([key, value]) => `${key}=${value}`)
+    .map(([key, value]) => `${key}=${encodeSystemdEnvFileValue(value)}`)
     .join("\n");
   await fs.mkdir(path.dirname(envFilePath), { recursive: true });
   await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
@@ -1066,7 +1087,7 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
     return;
   }
   const content = Object.entries(remaining)
-    .map(([key, value]) => `${key}=${value}`)
+    .map(([key, value]) => `${key}=${encodeSystemdEnvFileValue(value)}`)
     .join("\n");
   await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
   await fs.chmod(envFilePath, 0o600);

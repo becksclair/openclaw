@@ -36,6 +36,7 @@ import {
 } from "./security-contract.js";
 import { discordSecurityAdapter } from "./security.js";
 import { deriveLegacySessionChatType } from "./session-contract.js";
+import { discordTtsVoiceDelivery } from "./tts-capabilities.js";
 
 const DISCORD_CHANNEL = "discord" as const;
 type DiscordConfigAccessorAccount = {
@@ -124,9 +125,7 @@ export function createDiscordPluginBase(params: {
       threads: true,
       media: true,
       tts: {
-        voice: {
-          synthesisTarget: "voice-note",
-        },
+        voice: discordTtsVoiceDelivery,
       },
       nativeCommands: true,
     },

@@ -29,6 +29,9 @@ function firstAttemptParams(): {
   promptMode?: string;
   promptCacheKey?: string;
   suppressLiveStreamOutput?: boolean;
+  disableSkills?: boolean;
+  disableMcpServers?: boolean;
+  disableCodexPlugins?: boolean;
 } {
   const call = mockedRunEmbeddedAttempt.mock.calls[0] as
     | [
@@ -38,6 +41,9 @@ function firstAttemptParams(): {
           promptMode?: string;
           promptCacheKey?: string;
           suppressLiveStreamOutput?: boolean;
+          disableSkills?: boolean;
+          disableMcpServers?: boolean;
+          disableCodexPlugins?: boolean;
         },
       ]
     | undefined;
@@ -179,6 +185,22 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     });
 
     expect(firstAttemptParams().cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
+  it("forwards hidden helper suppression flags into the embedded attempt", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      disableSkills: true,
+      disableMcpServers: true,
+      disableCodexPlugins: true,
+    });
+
+    const attemptParams = firstAttemptParams();
+    expect(attemptParams.disableSkills).toBe(true);
+    expect(attemptParams.disableMcpServers).toBe(true);
+    expect(attemptParams.disableCodexPlugins).toBe(true);
   });
 
   it("forwards prompt cache identity into the embedded attempt", async () => {

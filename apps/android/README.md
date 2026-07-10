@@ -27,9 +27,11 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 ```bash
 cd apps/android
-./gradlew :app:assemblePlayDebug
-./gradlew :app:installPlayDebug
-./gradlew :app:testPlayDebugUnitTest
+./gradlew :app:assembleThirdPartyDebug
+./gradlew :wear:assembleDebug
+./gradlew :app:installThirdPartyDebug
+./gradlew :app:testThirdPartyDebugUnitTest
+./gradlew :wear:testDebugUnitTest
 cd ../..
 pnpm android:release:archive
 ```
@@ -84,8 +86,9 @@ the screenshots, then shuts down the emulator it started.
 
 - Play build: `openclaw-<version>-play-release.aab`
 - Third-party build: `openclaw-<version>-third-party-release.apk`
+- Wear OS companion: `openclaw-<version>-wear-release.aab`
 
-`pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
+The archive lane runs `apps/android/scripts/build-release-artifacts.ts` (also runnable directly with `bun` when Fastlane is not installed). Use the Fastlane lanes above (`android:release:archive` and friends) for Play Store signing, metadata, and upload.
 
 Regular final and correction OpenClaw releases publish the signed third-party APK as `OpenClaw-Android.apk` with a checksum manifest and GitHub Actions provenance. `.github/workflows/android-release.yml` is the only automated GitHub Release upload path; `OpenClaw Release Publish` dispatches it while the canonical release is still a draft and blocks publication until the uploaded asset contract verifies.
 
@@ -108,6 +111,7 @@ Flavor-specific direct Gradle tasks:
 cd apps/android
 ./gradlew :app:bundlePlayRelease
 ./gradlew :app:bundleThirdPartyRelease
+./gradlew :wear:bundleRelease
 ```
 
 ## Kotlin Lint + Format
@@ -127,9 +131,9 @@ Direct Gradle tasks:
 
 ```bash
 cd apps/android
-./gradlew :app:ktlintCheck :benchmark:ktlintCheck
-./gradlew :app:ktlintFormat :benchmark:ktlintFormat
-./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug
+./gradlew :app:ktlintCheck :benchmark:ktlintCheck :wear:ktlintCheck
+./gradlew :app:ktlintFormat :benchmark:ktlintFormat :wear:ktlintFormat
+./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug :wear:lintDebug
 ```
 
 `gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.

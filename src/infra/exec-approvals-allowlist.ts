@@ -146,14 +146,15 @@ export function isSafeBinUsage(params: {
   if (!matchesSafeBin) {
     return false;
   }
-  const trustPath = resolveExecutableTrustPath(resolution);
-  if (!trustPath) {
+  const resolvedPath = resolution?.resolvedPath;
+  if (!resolvedPath) {
     return false;
   }
   const isTrustedPath = params.isTrustedSafeBinPathFn ?? isTrustedSafeBinPath;
   if (
     !isTrustedPath({
-      resolvedPath: trustPath,
+      resolvedPath,
+      resolvedRealPath: resolution.resolvedRealPath,
       trustedDirs: params.trustedSafeBinDirs,
     })
   ) {

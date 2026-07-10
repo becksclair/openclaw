@@ -1228,7 +1228,9 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expectRuntimeErrorContains("Invalid thinking level.");
+    expectRuntimeErrorContains(
+      "Invalid thinking level. Use one of: off, minimal, low, medium, high, adaptive, xhigh, max, ultra.",
+    );
     expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
     expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
     expect(mocks.callGateway).not.toHaveBeenCalled();

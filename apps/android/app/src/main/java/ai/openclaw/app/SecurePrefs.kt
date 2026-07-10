@@ -59,6 +59,8 @@ class SecurePrefs(
     private const val notificationsForwardingMaxEventsPerMinuteKey =
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyPrefix = "notifications.forwarding.sessionKey"
+    private const val sessionTargetModeKey = "session.targetMode"
+    private const val wearTargetSessionKeyKey = "wear.targetSessionKey"
     private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
     private const val cameraEnabledKey = "camera.enabled"
     private const val voiceMicEnabledKey = "voice.micEnabled"
@@ -86,6 +88,7 @@ class SecurePrefs(
       .build()
   }
   private val securePrefs: SharedPreferences by lazy { securePrefsOverride ?: createSecurePrefs(appContext, securePrefsName) }
+  private val needsSessionTargetModeMigration = !plainPrefs.contains(sessionTargetModeKey)
 
   private val _instanceId = MutableStateFlow(loadOrCreateInstanceId())
   val instanceId: StateFlow<String> = _instanceId
@@ -193,6 +196,12 @@ class SecurePrefs(
     MutableStateFlow(loadNotificationForwardingSessionKey(gatewayRegistry.activeStableId.value))
   }
   val notificationForwardingSessionKey: StateFlow<String?> get() = _notificationForwardingSessionKey
+
+  private val _sessionTargetMode = MutableStateFlow(loadSessionTargetMode())
+  val sessionTargetMode: StateFlow<SessionTargetMode> = _sessionTargetMode
+
+  private val _wearTargetSessionKey = MutableStateFlow(loadWearTargetSessionKey())
+  val wearTargetSessionKey: StateFlow<String?> = _wearTargetSessionKey
 
   private val _wakeWords = MutableStateFlow(loadWakeWords())
   val wakeWords: StateFlow<List<String>> = _wakeWords
@@ -397,6 +406,23 @@ class SecurePrefs(
       putString(notificationForwardingSessionKeyKey(stableId), normalized.orEmpty())
     }
     _notificationForwardingSessionKey.value = normalized
+  }
+
+  internal fun setSessionTargetMode(value: SessionTargetMode) {
+    plainPrefs.edit { putString(sessionTargetModeKey, value.rawValue) }
+    _sessionTargetMode.value = value
+  }
+
+  internal fun setWearTargetSessionKey(value: String?) {
+    val normalized = normalizeWearTargetSessionKeyOverride(value)
+    plainPrefs.edit {
+      if (normalized == null) {
+        remove(wearTargetSessionKeyKey)
+      } else {
+        putString(wearTargetSessionKeyKey, normalized)
+      }
+    }
+    _wearTargetSessionKey.value = normalized
   }
 
   fun loadGatewayCredentials(stableId: String): GatewayCredentials {
@@ -715,6 +741,15 @@ class SecurePrefs(
     return migratedValue
   }
 
+  private fun loadSessionTargetMode(): SessionTargetMode {
+    val raw = plainPrefs.getString(sessionTargetModeKey, null)
+    val resolved = SessionTargetMode.fromRawValue(raw)
+    if (raw.isNullOrBlank() || raw.trim() != resolved.rawValue) {
+      plainPrefs.edit { putString(sessionTargetModeKey, resolved.rawValue) }
+    }
+    return resolved
+  }
+
   private fun loadWakeWords(): List<String> {
     val raw = plainPrefs.getString("voiceWake.triggerWords", null)?.trim()
     if (raw.isNullOrEmpty()) return defaultWakeWords
@@ -751,5 +786,19 @@ class SecurePrefs(
     } catch (_: Throwable) {
       emptyList()
     }
+  }
+
+  // First-launch migration: legacy wear.targetSessionKey re-pins watches to stale sessions,
+  // so clear it once the session-target-mode migration is due.
+  private fun loadWearTargetSessionKey(): String? {
+    val normalized = normalizeWearTargetSessionKeyOverride(plainPrefs.getString(wearTargetSessionKeyKey, null))
+    if (needsSessionTargetModeMigration && normalized != null) {
+      plainPrefs.edit { remove(wearTargetSessionKeyKey) }
+      return null
+    }
+    if (normalized == null && plainPrefs.contains(wearTargetSessionKeyKey)) {
+      plainPrefs.edit { remove(wearTargetSessionKeyKey) }
+    }
+    return normalized
   }
 }

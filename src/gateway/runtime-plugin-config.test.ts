@@ -1,6 +1,3 @@
-/**
- * Runtime plugin config regression tests.
- */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -50,6 +47,47 @@ describe("resolveGatewayPluginConfig", () => {
     expect(resolveGatewayPluginConfig({ config })).toMatchObject({ first: true });
     expect(resolveGatewayPluginConfig({ config })).toMatchObject({ second: true });
 
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes the cached config when env object changes", async () => {
+    const { resolveGatewayPluginConfig } = await import("./runtime-plugin-config.js");
+    const config = { channels: { telegram: { botToken: "token" } } } as OpenClawConfig;
+    const snapshot = { manifestRegistry: { plugins: [], diagnostics: [] } };
+    mocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
+    mocks.applyPluginAutoEnable
+      .mockReturnValueOnce({ config: { ...config, first: true }, changes: [] })
+      .mockReturnValueOnce({ config: { ...config, second: true }, changes: [] });
+
+    expect(resolveGatewayPluginConfig({ config, env: { A: "1" } })).toMatchObject({
+      first: true,
+    });
+    expect(resolveGatewayPluginConfig({ config, env: { A: "2" } })).toMatchObject({
+      second: true,
+    });
+
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps repeated reads free of environment fingerprint work", async () => {
+    const { clearPluginMetadataLifecycleCaches } =
+      await import("../plugins/plugin-metadata-lifecycle.js");
+    const { resolveGatewayPluginConfig } = await import("./runtime-plugin-config.js");
+    const config = { channels: { telegram: { botToken: "token" } } } as OpenClawConfig;
+    const env = { HOME: "/tmp/one" };
+    const snapshot = { manifestRegistry: { plugins: [], diagnostics: [] } };
+    mocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
+    mocks.applyPluginAutoEnable
+      .mockReturnValueOnce({ config: { ...config, first: true }, changes: [] })
+      .mockReturnValueOnce({ config: { ...config, second: true }, changes: [] });
+
+    expect(resolveGatewayPluginConfig({ config, env })).toMatchObject({ first: true });
+    env.HOME = "/tmp/two";
+    expect(resolveGatewayPluginConfig({ config, env })).toMatchObject({ first: true });
+
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledTimes(1);
+    clearPluginMetadataLifecycleCaches();
+    expect(resolveGatewayPluginConfig({ config, env })).toMatchObject({ second: true });
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledTimes(2);
   });
 

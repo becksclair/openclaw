@@ -54,6 +54,8 @@ function createOpenGatewayClient(requestTimeoutMs: number): {
     send,
     close: vi.fn(),
   };
+  // These tests model an already-connected client; skip the pre-hello send gate.
+  (client as unknown as { helloOkReceived: boolean }).helloOkReceived = true;
   return { client, send };
 }
 
@@ -370,6 +372,7 @@ describe("GatewayClient", () => {
       }),
       close: vi.fn(),
     };
+    (client as unknown as { helloOkReceived: boolean }).helloOkReceived = true;
 
     await expect(client.request("status")).rejects.toThrow("synthetic send failure");
     expect(getPendingCount(client)).toBe(0);
@@ -410,6 +413,7 @@ describe("GatewayClient", () => {
       send,
       close: vi.fn(),
     };
+    (client as unknown as { helloOkReceived: boolean }).helloOkReceived = true;
 
     const onAccepted = vi.fn();
     const requestPromise = client.request<{ status: string }>("agent", undefined, {
@@ -465,6 +469,7 @@ describe("GatewayClient", () => {
       send,
       close: vi.fn(),
     };
+    (client as unknown as { helloOkReceived: boolean }).helloOkReceived = true;
 
     const controller = new AbortController();
     const requestPromise = client.request("status", undefined, {
@@ -478,6 +483,71 @@ describe("GatewayClient", () => {
 
     await expect(requestPromise).rejects.toThrow("gateway request aborted for status");
     expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+  });
+
+  test("uses one timeout deadline across handshake and response", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({ requestTimeoutMs: 100 });
+      const send = vi.fn();
+      (
+        client as unknown as {
+          ws: WebSocket | { readyState: number; send: () => void; close: () => void };
+        }
+      ).ws = { readyState: WebSocket.OPEN, send, close: vi.fn() };
+
+      const requestPromise = client.request("status");
+      const requestExpectation = expect(requestPromise).rejects.toThrow(
+        "gateway request timeout for status",
+      );
+      await vi.advanceTimersByTimeAsync(60);
+      (client as unknown as { helloOkReceived: boolean }).helloOkReceived = true;
+      (
+        client as unknown as {
+          settleHandshakeWaiters: (err: Error | null) => void;
+        }
+      ).settleHandshakeWaiters(null);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(send).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(40);
+      await requestExpectation;
+      expect(getPendingCount(client)).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("aborts pre-hello requests without sending a later frame", async () => {
+    const client = new GatewayClient({ requestTimeoutMs: 100 });
+    const send = vi.fn();
+    (
+      client as unknown as {
+        ws: WebSocket | { readyState: number; send: () => void; close: () => void };
+      }
+    ).ws = { readyState: WebSocket.OPEN, send, close: vi.fn() };
+    const controller = new AbortController();
+    const removeEventListener = vi.spyOn(controller.signal, "removeEventListener");
+
+    const requestPromise = client.request("status", undefined, {
+      signal: controller.signal,
+      timeoutMs: null,
+    });
+    controller.abort();
+
+    await expect(requestPromise).rejects.toThrow("gateway request aborted for status");
+    expect(send).not.toHaveBeenCalled();
+    expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect((client as unknown as { handshakeWaiters: unknown[] }).handshakeWaiters).toHaveLength(0);
+
+    (client as unknown as { helloOkReceived: boolean }).helloOkReceived = true;
+    (
+      client as unknown as {
+        settleHandshakeWaiters: (err: Error | null) => void;
+      }
+    ).settleHandshakeWaiters(null);
+    await Promise.resolve();
+    expect(send).not.toHaveBeenCalled();
   });
 
   test("clamps oversized explicit request timeouts before scheduling", async () => {

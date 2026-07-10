@@ -26,6 +26,34 @@ Use provider-owned contributions for model-family-specific tuning. Reserve the l
 
 The bundled OpenAI/Codex GPT-5-family overlay (`resolveGpt5SystemPromptContribution`) uses this mechanism: a `stablePrefix` behavior contract (execution policy, tool discipline, output contract, completion contract) plus an optional `interaction_style` override for a friendlier tone. It applies to any `gpt-5*` model id routed through the OpenAI or Codex plugins, controlled by `agents.defaults.promptOverlays.gpt5.personality` (`"friendly"`/`"on"` or `"off"`).
 
+## Agent base prompt overrides
+
+Agents can opt into a user-owned stable base prefix by copying the generated
+template from `<stateDir>/agent-base.md` (normally `~/.openclaw/agent-base.md`)
+to `<agentDir>/agent-base.md` (normally
+`~/.openclaw/agents/<agentId>/agent/agent-base.md`). Gateway startup
+regenerates the global template, but never creates or overwrites agent-owned
+base files.
+
+When an agent-owned `agent-base.md` exists, embedded OpenClaw full/main runs use
+that exact text as the stable prefix before the internal prompt cache boundary.
+OpenClaw then appends live runtime sections below the boundary: Workspace,
+Messaging, Assistant Output Directives, Silent Replies, Voice/TTS, Runtime,
+heartbeat, memory, skills, group/subagent context, and workspace context files.
+
+The generated template includes the default OpenClaw base behavior plus the
+static GPT-5/OpenAI/Codex behavior overlay. It intentionally omits the injected
+contents of `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`,
+`MEMORY.md`, skills, and heartbeat, plus the live Messaging, Workspace,
+Runtime, Voice/TTS, Assistant Output Directives, Silent Replies, current time,
+and workspace context sections. General policy text may still name those files.
+
+Native Codex app-server runs also use `<agentDir>/agent-base.md` as
+`thread/start.baseInstructions`. For compatibility, Codex app-server still
+accepts `<agentDir>/app-server-base.md` when `agent-base.md` is absent; the
+canonical file takes precedence. Global templates are inert until copied into
+an agent directory.
+
 ## Structure
 
 The prompt is compact, with fixed sections:
@@ -101,6 +129,12 @@ Bootstrap files are resolved from the active workspace and routed to the prompt 
 On the native Codex harness, OpenClaw avoids repeating stable workspace files in every user turn. Codex loads `AGENTS.md` through its own project-doc discovery. `TOOLS.md` is forwarded as inherited Codex developer instructions. `SOUL.md`, `IDENTITY.md`, and `USER.md` are forwarded as turn-scoped collaboration developer instructions so native Codex sub-agents do not inherit them. `HEARTBEAT.md` content is not injected directly; heartbeat turns get a collaboration-mode note pointing to the file when it exists and is non-empty. `MEMORY.md` content is not pasted into every native Codex turn either: when memory tools are available for the workspace, Codex turns get a small workspace-memory note directing the model to `memory_search` or `memory_get`. If tools are disabled, memory search is unavailable, or the active workspace differs from the agent memory workspace, `MEMORY.md` falls back to the normal bounded turn-context path. `BOOTSTRAP.md` keeps the normal turn-context role.
 
 On non-Codex harnesses, bootstrap files compose into the OpenClaw prompt per their existing gates. `HEARTBEAT.md` is omitted on normal runs when heartbeats are disabled for the default agent or `agents.defaults.heartbeat.includeSystemPromptSection` is false. Keep injected files concise, especially non-Codex `MEMORY.md`: it should stay a curated long-term summary, with detailed daily notes in `memory/*.md` retrievable on demand via `memory_search` / `memory_get`. Oversized non-Codex `MEMORY.md` files increase prompt usage and can be partially injected under the bootstrap file limits below.
+
+When an embedded OpenClaw full/main run has an agent-owned `agent-base.md`,
+bootstrap files are no longer part of the stable base prefix. They are appended
+below the cache boundary with the rest of the live runtime/context tail, so the
+editable base file can stay focused on identity, personality, and stable
+operating policy.
 
 <Note>
 `memory/*.md` daily files are **not** part of the normal bootstrap Project Context. On ordinary turns they are accessed on demand via `memory_search` / `memory_get`, so they do not count against the context window unless the model explicitly reads them. Bare `/new` and `/reset` turns are the exception: the runtime can prepend recent daily memory as a one-shot startup-context block for that first turn.

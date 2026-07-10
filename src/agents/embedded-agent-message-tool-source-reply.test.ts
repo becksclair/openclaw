@@ -333,6 +333,25 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
     ).toBe(false);
   });
 
+  it("never treats progress sends as the final source reply", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: { action: "send", message: "status ping", progress: true },
+        result: { deliveryStatus: "sent" },
+      }),
+    ).toBe(false);
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: { action: "send", message: "final", progress: false },
+        result: { deliveryStatus: "sent" },
+      }),
+    ).toBe(true);
+  });
+
   it("accepts confirmed explicit routes when the caller verified the source route", () => {
     expect(
       isDeliveredMessageToolOnlySourceReplyResult({

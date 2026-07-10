@@ -233,6 +233,7 @@ export async function executeSendAction(params: {
   to: string;
   message: string;
   payload?: ReplyPayload;
+  payloads?: ReplyPayload[];
   mediaUrl?: string;
   mediaUrls?: string[];
   buffer?: string;
@@ -258,6 +259,19 @@ export async function executeSendAction(params: {
     audioAsVoice: params.asVoice === true,
   };
   const queuePolicy = params.bestEffort === false ? "required" : "best_effort";
+  if (params.payloads && params.payloads.length > 0) {
+    const result = await sendCoreMessage({
+      ...params,
+      queuePolicy,
+      payloads: params.payloads,
+    });
+
+    return {
+      handledBy: "core",
+      payload: result,
+      sendResult: result,
+    };
+  }
   const preparedPayload = await tryPreparePluginSendPayload({
     ctx: params.ctx,
     to: params.to,

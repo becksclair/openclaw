@@ -30,6 +30,7 @@ import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.gateway.NetworkMonitor
 import ai.openclaw.app.gateway.NodeEventSendOutcome
+import ai.openclaw.app.gateway.OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE
 import ai.openclaw.app.gateway.formatGatewayAuthority
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
@@ -81,6 +82,9 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.wearable.Wearable
+import com.google.android.gms.wearable.WearableStatusCodes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -96,8 +100,10 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -247,6 +253,13 @@ internal class NotificationNodeEventOutbox(
   }
 }
 
+internal enum class GatewayNodesDevicesRefreshMode(
+  val includePairingDevices: Boolean,
+) {
+  Normal(includePairingDevices = false),
+  PairingManagement(includePairingDevices = true),
+}
+
 /**
  * Process runtime that owns gateway sessions, node command handlers, capture managers, and UI-facing state.
  */
@@ -380,6 +393,11 @@ class NodeRuntime private constructor(
       ),
   )
 
+  companion object {
+    private const val WEAR_RELAY_PHONE_CAPABILITY = "openclaw_relay_phone"
+    private const val PAIRING_OPERATOR_CONNECT_TIMEOUT_MS = 12_000L
+  }
+
   /**
    * Authentication material supplied by setup/manual connect flows before gateway session routing.
    */
@@ -418,6 +436,7 @@ class NodeRuntime private constructor(
   val discoveryStatusText: StateFlow<String> = discovery.statusText
 
   private val identityStore = DeviceIdentityStore(appContext)
+  private val pairingIdentityStore = DeviceIdentityStore(appContext, namespace = "operator-pairing")
   private var connectedEndpoint: GatewayEndpoint? = null
   private var activeGatewayAuth: GatewayConnectAuth? = null
 
@@ -619,7 +638,13 @@ class NodeRuntime private constructor(
     return buildNodeMainSessionKey(deviceId, agentId)
   }
 
-  private val _mainSessionKey = MutableStateFlow(resolveNodeMainSessionKey())
+  @Volatile private var activeAgentId: String? = null
+
+  @Volatile private var gatewayMainSessionKey: String = "main"
+
+  @Volatile private var nodeMainSessionKey: String = resolveNodeMainSessionKey()
+
+  private val _mainSessionKey = MutableStateFlow(resolvePreferredMainSessionKey())
   val mainSessionKey: StateFlow<String> = _mainSessionKey.asStateFlow()
 
   private val cameraHudSeq = AtomicLong(0)
@@ -754,6 +779,8 @@ class NodeRuntime private constructor(
 
   @Volatile private var nodePresenceAliveLastSuccessAtMs: Long? = null
   private var operatorConnected = false
+  private var pairingOperatorConnected = false
+  private var pairingOperatorConnectFailed = false
   private var operatorStatusText: String = "Offline"
   private var nodeStatusText: String = "Offline"
   private var operatorConnectionProblem: GatewayConnectionProblem? = null
@@ -772,7 +799,10 @@ class NodeRuntime private constructor(
         _gatewayVersion.value = hello.serverVersion
         _gatewayUpdateAvailable.value = hello.updateAvailable
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-        syncMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
+        syncMainSessionKey(
+          agentId = resolveAgentIdFromMainSessionKey(hello.mainSessionKey),
+          gatewayMainKey = hello.mainSessionKey,
+        )
         // Every successful connection refreshes history; reconnects preserve local run ownership.
         chat.onGatewayConnected()
         refreshGatewayControlPage()
@@ -782,6 +812,9 @@ class NodeRuntime private constructor(
           operatorStatusText = "Connected"
         }
         micCapture.onGatewayConnectionChanged(true)
+        if (wearAudioRelayLazy.isInitialized()) {
+          wearAudioRelay.connect()
+        }
         scope.launch {
           subscribeOperatorSessionEvents()
           refreshExecApprovalsFromGateway()
@@ -801,6 +834,9 @@ class NodeRuntime private constructor(
           operatorConnectionProblem = gatewayProblemAfterDisconnect(operatorConnectionProblem, message)
         }
         micCapture.onGatewayConnectionChanged(false)
+        if (wearAudioRelayLazy.isInitialized()) {
+          wearAudioRelay.disconnect()
+        }
       },
       onConnectFailure = { error, pauseReconnect ->
         updateStatus {
@@ -869,6 +905,26 @@ class NodeRuntime private constructor(
     }
   }
 
+  private val pairingOperatorSession =
+    GatewaySession(
+      scope = scope,
+      identityStore = pairingIdentityStore,
+      deviceAuthStore = deviceAuthStore,
+      onConnected = {
+        pairingOperatorConnected = true
+        pairingOperatorConnectFailed = false
+      },
+      onDisconnected = {
+        pairingOperatorConnected = false
+      },
+      onConnectFailure = { error, _ ->
+        pairingOperatorConnected = false
+        pairingOperatorConnectFailed = true
+        Log.d("OpenClawRuntime", "pairing operator connect failed: ${error.code}: ${error.message}")
+      },
+      onEvent = { _, _ -> },
+    )
+
   private val nodeSession =
     GatewaySession(
       scope = scope,
@@ -891,7 +947,7 @@ class NodeRuntime private constructor(
         val endpoint = connectedEndpoint
         val auth = activeGatewayAuth
         if (operatorConnected) {
-          scope.launch { refreshNodesDevicesFromGateway() }
+          scope.launch { refreshNodesDevicesFromGateway(includePairingDevices = false) }
         } else if (endpoint != null && auth != null) {
           maybeStartOperatorSessionAfterNodeConnect(endpoint, auth)
         }
@@ -914,7 +970,7 @@ class NodeRuntime private constructor(
           nodeConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
         }
         if (operatorConnected && nodeConnectFailureNeedsApprovalRefresh(error)) {
-          scope.launch { refreshNodesDevicesFromGateway() }
+          scope.launch { refreshNodesDevicesFromGateway(includePairingDevices = false) }
         }
       },
       onEvent = { _, _ -> },
@@ -1111,7 +1167,7 @@ class NodeRuntime private constructor(
         onRunIdKnown(idempotencyKey)
         val params =
           buildJsonObject {
-            put("sessionKey", JsonPrimitive(resolveMainSessionKey()))
+            put("sessionKey", JsonPrimitive(resolveVoiceTargetSessionKey()))
             put("message", JsonPrimitive(message))
             put("thinking", JsonPrimitive(chatThinkingLevel.value))
             put("timeoutMs", JsonPrimitive(30_000))
@@ -1188,16 +1244,42 @@ class NodeRuntime private constructor(
   val talkModeConversation: StateFlow<List<VoiceConversationEntry>>
     get() = talkMode.conversation
 
-  private fun syncMainSessionKey(agentId: String?) {
-    val resolvedKey = resolveNodeMainSessionKey(agentId)
-    // Always push the resolved session key into TalkMode, even when the
-    // state flow value is unchanged, so lazy TalkMode instances do not
-    // stay on the default "main" session key.
-    talkMode.setMainSessionKey(resolvedKey)
-    if (_mainSessionKey.value == resolvedKey) return
-    _mainSessionKey.value = resolvedKey
-    chat.applyMainSessionKey(resolvedKey)
-    updateHomeCanvasState()
+  private val wearAudioRelayLazy: Lazy<ai.openclaw.app.wear.WearAudioRelay> =
+    lazy {
+      ai.openclaw.app.wear.WearAudioRelay(
+        context = appContext,
+        gatewaySession = operatorSession,
+        wearTargetSessionKeyProvider = { resolveWearTargetSessionKey() },
+        canHandleMessages = { canHandleWearRelayMessages },
+      )
+    }
+
+  internal val wearAudioRelay: ai.openclaw.app.wear.WearAudioRelay
+    get() = wearAudioRelayLazy.value
+
+  internal val canHandleWearRelayMessages: Boolean
+    get() = operatorConnected
+
+  private fun syncMainSessionKey(
+    agentId: String?,
+    gatewayMainKey: String? = null,
+  ) {
+    if (!agentId.isNullOrBlank()) {
+      activeAgentId = agentId
+    }
+    nodeMainSessionKey = resolveNodeMainSessionKey(activeAgentId)
+    if (gatewayMainKey != null) {
+      gatewayMainSessionKey = buildGatewayMainSessionKey(activeAgentId, gatewayMainKey)
+    } else if (gatewayMainSessionKey == "main") {
+      gatewayMainSessionKey = buildGatewayMainSessionKey(activeAgentId, gatewayMainSessionKey)
+    }
+    val resolvedKey = resolvePreferredMainSessionKey()
+    if (_mainSessionKey.value != resolvedKey) {
+      _mainSessionKey.value = resolvedKey
+      chat.applyMainSessionKey(resolvedKey)
+      updateHomeCanvasState()
+    }
+    refreshVoiceTargetSessionKey()
   }
 
   private fun updateStatus(update: () -> Unit = {}) {
@@ -1257,6 +1339,35 @@ class NodeRuntime private constructor(
     return if (trimmed.isEmpty()) "main" else trimmed
   }
 
+  private fun resolvePreferredMainSessionKey(): String =
+    when (prefs.sessionTargetMode.value) {
+      SessionTargetMode.Device -> nodeMainSessionKey
+      SessionTargetMode.Main,
+      SessionTargetMode.FollowSelected,
+      -> gatewayMainSessionKey.trim().takeIf { it.isNotEmpty() && it != "main" } ?: nodeMainSessionKey
+    }
+
+  private fun resolveVoiceTargetSessionKey(): String =
+    resolveConversationTargetSessionKey(
+      mode = prefs.sessionTargetMode.value,
+      mainSessionKey = resolveMainSessionKey(),
+      currentSessionKey = chat.sessionKey.value,
+    )
+
+  private fun refreshVoiceTargetSessionKey() {
+    // Voice and Wear turns may intentionally follow the visible chat session,
+    // while node presence remains device-scoped.
+    talkMode.setMainSessionKey(resolveVoiceTargetSessionKey())
+  }
+
+  private fun resolveWearTargetSessionKey(): String =
+    resolveWearConversationTargetSessionKey(
+      explicitWearTargetSessionKey = prefs.wearTargetSessionKey.value,
+      mode = prefs.sessionTargetMode.value,
+      mainSessionKey = resolveMainSessionKey(),
+      currentSessionKey = chat.sessionKey.value,
+    )
+
   private fun showLocalCanvasOnConnect() {
     _canvasA2uiHydrated.value = false
     _canvasRehydratePending.value = false
@@ -1284,7 +1395,7 @@ class NodeRuntime private constructor(
       refreshCronFromGateway()
       refreshUsageFromGateway()
       refreshSkillsFromGateway()
-      refreshNodesDevicesFromGateway()
+      refreshNodesDevicesFromGateway(includePairingDevices = false)
       refreshChannelsFromGateway()
       refreshDreamingFromGateway()
       refreshHealthLogsFromGateway()
@@ -1340,8 +1451,16 @@ class NodeRuntime private constructor(
   }
 
   fun refreshNodesDevices() {
+    refreshNodesDevices(mode = GatewayNodesDevicesRefreshMode.Normal)
+  }
+
+  fun refreshPairingManagement() {
+    refreshNodesDevices(mode = GatewayNodesDevicesRefreshMode.PairingManagement)
+  }
+
+  private fun refreshNodesDevices(mode: GatewayNodesDevicesRefreshMode) {
     scope.launch {
-      refreshNodesDevicesFromGateway()
+      refreshNodesDevicesFromGateway(includePairingDevices = mode.includePairingDevices)
     }
   }
 
@@ -1398,7 +1517,7 @@ class NodeRuntime private constructor(
       _canvasRehydratePending.value = true
       _canvasRehydrateErrorText.value = null
 
-      val sessionKey = resolveMainSessionKey()
+      val sessionKey = resolveVoiceTargetSessionKey()
       val prompt =
         "Restore canvas now for session=$sessionKey source=$source. " +
           "If existing A2UI state exists, replay it immediately. " +
@@ -1520,6 +1639,8 @@ class NodeRuntime private constructor(
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
     prefs.notificationForwardingMaxEventsPerMinute
   val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
+  val sessionTargetMode: StateFlow<SessionTargetMode> = prefs.sessionTargetMode
+  val wearTargetSessionKey: StateFlow<String?> = prefs.wearTargetSessionKey
 
   private var didAutoConnect = false
 
@@ -1547,6 +1668,9 @@ class NodeRuntime private constructor(
     if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
       prefs.setVoiceWakeMode(VoiceWakeMode.Off)
     }
+
+    advertiseWearRelayCapability()
+    wearAudioRelay
 
     if (prefs.voiceMicEnabled.value) {
       setVoiceCaptureMode(VoiceCaptureMode.ManualMic, persistManualMic = false)
@@ -1860,6 +1984,16 @@ class NodeRuntime private constructor(
     val normalized = value?.trim()?.takeIf(String::isNotEmpty)
     if (prefs.notificationForwardingSessionKey.value == normalized) return
     notificationOutbox.updatePolicy { prefs.setNotificationForwardingSessionKey(normalized) }
+  }
+
+  fun setSessionTargetMode(value: SessionTargetMode) {
+    if (prefs.sessionTargetMode.value == value) return
+    prefs.setSessionTargetMode(value)
+    syncMainSessionKey(activeAgentId)
+  }
+
+  fun setWearTargetSessionKey(value: String?) {
+    prefs.setWearTargetSessionKey(value)
   }
 
   fun setVoiceScreenActive(active: Boolean) {
@@ -2436,6 +2570,9 @@ class NodeRuntime private constructor(
     runGatewayConnectOperation {
       beforeConnect()
       activeGatewayAuth = auth
+      pairingOperatorConnected = false
+      pairingOperatorConnectFailed = false
+      pairingOperatorSession.disconnect()
       val tls = connectionManager.resolveTlsParams(endpoint)
       val storedOperatorEntry = loadStoredRoleDeviceAuthEntry(endpoint, "operator")
       refreshGatewayControlPage(endpoint, auth, storedOperatorEntry?.token)
@@ -2743,6 +2880,25 @@ class NodeRuntime private constructor(
     return deviceAuthStore.loadEntry(endpoint.stableId, deviceId, role)
   }
 
+  private fun loadStoredPairingOperatorDeviceToken(endpoint: GatewayEndpoint): String? {
+    val deviceId = pairingIdentityStore.loadOrCreate().deviceId
+    return deviceAuthStore.loadToken(endpoint.stableId, deviceId, OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE)
+  }
+
+  private fun advertiseWearRelayCapability() {
+    scope.launch {
+      runCatching {
+        Wearable
+          .getCapabilityClient(appContext)
+          .addLocalCapability(WEAR_RELAY_PHONE_CAPABILITY)
+          .await()
+      }.onFailure { err ->
+        if (err is ApiException && err.statusCode == WearableStatusCodes.DUPLICATE_CAPABILITY) return@onFailure
+        Log.w("OpenClawNode", "Unable to advertise Wear relay capability: ${err.message}")
+      }
+    }
+  }
+
   private fun maybeStartOperatorSessionAfterNodeConnect(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
@@ -2797,6 +2953,7 @@ class NodeRuntime private constructor(
   private fun disconnect(retireRunState: Boolean) {
     prepareDisconnect(retireRunState)
     operatorSession.disconnect()
+    pairingOperatorSession.disconnect()
     nodeSession.disconnect()
   }
 
@@ -2921,6 +3078,9 @@ class NodeRuntime private constructor(
     stopMessageSpeech()
     micCapture.onGatewayScopeChanging()
     stopActiveVoiceSession()
+    if (wearAudioRelayLazy.isInitialized()) {
+      wearAudioRelay.disconnect()
+    }
     talkMode.onGatewayScopeChanging()
     if (voiceReplySpeakerLazy.isInitialized()) {
       voiceReplySpeaker.onGatewayScopeChanging()
@@ -2981,7 +3141,7 @@ class NodeRuntime private constructor(
           .ifEmpty { "-" }
       val contextJson = (userActionObj["context"] as? JsonObject)?.toString()
 
-      val sessionKey = resolveMainSessionKey()
+      val sessionKey = resolveVoiceTargetSessionKey()
       val message =
         OpenClawCanvasA2UIAction.formatAgentMessage(
           actionName = name,
@@ -3035,6 +3195,7 @@ class NodeRuntime private constructor(
   fun loadChat(sessionKey: String) {
     val key = sessionKey.trim().ifEmpty { resolveMainSessionKey() }
     chat.load(key)
+    refreshVoiceTargetSessionKey()
   }
 
   fun refreshChat() {
@@ -3101,6 +3262,7 @@ class NodeRuntime private constructor(
   fun switchChatSession(sessionKey: String) {
     stopMessageSpeech()
     chat.switchSession(sessionKey)
+    refreshVoiceTargetSessionKey()
   }
 
   fun selectChatAgent(agentId: String) {
@@ -3168,6 +3330,9 @@ class NodeRuntime private constructor(
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
+    if (wearAudioRelayLazy.isInitialized()) {
+      wearAudioRelay.handleGatewayEvent(event, payloadJson)
+    }
   }
 
   private fun handleExecApprovalGatewayEvent(
@@ -3320,6 +3485,7 @@ class NodeRuntime private constructor(
       val root = json.parseToJsonElement(res).asObjectOrNull() ?: return
       val defaultAgentId = root["defaultId"].asStringOrNull()?.trim().orEmpty()
       val mainKey = normalizeMainKey(root["mainKey"].asStringOrNull())
+      val sessionScope = root["scope"].asStringOrNull()
       val agents =
         (root["agents"] as? JsonArray)?.mapNotNull { item ->
           val obj = item.asObjectOrNull() ?: return@mapNotNull null
@@ -3345,7 +3511,16 @@ class NodeRuntime private constructor(
         _gatewayAgents.value = agents
         val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }
         selectedChatAgentId = selectedAgentId
-        syncMainSessionKey(selectedAgentId ?: resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
+        val resolvedAgentId = selectedAgentId ?: resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value
+        syncMainSessionKey(
+          agentId = resolvedAgentId,
+          gatewayMainKey =
+            resolveGatewayMainSessionKey(
+              agentId = resolvedAgentId,
+              mainKey = mainKey,
+              scope = sessionScope,
+            ),
+        )
         updateHomeCanvasState()
       }
     } catch (_: Throwable) {
@@ -3517,7 +3692,7 @@ class NodeRuntime private constructor(
     }
   }
 
-  private suspend fun refreshNodesDevicesFromGateway() {
+  private suspend fun refreshNodesDevicesFromGateway(includePairingDevices: Boolean) {
     val gatewayScope = captureGatewayDataScope() ?: return
     val refreshGeneration = nodeApprovalRefreshGuard.begin()
     var refreshStarted = false
@@ -3587,21 +3762,31 @@ class NodeRuntime private constructor(
         }
       }
       scheduleNodeApprovalCommandRefresh(gatewayScope, refreshGeneration, approval)
-      val devicesRoot =
-        try {
-          val devicesRes = requestGatewayData(gatewayScope, "device.pair.list", "{}")
-          json.parseToJsonElement(devicesRes).asObjectOrNull()
-        } catch (_: Throwable) {
-          null
-        }
+      val devicesRoot = if (includePairingDevices) requestPairingDevicesRoot() else null
       publishGatewayData(gatewayScope) {
         nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
+          val previousSummary = _nodesDevicesSummary.value
           _nodesDevicesSummary.value =
             GatewayNodesDevicesSummary(
               nodes = nodes,
-              pendingDevices = parsePendingDevices(devicesRoot?.get("pending") as? JsonArray),
-              pairedDevices = parsePairedDevices(devicesRoot?.get("paired") as? JsonArray),
-              devicePairingAvailable = devicesRoot != null,
+              pendingDevices =
+                if (includePairingDevices) {
+                  parsePendingDevices(devicesRoot?.get("pending") as? JsonArray)
+                } else {
+                  previousSummary.pendingDevices
+                },
+              pairedDevices =
+                if (includePairingDevices) {
+                  parsePairedDevices(devicesRoot?.get("paired") as? JsonArray)
+                } else {
+                  previousSummary.pairedDevices
+                },
+              devicePairingAvailable =
+                if (includePairingDevices) {
+                  devicesRoot != null
+                } else {
+                  previousSummary.devicePairingAvailable
+                },
             )
         }
       }
@@ -3640,10 +3825,52 @@ class NodeRuntime private constructor(
             }
         }
       if (scopePublished && approvalPublished && operatorConnected) {
-        refreshNodesDevicesFromGateway()
+        refreshNodesDevicesFromGateway(includePairingDevices = false)
       }
     }
   }
+
+  private suspend fun requestPairingDevicesRoot(): JsonObject? {
+    val endpoint = connectedEndpoint ?: return null
+    val auth = activeGatewayAuth ?: return null
+    val storedPairingToken = loadStoredPairingOperatorDeviceToken(endpoint)
+    val pairingAuth =
+      if (!storedPairingToken.isNullOrBlank()) {
+        resolveOperatorSessionConnectAuth(
+          auth = auth.copy(bootstrapToken = null),
+          storedOperatorToken = storedPairingToken,
+        ) ?: return null
+      } else {
+        NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = auth.password)
+      }
+    if (!pairingOperatorConnected) {
+      pairingOperatorConnectFailed = false
+      pairingOperatorSession.connect(
+        endpoint,
+        pairingAuth.token,
+        pairingAuth.bootstrapToken,
+        pairingAuth.password,
+        connectionManager.buildPairingOperatorConnectOptions(),
+        connectionManager.resolveTlsParams(endpoint),
+      )
+      if (!waitForPairingOperatorConnected()) return null
+    }
+    return try {
+      val devicesRes = pairingOperatorSession.request("device.pair.list", "{}")
+      json.parseToJsonElement(devicesRes).asObjectOrNull()
+    } catch (err: Throwable) {
+      Log.d("OpenClawRuntime", "device.pair.list unavailable to pairing session: ${err.message ?: err::class.java.simpleName}")
+      null
+    }
+  }
+
+  private suspend fun waitForPairingOperatorConnected(): Boolean =
+    withTimeoutOrNull(PAIRING_OPERATOR_CONNECT_TIMEOUT_MS) {
+      while (!pairingOperatorConnected && !pairingOperatorConnectFailed) {
+        delay(50)
+      }
+      pairingOperatorConnected
+    } == true
 
   private suspend fun refreshExecApprovalsFromGateway() {
     val gatewayScope = captureGatewayDataScope() ?: return
@@ -4520,7 +4747,11 @@ internal fun resolveOperatorSessionConnectAuth(
 
   val explicitBootstrapToken = auth.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() }
   if (explicitBootstrapToken != null) {
-    return null
+    return NodeRuntime.GatewayConnectAuth(
+      token = null,
+      bootstrapToken = explicitBootstrapToken,
+      password = null,
+    )
   }
 
   return NodeRuntime.GatewayConnectAuth(

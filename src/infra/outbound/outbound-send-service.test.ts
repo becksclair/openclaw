@@ -753,6 +753,59 @@ describe("executeSendAction", () => {
     });
   });
 
+  it("preserves explicit multi-payload sends without collapsing through prepareSendPayload", async () => {
+    const prepareSendPayload = vi.fn(({ payload }) => ({
+      ...payload,
+      channelData: { prepared: true },
+    }));
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        prepareSendPayload,
+        handleAction: async () => ({ content: [], details: { ok: true } }),
+      },
+      outbound: { deliveryMode: "direct" },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
+    mocks.sendMessage.mockResolvedValue({
+      channel: "discord",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: "file:///tmp/openclaw-voice.ogg",
+    });
+    const payloads = [
+      { text: "visible reply" },
+      {
+        mediaUrl: "file:///tmp/openclaw-voice.ogg",
+        audioAsVoice: true,
+        ttsSupplement: {
+          spokenText: "visible reply",
+          visibleTextAlreadyDelivered: true,
+        },
+      },
+    ];
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "visible reply" },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "visible reply",
+      payloads,
+    });
+
+    expect(prepareSendPayload).not.toHaveBeenCalled();
+    const sendArgs = expectSingleCallFields(mocks.sendMessage, {
+      channel: "discord",
+      queuePolicy: "best_effort",
+    });
+    expect(sendArgs.payloads).toEqual(payloads);
+  });
+
   it("uses required core delivery only when the send action opts out of best-effort", async () => {
     const prepareSendPayload = vi.fn(({ payload }) => ({
       ...payload,

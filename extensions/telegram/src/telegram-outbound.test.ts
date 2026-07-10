@@ -2,7 +2,7 @@ import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 // Telegram tests cover telegram outbound plugin behavior.
 import { describe, expect, it } from "vitest";
 import { splitTelegramHtmlChunks } from "./format.js";
-import { telegramOutbound } from "./outbound-adapter.js";
+import { TELEGRAM_TEXT_CHUNK_LIMIT, telegramOutbound } from "./outbound-adapter.js";
 import { clearTelegramRuntime } from "./runtime.js";
 
 function markdownTable(columns: number): string {
@@ -50,10 +50,12 @@ describe("telegramPlugin outbound", () => {
     clearTelegramRuntime();
     const text = "<b>hi</b>";
 
-    expect(telegramOutbound.chunker?.(text, 4000, { formatting: { parseMode: "HTML" } })).toEqual(
-      splitTelegramHtmlChunks(text, 4000),
-    );
-    expect(telegramOutbound.chunker?.(text, 4000)).toEqual([text]);
+    expect(
+      telegramOutbound.chunker?.(text, TELEGRAM_TEXT_CHUNK_LIMIT, {
+        formatting: { parseMode: "HTML" },
+      }),
+    ).toEqual(splitTelegramHtmlChunks(text, TELEGRAM_TEXT_CHUNK_LIMIT));
+    expect(telegramOutbound.chunker?.(text, TELEGRAM_TEXT_CHUNK_LIMIT)).toEqual([text]);
   });
 
   it("keeps astral characters whole at positive configured chunk limits", () => {
@@ -71,7 +73,7 @@ describe("telegramPlugin outbound", () => {
     clearTelegramRuntime();
     const text = ["| Name | Value |", "|------|-------|", "| A | 1 |"].join("\n");
 
-    const chunks = telegramOutbound.chunker?.(text, 4000, {
+    const chunks = telegramOutbound.chunker?.(text, TELEGRAM_TEXT_CHUNK_LIMIT, {
       formatting: { tableMode: "bullets" },
     });
 

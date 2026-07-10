@@ -31,6 +31,7 @@ import { telegramDoctor } from "./doctor.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { telegramSecurityAdapter } from "./security.js";
 import { namedAccountPromotionKeys, singleAccountKeysToMove } from "./setup-contract.js";
+import { telegramTtsVoiceDelivery } from "./tts-capabilities.js";
 
 const TELEGRAM_CHANNEL = "telegram" as const;
 
@@ -163,9 +164,7 @@ export function createTelegramPluginBase(params: {
       threads: true,
       media: true,
       tts: {
-        voice: {
-          synthesisTarget: "voice-note",
-        },
+        voice: telegramTtsVoiceDelivery,
       },
       polls: true,
       nativeCommands: true,

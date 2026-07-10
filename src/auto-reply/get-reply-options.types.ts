@@ -154,6 +154,8 @@ export type GetReplyOptions = {
    * block boundaries without waiting for transport acks. */
   onBlockReplyQueued?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  /** Called after final-reply TTS/media normalization, before routed or dispatcher delivery. */
+  onFinalReplyPayload?: (payload: ReplyPayload) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: {
@@ -258,6 +260,8 @@ export type GetReplyOptions = {
   onObservedReplyDelivery?: () => Promise<void> | void;
   /** Emit tool result summaries for channel-owned progress UI even when verbose is off. */
   forceToolResultProgress?: boolean;
+  /** Channel commandText mode for tool summaries: "status" keeps command tools label-only. */
+  toolResultCommandText?: "raw" | "status";
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;

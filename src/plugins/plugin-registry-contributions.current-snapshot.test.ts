@@ -142,7 +142,7 @@ describe("loadPluginManifestRegistryForPluginRegistry current snapshot", () => {
     ).toEqual(["disabled"]);
   });
 
-  it("does not reuse current metadata for explicit registry inputs or diagnostics", () => {
+  it("does not reuse current metadata for explicit registry inputs but keeps diagnostic snapshots", () => {
     const config: OpenClawConfig = {};
     const env = {
       HOME: "/tmp/openclaw-test-home",
@@ -196,6 +196,6 @@ describe("loadPluginManifestRegistryForPluginRegistry current snapshot", () => {
       loadPluginManifestRegistryForPluginRegistry({ config, env, workspaceDir }).plugins.map(
         (plugin) => plugin.id,
       ),
-    ).toEqual([]);
+    ).toEqual(["enabled"]);
   });
 });

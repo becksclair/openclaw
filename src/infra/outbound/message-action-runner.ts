@@ -35,6 +35,7 @@ import {
   normalizeMessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
@@ -82,7 +83,10 @@ import {
   resolveAndApplyOutboundReplyToId,
   resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
-import { maybeApplyTtsToMessageActionSendPayload } from "./message-action-tts.js";
+import {
+  maybeApplyTtsToMessageActionSendPayload,
+  type MessageActionDeferredTtsSupplement,
+} from "./message-action-tts.js";
 import { resolveOutboundMessageGatewayOptions } from "./message-gateway-options.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import {
@@ -94,7 +98,11 @@ import {
   resolveEffectiveMessageToolsConfig,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
-import { executePollAction, executeSendAction } from "./outbound-send-service.js";
+import {
+  executePollAction,
+  executeSendAction,
+  type OutboundSendContext,
+} from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
@@ -113,6 +121,7 @@ export type MessageActionRunnerGateway = {
 const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
   () => import("./message.gateway.runtime.js"),
 );
+const log = createSubsystemLogger("outbound/message-action");
 
 export type RunMessageActionParams = {
   cfg: OpenClawConfig;
@@ -482,6 +491,7 @@ type ResolvedActionContext = {
 type SendPayloadParts = {
   message: string;
   payload: ReplyPayload;
+  payloads?: ReplyPayload[];
   mediaUrl?: string;
   mediaUrls?: string[];
   asVoice: boolean;
@@ -517,6 +527,203 @@ function applySendPayloadPartsToActionParams(
   actionParams.mediaUrls = parts.mediaUrls;
   actionParams.asVoice = parts.asVoice || undefined;
   actionParams.audioAsVoice = parts.asVoice || undefined;
+}
+
+function collectReplyPayloadMediaUrls(payload: ReplyPayload): string[] {
+  return resolveSendableOutboundReplyParts(payload).mediaUrls;
+}
+
+function resolveDeliveredMessageId(sendResult?: MessageSendResult): string | undefined {
+  const result = sendResult?.result;
+  return result && "messageId" in result && typeof result.messageId === "string"
+    ? result.messageId
+    : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeMessageId(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return undefined;
+}
+
+function resolveGatewayDeliveredMessageId(payload: unknown): string | undefined {
+  if (!isRecord(payload)) {
+    return undefined;
+  }
+  return (
+    normalizeMessageId(payload.messageId) ??
+    (isRecord(payload.result) ? normalizeMessageId(payload.result.messageId) : undefined)
+  );
+}
+
+function startDeferredMessageActionTtsDelivery(params: {
+  supplement?: MessageActionDeferredTtsSupplement;
+  baseCtx: OutboundSendContext;
+  to: string;
+  replyToId?: string;
+  threadId?: string | number;
+  deliveredMessageId?: string;
+}) {
+  const supplement = params.supplement;
+  if (!supplement || params.baseCtx.dryRun) {
+    return;
+  }
+  void deliverDeferredMessageActionTtsSupplement({ ...params, supplement }).catch(
+    (err: unknown) => {
+      log.warn(`deferred message-action TTS delivery failed: ${formatErrorMessage(err)}`);
+    },
+  );
+}
+
+async function deliverDeferredMessageActionTtsSupplement(params: {
+  supplement: MessageActionDeferredTtsSupplement;
+  baseCtx: OutboundSendContext;
+  to: string;
+  replyToId?: string;
+  threadId?: string | number;
+  deliveredMessageId?: string;
+}) {
+  const payload = await params.supplement.synthesize();
+  if (!payload) {
+    return;
+  }
+  const replyToId = params.deliveredMessageId ?? params.replyToId;
+  const payloadWithReplyTo = replyToId && !payload.replyToId ? { ...payload, replyToId } : payload;
+  const mediaUrls = collectReplyPayloadMediaUrls(payloadWithReplyTo);
+  const baseCtx = params.baseCtx;
+  const backgroundCtx: OutboundSendContext = {
+    ...baseCtx,
+    params: { ...baseCtx.params, message: "" },
+    mediaAccess: resolveAgentScopedOutboundMediaAccess({
+      cfg: baseCtx.cfg,
+      agentId: baseCtx.agentId ?? baseCtx.mirror?.agentId,
+      mediaSources: mediaUrls,
+      sessionKey: baseCtx.sessionKey,
+      messageProvider: baseCtx.sessionKey ? undefined : baseCtx.channel,
+      accountId: baseCtx.sessionKey
+        ? (baseCtx.requesterAccountId ?? baseCtx.accountId)
+        : baseCtx.accountId,
+      requesterSenderId: baseCtx.requesterSenderId,
+      requesterSenderName: baseCtx.requesterSenderName,
+      requesterSenderUsername: baseCtx.requesterSenderUsername,
+      requesterSenderE164: baseCtx.requesterSenderE164,
+      mediaAccess: baseCtx.mediaAccess,
+    }),
+    mirror: baseCtx.mirror
+      ? {
+          ...baseCtx.mirror,
+          text: "",
+          mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+          idempotencyKey: undefined,
+        }
+      : undefined,
+    abortSignal: undefined,
+  };
+
+  await executeSendAction({
+    ctx: backgroundCtx,
+    to: params.to,
+    message: "",
+    payload: payloadWithReplyTo,
+    payloads: [payloadWithReplyTo],
+    mediaUrl: mediaUrls[0],
+    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+    asVoice: payloadWithReplyTo.audioAsVoice === true,
+    bestEffort: true,
+    replyToId: replyToId ?? undefined,
+    threadId: params.threadId,
+  });
+}
+
+function resolveDeferredGatewayActionIdempotencyKey(baseIdempotencyKey?: string) {
+  const normalized = normalizeOptionalString(baseIdempotencyKey);
+  return normalized ? `${normalized}:tts` : resolveGatewayActionIdempotencyKey();
+}
+
+function startDeferredGatewayMessageActionTtsDelivery(params: {
+  supplement?: MessageActionDeferredTtsSupplement;
+  gateway?: MessageActionRunnerGateway;
+  channel: ChannelId;
+  accountId?: string | null;
+  input: RunMessageActionParams;
+  agentId?: string;
+  to: string;
+  baseActionParams: Record<string, unknown>;
+  replyToId?: string;
+  threadId?: string | number;
+  deliveredMessageId?: string;
+}) {
+  const { gateway, supplement } = params;
+  if (!supplement || !gateway) {
+    return;
+  }
+  void deliverDeferredGatewayMessageActionTtsSupplement({ ...params, gateway, supplement }).catch(
+    (err: unknown) => {
+      log.warn(`deferred gateway message-action TTS delivery failed: ${formatErrorMessage(err)}`);
+    },
+  );
+}
+
+async function deliverDeferredGatewayMessageActionTtsSupplement(params: {
+  supplement: MessageActionDeferredTtsSupplement;
+  gateway: MessageActionRunnerGateway;
+  channel: ChannelId;
+  accountId?: string | null;
+  input: RunMessageActionParams;
+  agentId?: string;
+  to: string;
+  baseActionParams: Record<string, unknown>;
+  replyToId?: string;
+  threadId?: string | number;
+  deliveredMessageId?: string;
+}) {
+  const payload = await params.supplement.synthesize();
+  if (!payload) {
+    return;
+  }
+  const replyToId = params.deliveredMessageId ?? params.replyToId;
+  const mediaUrls = collectReplyPayloadMediaUrls(payload);
+  if (mediaUrls.length === 0) {
+    return;
+  }
+  const actionParams: Record<string, unknown> = {
+    to: params.to,
+    message: payload.text ?? "",
+    media: mediaUrls[0],
+    mediaUrl: mediaUrls[0],
+    mediaUrls,
+    bestEffort: true,
+    ...(payload.audioAsVoice === true ? { asVoice: true, audioAsVoice: true } : {}),
+    ...(replyToId ? { replyTo: replyToId, replyToId } : {}),
+    ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
+  };
+  await callGatewayMessageAction<unknown>({
+    gateway: params.gateway,
+    actionParams: {
+      channel: params.channel,
+      action: "send",
+      params: actionParams,
+      accountId: params.accountId ?? undefined,
+      requesterSenderId: params.input.requesterSenderId ?? undefined,
+      senderIsOwner: params.input.senderIsOwner,
+      sessionKey: params.input.sessionKey,
+      sessionId: params.input.sessionId,
+      inboundTurnKind: params.input.inboundEventKind,
+      agentId: params.agentId,
+      toolContext: params.input.toolContext,
+      idempotencyKey: await resolveDeferredGatewayActionIdempotencyKey(
+        normalizeOptionalString(params.baseActionParams.idempotencyKey),
+      ),
+    },
+  });
 }
 
 function collectMessageAttachmentMediaHints(value: unknown): string[] {
@@ -818,6 +1025,7 @@ async function handleInternalSourceReplySendAction(
       (input.sessionKey
         ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
         : undefined),
+    dryRun,
   });
   const payload = {
     status: "ok",
@@ -904,6 +1112,7 @@ async function buildSendPayloadParts(params: {
   target?: string;
   accountId?: string | null;
   agentId?: string;
+  dryRun?: boolean;
 }): Promise<SendPayloadParts> {
   const { actionParams, input } = params;
   if (actionParams.pin === true && actionParams.delivery == null) {
@@ -1038,7 +1247,7 @@ async function buildSendPayloadParts(params: {
       : undefined;
   const presentation = normalizeMessagePresentation(actionParams.presentation);
   const interactive = normalizeInteractiveReply(actionParams.interactive);
-  return {
+  const parts: SendPayloadParts = {
     message,
     payload: {
       text: message,
@@ -1058,6 +1267,7 @@ async function buildSendPayloadParts(params: {
     ...(bestEffort !== undefined ? { bestEffort } : {}),
     ...(silent !== undefined ? { silent } : {}),
   };
+  return parts;
 }
 
 // Detects leftover `{variable}` placeholders after prefix interpolation. Non-global so
@@ -1088,6 +1298,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     target: to,
     accountId,
     agentId,
+    dryRun,
   });
 
   // `message(action=send)` crosses into other conversations, so mirror the direct-reply
@@ -1156,9 +1367,11 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     sessionKey: input.sessionKey,
     inboundAudio: input.inboundAudio,
     dryRun,
+    sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
+    progress: readBooleanParam(params, "progress") ?? false,
   });
-  if (ttsPayload !== sendPayload.payload) {
-    sendPayload = updateSendPayloadPartsFromReplyPayload(sendPayload, ttsPayload);
+  if (ttsPayload.payload !== sendPayload.payload) {
+    sendPayload = updateSendPayloadPartsFromReplyPayload(sendPayload, ttsPayload.payload);
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
   throwIfAborted(abortSignal);
@@ -1198,46 +1411,62 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     }),
   });
   if (gatewayPluginAction) {
+    startDeferredGatewayMessageActionTtsDelivery({
+      supplement: ttsPayload.deferredSupplement,
+      gateway,
+      channel,
+      accountId,
+      input,
+      agentId,
+      to,
+      baseActionParams: params,
+      replyToId: resolvedReplyToId ?? undefined,
+      threadId: resolvedThreadId ?? undefined,
+      deliveredMessageId: resolveGatewayDeliveredMessageId(gatewayPluginAction.payload),
+    });
     return gatewayPluginAction;
   }
 
+  const sendCtx: OutboundSendContext = {
+    cfg,
+    channel,
+    params,
+    agentId,
+    sessionKey: input.sessionKey,
+    requesterAccountId: input.requesterAccountId ?? undefined,
+    requesterSenderId: input.requesterSenderId ?? undefined,
+    requesterSenderName: input.requesterSenderName ?? undefined,
+    requesterSenderUsername: input.requesterSenderUsername ?? undefined,
+    requesterSenderE164: input.requesterSenderE164 ?? undefined,
+    senderIsOwner: input.senderIsOwner,
+    mediaAccess,
+    accountId: accountId ?? undefined,
+    sessionId: input.sessionId,
+    inboundEventKind: input.inboundEventKind,
+    gateway,
+    toolContext: input.toolContext,
+    deps: input.deps,
+    dryRun,
+    mirror:
+      outboundRoute && !dryRun
+        ? {
+            sessionKey: outboundRoute.sessionKey,
+            agentId,
+            text: sendPayload.message,
+            mediaUrls: sendPayload.mediaUrls,
+            idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
+          }
+        : undefined,
+    abortSignal,
+    silent: sendPayload.silent ?? undefined,
+  };
+
   const send = await executeSendAction({
-    ctx: {
-      cfg,
-      channel,
-      params,
-      agentId,
-      sessionKey: input.sessionKey,
-      requesterAccountId: input.requesterAccountId ?? undefined,
-      requesterSenderId: input.requesterSenderId ?? undefined,
-      requesterSenderName: input.requesterSenderName ?? undefined,
-      requesterSenderUsername: input.requesterSenderUsername ?? undefined,
-      requesterSenderE164: input.requesterSenderE164 ?? undefined,
-      senderIsOwner: input.senderIsOwner,
-      mediaAccess,
-      accountId: accountId ?? undefined,
-      sessionId: input.sessionId,
-      inboundEventKind: input.inboundEventKind,
-      gateway,
-      toolContext: input.toolContext,
-      deps: input.deps,
-      dryRun,
-      mirror:
-        outboundRoute && !dryRun
-          ? {
-              sessionKey: outboundRoute.sessionKey,
-              agentId,
-              text: sendPayload.message,
-              mediaUrls: sendPayload.mediaUrls,
-              idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
-            }
-          : undefined,
-      abortSignal,
-      silent: sendPayload.silent ?? undefined,
-    },
+    ctx: sendCtx,
     to,
     message: sendPayload.message,
     payload: sendPayload.payload,
+    payloads: sendPayload.payloads,
     mediaUrl: sendPayload.mediaUrl,
     mediaUrls: sendPayload.mediaUrls,
     buffer: readStringParam(params, "buffer", { trim: false }) ?? undefined,
@@ -1249,6 +1478,14 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     bestEffort: sendPayload.bestEffort,
     replyToId: resolvedReplyToId ?? undefined,
     threadId: resolvedThreadId ?? undefined,
+  });
+  startDeferredMessageActionTtsDelivery({
+    supplement: ttsPayload.deferredSupplement,
+    baseCtx: sendCtx,
+    to,
+    replyToId: resolvedReplyToId ?? undefined,
+    threadId: resolvedThreadId ?? undefined,
+    deliveredMessageId: resolveDeliveredMessageId(send.sendResult),
   });
 
   return {

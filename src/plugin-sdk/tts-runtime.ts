@@ -47,6 +47,7 @@ export {
   type ResolvedTtsModelOverrides,
   type TtsDirectiveOverrides,
   type TtsDirectiveParseResult,
+  type TtsPrepareHook,
   type TtsResult,
   type TtsSynthesisResult,
   type TtsSynthesisStreamResult,

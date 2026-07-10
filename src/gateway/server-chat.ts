@@ -275,6 +275,7 @@ export type AgentEventHandlerOptions = {
   loadGatewaySessionRowForSnapshot?: typeof loadGatewaySessionRow;
   lifecycleErrorRetryGraceMs?: number;
   isChatSendRunActive?: (runId: string) => boolean;
+  clearChatRunState?: (runId: string) => void;
   clearTrackedActiveRun?: (params: {
     runId: string;
     clientRunId: string;
@@ -325,6 +326,7 @@ export function createAgentEventHandler({
   loadGatewaySessionRowForSnapshot = loadGatewaySessionRow,
   lifecycleErrorRetryGraceMs = AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS,
   isChatSendRunActive = () => false,
+  clearChatRunState = (runId) => chatRunState.clearRun(runId),
   clearTrackedActiveRun,
   markTrackedRunTerminalPersisted,
   trackTrackedRunTerminalPersistence,
@@ -357,7 +359,7 @@ export function createAgentEventHandler({
   ];
 
   const clearBufferedChatState = (clientRunId: string) => {
-    chatRunState.clearRun(clientRunId);
+    clearChatRunState(clientRunId);
   };
 
   const clearPendingTerminalLifecycleError = (runId: string, lifecycleGeneration?: string) => {
@@ -975,7 +977,7 @@ export function createAgentEventHandler({
     // suppressed the most recent chunk, leaving the client with stale text.
     // Only flush if the buffered text differs from the last broadcast to avoid duplicates.
     flushBufferedChatDeltaIfNeeded(sessionKey, opts?.agentId, clientRunId, sourceRunId, seq, opts);
-    chatRunState.clearRun(clientRunId);
+    clearChatRunState(clientRunId);
     const spawnedBy = resolveSpawnedBy(sessionKey);
     if (jobState !== "error") {
       const payload = {

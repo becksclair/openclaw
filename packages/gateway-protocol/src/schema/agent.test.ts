@@ -57,6 +57,19 @@ const musicCompletionEvent: AgentInternalEvent = {
 };
 
 describe("AgentParamsSchema", () => {
+  it("accepts inherited fast mode fields for internal subagent runs", () => {
+    expect(
+      Value.Check(AgentParamsSchema, {
+        message: "expand this memory query",
+        sessionKey: "agent:main:subagent:lcm-expand:abc123",
+        fastMode: "auto",
+        fastModeStartedAtMs: 123_456,
+        fastModeAutoOnSeconds: 45,
+        idempotencyKey: "lcm-expand-1",
+      }),
+    ).toBe(true);
+  });
+
   it("accepts generated music attachments on internal completion events", () => {
     const params = makeAgentParamsWithInternalEvent(musicCompletionEvent);
 

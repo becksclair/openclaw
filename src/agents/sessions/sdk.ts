@@ -344,7 +344,8 @@ export async function createAgentSession(
   if (!model) {
     thinkingLevel = "off";
   } else {
-    thinkingLevel = clampThinkingLevel(model, thinkingLevel) as ThinkingLevel;
+    const runtimeThinkingLevel = thinkingLevel === "ultra" ? "max" : thinkingLevel;
+    thinkingLevel = clampThinkingLevel(model, runtimeThinkingLevel) as ThinkingLevel;
   }
 
   const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];

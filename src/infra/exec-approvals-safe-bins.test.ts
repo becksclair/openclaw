@@ -358,7 +358,7 @@ describe("exec approvals safe bins", () => {
     expect(ok).toBe(true);
   });
 
-  it("checks safe-bin trusted dirs against the real executable identity", () => {
+  it("requires both PATH-selected and real executable directories to be trusted", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -385,6 +385,17 @@ describe("exec approvals safe bins", () => {
           extraDirs: ["/opt/homebrew/Cellar/coreutils/9.5/bin"],
           refresh: true,
         }),
+      }),
+    ).toBe(false);
+    expect(
+      isSafeBinUsage({
+        argv: ["head", "-n", "1"],
+        resolution,
+        safeBins: normalizeSafeBins(["head"]),
+        trustedSafeBinDirs: new Set([
+          "/opt/homebrew/bin",
+          "/opt/homebrew/Cellar/coreutils/9.5/bin",
+        ]),
       }),
     ).toBe(true);
     expect(
@@ -415,11 +426,13 @@ describe("exec approvals safe bins", () => {
     if (process.platform === "win32") {
       return;
     }
+    let trustedPathCheckParams: { resolvedPath?: string; resolvedRealPath?: string } | undefined;
     const baseParams = {
       argv: ["head", "-n", "1"],
       resolution: {
         rawExecutable: "head",
         resolvedPath: "/tmp/custom/head",
+        resolvedRealPath: "/bin/head",
         executableName: "head",
       },
       safeBins: normalizeSafeBins(["head"]),
@@ -427,9 +440,16 @@ describe("exec approvals safe bins", () => {
     expect(
       isSafeBinUsage({
         ...baseParams,
-        isTrustedSafeBinPathFn: () => true,
+        isTrustedSafeBinPathFn: (params) => {
+          trustedPathCheckParams = params;
+          return true;
+        },
       }),
     ).toBe(true);
+    expect(trustedPathCheckParams).toMatchObject({
+      resolvedPath: "/tmp/custom/head",
+      resolvedRealPath: "/bin/head",
+    });
     expect(
       isSafeBinUsage({
         ...baseParams,

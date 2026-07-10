@@ -1,5 +1,4 @@
-// TTS capability tests cover channel plugin text-to-speech capability detection.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -28,72 +27,10 @@ describe("resolveChannelTtsVoiceDelivery", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("reads voice delivery behavior from channel plugin capabilities", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "imessage",
-          plugin: createChannelPlugin("imessage", {
-            chatTypes: ["direct"],
-            tts: {
-              voice: {
-                synthesisTarget: "audio-file",
-                audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
-                preferAudioFileFormat: "caf",
-              },
-            },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "discord",
-          plugin: createChannelPlugin("discord", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note" } },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "feishu",
-          plugin: createChannelPlugin("feishu", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note", transcodesAudio: true } },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "matrix",
-          plugin: createChannelPlugin("matrix", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note" } },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "telegram",
-          plugin: createChannelPlugin("telegram", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note" } },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "whatsapp",
-          plugin: createChannelPlugin("whatsapp", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note", transcodesAudio: true } },
-          }),
-          source: "test",
-        },
-      ]),
-    );
-    expect(resolveChannelTtsVoiceDelivery("imessage")).toEqual({
-      synthesisTarget: "audio-file",
-      audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
-      preferAudioFileFormat: "caf",
-    });
+  it("reads bundled voice delivery behavior from lightweight public artifacts", () => {
     expect(resolveChannelTtsVoiceDelivery("discord")).toEqual({
       synthesisTarget: "voice-note",
+      transcodesAudio: true,
     });
     expect(resolveChannelTtsVoiceDelivery("feishu")).toEqual({
       synthesisTarget: "voice-note",
@@ -104,11 +41,109 @@ describe("resolveChannelTtsVoiceDelivery", () => {
     });
     expect(resolveChannelTtsVoiceDelivery("telegram")).toEqual({
       synthesisTarget: "voice-note",
+      transcodesAudio: true,
     });
     expect(resolveChannelTtsVoiceDelivery("whatsapp")).toEqual({
       synthesisTarget: "voice-note",
       transcodesAudio: true,
     });
+  });
+
+  it("treats invalid artifact directory names as unknown channels", () => {
+    expect(resolveChannelTtsVoiceDelivery("../telegram")).toBeUndefined();
+    expect(resolveChannelTtsVoiceDelivery("telegram/../discord")).toBeUndefined();
+    expect(resolveChannelTtsVoiceDelivery("telegram:voice")).toBeUndefined();
+  });
+
+  it("resolves registered aliases through the canonical lightweight artifact", () => {
+    const feishu = createChannelPlugin("feishu", { chatTypes: ["direct"] });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "feishu",
+          plugin: {
+            ...feishu,
+            meta: {
+              ...feishu.meta,
+              aliases: ["lark"],
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+
+    expect(resolveChannelTtsVoiceDelivery("lark")).toEqual({
+      synthesisTarget: "voice-note",
+      transcodesAudio: true,
+    });
+  });
+
+  it("does not materialize a bundled channel plugin when the artifact exists", async () => {
+    vi.resetModules();
+    const getBundledChannelPlugin = vi.fn(() => {
+      throw new Error("full bundled channel plugin should not load");
+    });
+    vi.doMock("./bundled.js", () => ({
+      getBundledChannelPlugin,
+    }));
+    const { resolveChannelTtsVoiceDelivery: resolveWithoutBundledPluginLoad } =
+      await import("./tts-capabilities.js");
+
+    expect(resolveWithoutBundledPluginLoad("telegram")).toEqual({
+      synthesisTarget: "voice-note",
+      transcodesAudio: true,
+    });
+    expect(getBundledChannelPlugin).not.toHaveBeenCalled();
+  });
+
+  it("falls back to already-loaded channel plugin capabilities", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          plugin: createChannelPlugin("imessage", {
+            chatTypes: ["direct"],
+            tts: {
+              voice: {
+                synthesisTarget: "audio-file",
+                audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
+              },
+            },
+          }),
+          source: "test",
+        },
+      ]),
+    );
+    expect(resolveChannelTtsVoiceDelivery("imessage")).toEqual({
+      synthesisTarget: "audio-file",
+      audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
+    });
     expect(resolveChannelTtsVoiceDelivery("slack")).toBeUndefined();
+  });
+
+  it("prefers loaded channel capabilities over bundled public artifacts", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: createChannelPlugin("telegram", {
+            chatTypes: ["direct"],
+            tts: {
+              voice: {
+                synthesisTarget: "audio-file",
+                audioFileFormats: ["mp3", "audio/mpeg"],
+              },
+            },
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
+    expect(resolveChannelTtsVoiceDelivery("telegram")).toEqual({
+      synthesisTarget: "audio-file",
+      audioFileFormats: ["mp3", "audio/mpeg"],
+    });
   });
 });

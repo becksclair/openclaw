@@ -136,6 +136,7 @@ export async function sendTelegramPayloadMessages(params: {
   react: TelegramReactionFn;
   to: string;
   payload: ReplyPayload;
+  audioAsVoice?: boolean;
   baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "quoteText">;
 }): Promise<Awaited<ReturnType<TelegramSendFn>>> {
   const telegramData = params.payload.channelData?.telegram as
@@ -163,11 +164,12 @@ export async function sendTelegramPayloadMessages(params: {
     interactive: params.payload.interactive,
   });
   const replyToMessageId = params.baseOpts.replyToMessageId;
+  const asVoice = params.payload.audioAsVoice === true || params.audioAsVoice === true;
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
     promptContextTimestampMs: resolveTelegramPromptContextTimestampMs(params.payload),
-    ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
+    ...(asVoice ? { asVoice: true } : {}),
   };
   const shouldConsumeImplicitReplyTarget =
     payloadOpts.replyToIdSource === "implicit" &&
@@ -335,6 +337,7 @@ export function createTelegramOutboundAdapter(
           mediaUrl: params.mediaUrl,
           mediaLocalRoots: params.mediaLocalRoots,
           mediaReadFile: params.mediaReadFile,
+          ...(params.audioAsVoice === true ? { asVoice: true } : {}),
           forceDocument: params.forceDocument ?? false,
         });
       },
@@ -350,6 +353,7 @@ export function createTelegramOutboundAdapter(
         react: reactMessageTelegram,
         to: outboundTo,
         payload: params.payload,
+        audioAsVoice: params.audioAsVoice,
         baseOpts: {
           ...baseOpts,
           mediaLocalRoots: params.mediaLocalRoots,

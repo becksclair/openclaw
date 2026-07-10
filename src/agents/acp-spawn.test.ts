@@ -1079,7 +1079,7 @@ describe("spawnAcpDirect", () => {
             id: "codex-acp",
             runtime: {
               type: "acp",
-              acp: { agent: "codex" },
+              acp: { agent: "codex", target: "devbox" },
             },
             subagents: {
               model: "openai/gpt-5.5",
@@ -1112,6 +1112,7 @@ describe("spawnAcpDirect", () => {
       runtimeOptions: {
         model: "openai/gpt-5.5",
         thinking: "low",
+        target: "devbox",
       },
     });
   });

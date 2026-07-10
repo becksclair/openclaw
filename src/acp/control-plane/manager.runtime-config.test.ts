@@ -658,6 +658,59 @@ describe("AcpSessionManager runtime config", () => {
     });
   });
 
+  it.each([
+    {
+      managedKey: "thinking",
+      advertisedKey: "reasoning_effort",
+      runtimeOptions: { thinking: "high" },
+    },
+    {
+      managedKey: "permissionProfile",
+      advertisedKey: "approval_policy",
+      runtimeOptions: { permissionProfile: "strict" },
+    },
+    {
+      managedKey: "timeoutSeconds",
+      advertisedKey: "timeout",
+      runtimeOptions: { timeoutSeconds: 120 },
+    },
+  ])(
+    "suppresses backend-managed $managedKey when the wire key is $advertisedKey",
+    async ({ managedKey, advertisedKey, runtimeOptions }) => {
+      const runtimeState = createRuntime();
+      runtimeState.getCapabilities.mockResolvedValue({
+        controls: ["session/set_config_option"],
+        configOptionKeys: [advertisedKey],
+        managedRuntimeOptionKeys: [managedKey],
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      const sessionKey = `agent:codex:acp:managed-${managedKey}`;
+      hoisted.readAcpSessionEntryMock.mockReturnValue({
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          ...readySessionMeta(),
+          runtimeOptions,
+        },
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey,
+        text: "do work",
+        mode: "prompt",
+        requestId: `run-${managedKey}`,
+      });
+
+      expect(runtimeState.setConfigOption).not.toHaveBeenCalled();
+      expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("re-ensures runtime handles after cwd runtime option updates", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({

@@ -14,7 +14,7 @@ import {
 } from "./control-ui-css.js";
 import type { GatewayRemoteConfig } from "./types.gateway.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
-import { ToolsSchema } from "./zod-schema.agent-runtime.js";
+import { ToolPolicyWithProfileSchema, ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import { ChannelsSchema } from "./zod-schema.channels-config.js";
@@ -324,6 +324,7 @@ const TalkRealtimeSchema = z
     reasoningEffort: z.string().min(1).optional(),
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
     consultRouting: z.enum(["provider-direct", "force-agent-consult"]).optional(),
+    tools: ToolPolicyWithProfileSchema.optional(),
   })
   .strict()
   .superRefine((realtime, ctx) => {

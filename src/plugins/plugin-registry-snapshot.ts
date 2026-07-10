@@ -265,7 +265,7 @@ function loadCurrentPluginRegistrySnapshotResult(
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
   });
-  if (!current || current.registryDiagnostics.length > 0) {
+  if (!current) {
     return undefined;
   }
   return {

@@ -107,6 +107,7 @@ const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModu
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
+const MESSAGE_TOOL_SEND_TEXT_KEYS = ["message", "SendMessage", "content", "text"] as const;
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
   write: REQUIRED_PARAM_GROUPS.write,
@@ -218,6 +219,16 @@ type ToolStartRecord = {
   args: unknown;
   hasRepliedRef?: { value: boolean };
 };
+
+function resolveMessagingToolSendText(args: Record<string, unknown>): string | undefined {
+  for (const key of MESSAGE_TOOL_SEND_TEXT_KEYS) {
+    const text = readStringValue(args[key]);
+    if (text?.trim()) {
+      return text;
+    }
+  }
+  return undefined;
+}
 
 /** Track tool execution start data for after_tool_call hook. */
 const toolStartData = new Map<string, ToolStartRecord>();
@@ -667,16 +678,6 @@ function extendExecMeta(toolName: string, args: unknown, meta?: string): string 
   return meta ? `${meta} · ${suffix}` : suffix;
 }
 
-function readMessagingText(record: Record<string, unknown>): string | undefined {
-  for (const key of ["content", "message", "text", "body"]) {
-    const value = readStringValue(record[key]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 function hasMessagingRichContent(record: Record<string, unknown>): boolean {
   const payload = {
     presentation: record.presentation,
@@ -694,7 +695,12 @@ function hasMessagingRichContent(record: Record<string, unknown>): boolean {
 
 function queuePendingToolMedia(
   ctx: ToolHandlerContext,
-  mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
+  mediaReply: {
+    mediaUrls: string[];
+    audioAsVoice?: boolean;
+    trustedLocalMedia?: boolean;
+    spokenText?: string;
+  },
 ) {
   const seen = new Set(ctx.state.pendingToolMediaUrls);
   for (const mediaUrl of mediaReply.mediaUrls) {
@@ -709,6 +715,9 @@ function queuePendingToolMedia(
   }
   if (mediaReply.trustedLocalMedia) {
     ctx.state.pendingToolTrustedLocalMedia = true;
+  }
+  if (mediaReply.spokenText) {
+    ctx.state.pendingToolSpokenText = mediaReply.spokenText;
   }
 }
 
@@ -915,6 +924,7 @@ async function emitToolResultOutput(params: {
     mediaUrls,
     ...(mediaReply.audioAsVoice ? { audioAsVoice: true } : {}),
     ...(mediaReply.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
+    ...(mediaReply.spokenText ? { spokenText: mediaReply.spokenText } : {}),
   });
 }
 
@@ -1143,7 +1153,9 @@ export function handleToolExecutionStart(
         }
       }
       if (isMessagingSend) {
-        const text = readMessagingText(argsRecord);
+        // Match message-action normalization aliases so final-reply dedupe sees
+        // successful sends even when the model used `text` instead of `message`.
+        const text = resolveMessagingToolSendText(argsRecord);
         if (text) {
           ctx.state.pendingMessagingTexts.set(toolCallId, text);
           ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
@@ -1403,7 +1415,7 @@ export async function handleToolExecutionEnd(
       hookResult: toolSendReceiptResult,
       isError: isToolError,
     });
-  const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
+  const messageText = isMessagingSend ? resolveMessagingToolSendText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
   const hasRichContent = isMessagingSend && hasMessagingRichContent(startArgs);
   const messageTarget = hasMessagingTargetEvidence
@@ -1458,7 +1470,10 @@ export async function handleToolExecutionEnd(
     ) {
       ctx.state.messageToolOnlySourceReplyDelivered = true;
     }
-    const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
+    const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result, {
+      toolName: rawToolName,
+      trustedLocalMediaToolNames: ctx.trustedLocalMediaToolNames,
+    });
     if (sourceReplyPayload) {
       ctx.state.messagingToolSourceReplyPayloads.push(sourceReplyPayload);
       ctx.trimMessagingToolSent();

@@ -341,7 +341,7 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun connect_prefersStoredDeviceTokenOverBootstrapToken() =
+  fun connect_prefersBootstrapTokenWhenStoredDeviceTokenScopesAreStale() =
     runBlocking {
       val json = testJson()
       val connected = CompletableDeferred<Unit>()
@@ -379,8 +379,8 @@ class GatewaySessionInvokeTest {
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
         val auth = withTimeout(TEST_TIMEOUT_MS) { connectAuth.await() }
-        assertEquals("device-token", auth?.get("token")?.jsonPrimitive?.content)
-        assertNull(auth?.get("bootstrapToken"))
+        assertEquals("bootstrap-token", auth?.get("bootstrapToken")?.jsonPrimitive?.content)
+        assertNull(auth?.get("token"))
       } finally {
         shutdownHarness(harness, server)
       }
@@ -445,6 +445,72 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
+  fun connect_reusesStoredDeviceTokenFromAuthRoleSlot() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val connectParams = CompletableDeferred<JsonObject>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(json) { webSocket, id, method, frame ->
+          if (method == "connect") {
+            if (!connectParams.isCompleted) {
+              connectParams.complete(frame["params"]!!.jsonObject)
+            }
+            webSocket.send(connectResponseFrame(id))
+            webSocket.close(1000, "done")
+          }
+        }
+
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        harness.deviceAuthStore.saveToken(
+          gatewayId = gatewayIdForPort(server.port),
+          deviceId = deviceId,
+          role = "operator",
+          token = "bounded-operator-token",
+          scopes = listOf("operator.read", "operator.write"),
+        )
+        harness.deviceAuthStore.saveToken(
+          gatewayId = gatewayIdForPort(server.port),
+          deviceId = deviceId,
+          role = "operator-pairing",
+          token = "pairing-operator-token",
+          scopes = listOf("operator.read", "operator.pairing"),
+        )
+
+        connectNodeSession(
+          session = harness.session,
+          port = server.port,
+          token = null,
+          role = "operator",
+          authRole = "operator-pairing",
+          scopes = listOf("operator.read", "operator.pairing"),
+        )
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+        val params = withTimeout(TEST_TIMEOUT_MS) { connectParams.await() }
+        assertEquals(
+          "pairing-operator-token",
+          params["auth"]
+            ?.jsonObject
+            ?.get("token")
+            ?.jsonPrimitive
+            ?.content,
+        )
+        assertEquals(listOf("operator.read", "operator.pairing"), params.scopes())
+      } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
   fun bootstrapConnect_filtersOperatorHandoffScopesFromConnectRequest() =
     runBlocking {
       val json = testJson()
@@ -478,7 +544,6 @@ class GatewaySessionInvokeTest {
           scopes =
             listOf(
               "operator.approvals",
-              "operator.pairing",
               "operator.read",
               "operator.talk.secrets",
               "operator.write",
@@ -504,6 +569,59 @@ class GatewaySessionInvokeTest {
           ),
           params.scopes(),
         )
+      } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun bootstrapConnect_keepsPairingScopesForPairingOperatorAuthRole() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val connectParams = CompletableDeferred<JsonObject>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(json) { webSocket, id, method, frame ->
+          if (method == "connect") {
+            if (!connectParams.isCompleted) {
+              connectParams.complete(frame["params"]!!.jsonObject)
+            }
+            webSocket.send(
+              connectResponseFrame(
+                id,
+                authJson = """{"deviceToken":"pairing-bootstrap-token","role":"operator","scopes":["operator.read","operator.pairing"]}""",
+              ),
+            )
+            webSocket.close(1000, "done")
+          }
+        }
+
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        connectNodeSession(
+          session = harness.session,
+          port = server.port,
+          token = null,
+          bootstrapToken = "setup-bootstrap-token",
+          role = "operator",
+          authRole = "operator-pairing",
+          scopes = listOf("operator.read", "operator.pairing"),
+        )
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+        val params = withTimeout(TEST_TIMEOUT_MS) { connectParams.await() }
+        assertEquals(listOf("operator.pairing", "operator.read"), params.scopes())
+
+        val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        val pairingEntry = harness.deviceAuthStore.loadEntry(gatewayIdForPort(server.port), deviceId, "operator-pairing")
+        assertEquals("pairing-bootstrap-token", pairingEntry?.token)
+        assertEquals(listOf("operator.pairing", "operator.read"), pairingEntry?.scopes)
       } finally {
         shutdownHarness(harness, server)
       }
@@ -559,6 +677,7 @@ class GatewaySessionInvokeTest {
           port = server.port,
           token = "shared-auth-token",
           bootstrapToken = null,
+          scopes = emptyList(),
         )
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
@@ -631,7 +750,7 @@ class GatewaySessionInvokeTest {
                 connectResponseFrame(
                   id,
                   authJson =
-                    """{"deviceToken":"bootstrap-node-token","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"bootstrap-operator-token","role":"operator","scopes":["operator.admin","operator.approvals","operator.pairing","operator.read","operator.talk.secrets","operator.write"]}]}""",
+                    """{"deviceToken":"bootstrap-node-token","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"bootstrap-operator-token","role":"operator","scopes":["operator.approvals","operator.read","operator.talk.secrets","operator.write"]}]}""",
                 ),
               )
               webSocket.close(1000, "done")
@@ -1075,6 +1194,7 @@ class GatewaySessionInvokeTest {
     token: String? = "test-token",
     bootstrapToken: String? = null,
     role: String = "node",
+    authRole: String = role,
     scopes: List<String> = listOf("node:invoke"),
   ) {
     session.connect(
@@ -1092,6 +1212,7 @@ class GatewaySessionInvokeTest {
       options =
         GatewayConnectOptions(
           role = role,
+          authRole = authRole,
           scopes = scopes,
           caps = emptyList(),
           commands = emptyList(),

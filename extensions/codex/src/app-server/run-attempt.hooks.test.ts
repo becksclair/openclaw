@@ -159,6 +159,9 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(llmInputPayload.imagesCount).toBe(0);
     expect(llmInputPayload.historyMessages).toEqual([]);
     expect(llmInputPayload.systemPrompt).toContain(
+      "OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
+    );
+    expect(llmInputPayload.systemPrompt).not.toContain(
       "You are a personal agent running inside OpenClaw.",
     );
     expect(llmInputPayload.systemPrompt).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
@@ -282,6 +285,47 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(agentEndContext.sessionId).toBe("session-1");
   });
 
+  it("suppresses plugin lifecycle hooks for private helper codex turns", async () => {
+    const beforePromptBuild = vi.fn(() => ({ prependContext: "should not appear" }));
+    const llmInput = vi.fn();
+    const llmOutput = vi.fn();
+    const agentEnd = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_prompt_build", handler: beforePromptBuild },
+        { hookName: "llm_input", handler: llmInput },
+        { hookName: "llm_output", handler: llmOutput },
+        { hookName: "agent_end", handler: agentEnd },
+      ]),
+    );
+    const sessionFile = path.join(tempDir, "private-helper-session.jsonl");
+    const workspaceDir = path.join(tempDir, "private-helper-workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.suppressPluginHooks = true;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const turnStart = harness.requests.find((entry) => entry.method === "turn/start");
+    expect(JSON.stringify(turnStart?.params)).not.toContain("should not appear");
+    await harness.notify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "msg-1",
+        delta: "private answer",
+      },
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(beforePromptBuild).not.toHaveBeenCalled();
+    expect(llmInput).not.toHaveBeenCalled();
+    expect(llmOutput).not.toHaveBeenCalled();
+    expect(agentEnd).not.toHaveBeenCalled();
+  });
+
   it("emits gated model-call content diagnostics for codex turns", async () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const diagnosticContentByType = new Map<string, DiagnosticEventPrivateData>();
@@ -369,6 +413,9 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       expect(JSON.stringify(startedContent?.inputMessages)).toContain("hello");
       expect(JSON.stringify(startedContent?.inputMessages)).not.toContain("existing context");
       expect(startedContent?.systemPrompt).toContain(
+        "OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
+      );
+      expect(startedContent?.systemPrompt).not.toContain(
         "You are a personal agent running inside OpenClaw.",
       );
       expect(completedEvent?.callId).toBe("diagnostic-run-1:codex-model:1");

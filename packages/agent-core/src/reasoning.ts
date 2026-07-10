@@ -26,7 +26,7 @@ export function resolveAgentReasoningOption(
   thinkingLevel: ThinkingLevel,
 ): SimpleStreamOptions["reasoning"] {
   if (thinkingLevel !== "off") {
-    return thinkingLevel;
+    return thinkingLevel === "ultra" ? "max" : thinkingLevel;
   }
   const offFallback =
     model.thinkingLevelMap?.off ??

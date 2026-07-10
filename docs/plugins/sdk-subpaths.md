@@ -65,10 +65,13 @@ only.
 
 ### Reserved bundled plugin helper subpaths
 
-`plugin-sdk/codex-mcp-projection` is the only reserved subpath: a plugin-owned
-compatibility surface for the bundled Codex plugin, not a general SDK API.
-Cross-owner plugin imports are blocked by package contract guardrails, and
-CI fails when a reserved subpath stops being imported.
+`plugin-sdk/codex-app-server-base-prompt` and `plugin-sdk/codex-mcp-projection`
+are the reserved subpaths: plugin-owned compatibility surfaces for the bundled
+Codex plugin, not general SDK APIs. Cross-owner plugin imports are blocked by
+package contract guardrails, and CI fails when a reserved subpath stops being
+imported. The Codex base-prompt helper name is kept for compatibility; it reads
+canonical `agent-base.md` overrides first and falls back to the Codex-only
+legacy `app-server-base.md` alias.
 `plugin-sdk/codex-native-task-runtime` is repo-local only and is not a package
 export.
 
@@ -418,6 +421,7 @@ usage endpoint failed or returned no usable usage data.
 
     | Subpath | Owner and purpose |
     | --- | --- |
+    | `plugin-sdk/codex-app-server-base-prompt` | Bundled Codex plugin helper for reading the user-owned `agent-base.md` base prompt override, with Codex-only `app-server-base.md` fallback (reserved package export) |
     | `plugin-sdk/codex-mcp-projection` | Bundled Codex plugin helper for projecting user MCP server config into Codex app-server thread config (reserved package export) |
     | `plugin-sdk/codex-native-task-runtime` | Bundled Codex plugin helper for mirroring Codex app-server native subagents into OpenClaw task state (repo-local only, not a package export) |
 

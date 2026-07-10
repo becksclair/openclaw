@@ -1,6 +1,7 @@
 // Speech Core module implements tts behavior.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import type { ChannelTtsVoiceDeliveryCapabilities } from "openclaw/plugin-sdk/channel-contract";
 import { resolveChannelTtsVoiceDelivery } from "openclaw/plugin-sdk/channel-targets";
 import type {
   OpenClawConfig,
@@ -978,13 +979,13 @@ function supportsAudioFileVoiceMemoOutput(params: {
 }
 
 function shouldDeliverTtsAsVoice(params: {
-  channel: string | undefined;
+  delivery: ChannelTtsVoiceDeliveryCapabilities | undefined;
   target: "audio-file" | "voice-note" | undefined;
   voiceCompatible: boolean | undefined;
   fileExtension?: string;
   outputFormat?: string;
 }): boolean {
-  const delivery = resolveChannelTtsVoiceDelivery(params.channel);
+  const delivery = params.delivery;
   if (!delivery) {
     return false;
   }
@@ -1188,6 +1189,32 @@ function resolveReadySpeechProvider(params: {
   };
 }
 
+/**
+ * Layer-A hook result: a plugin may replace the text and/or supply per-request
+ * provider overrides. `void` (or an omitted field) means "leave unchanged".
+ */
+export type TtsPrepareHookResult = {
+  text?: string;
+  providerOverrides?: Record<string, unknown>;
+} | void;
+
+/**
+ * Layer-A `tts_prepare` callback threaded from host call sites into speech-core.
+ * speech-core is import-restricted and cannot reach the plugin hook dispatcher,
+ * so the host injects this callback; the host bridge maps it to/from the plugin
+ * hook. Never wired for Talk/telephony.
+ */
+export type TtsPrepareHook = (input: {
+  text: string;
+  providerId: string;
+  providerModel?: string;
+  persona?: ResolvedTtsPersona;
+  personaId?: string;
+  target: "audio-file" | "voice-note" | "telephony";
+  timeoutMs: number;
+  attempt: number;
+}) => Promise<TtsPrepareHookResult> | TtsPrepareHookResult;
+
 async function prepareSpeechSynthesis(params: {
   provider: NonNullable<ReturnType<typeof getSpeechProvider>>;
   text: string;
@@ -1198,36 +1225,71 @@ async function prepareSpeechSynthesis(params: {
   personaProviderConfig?: SpeechProviderConfig;
   target: "audio-file" | "voice-note" | "telephony";
   timeoutMs: number;
+  prepareHook?: TtsPrepareHook;
+  providerModel?: string;
+  attempt?: number;
 }): Promise<{
   text: string;
   providerConfig: SpeechProviderConfig;
   providerOverrides?: SpeechProviderOverrides;
 }> {
+  // Run the injected tts_prepare hook first, before the provider's own
+  // prepareSynthesis, once per non-skipped fallback candidate. Fail-open: a
+  // thrown hook or a hook that never runs leaves the originals untouched.
+  let text = params.text;
+  let providerOverrides = params.providerOverrides;
+  if (params.prepareHook) {
+    try {
+      const hookResult = await params.prepareHook({
+        text,
+        providerId: params.provider.id,
+        // Prefer the model actually resolved from provider config/overrides (e.g.
+        // Google's gemini-*-tts lives in providerConfig, not the candidate
+        // voiceModel), falling back to the candidate model ref. The hook selects
+        // its strategy by this id, so an empty value would misroute enrichment.
+        providerModel:
+          resolveTtsResultModel(params.providerConfig, params.providerOverrides) ??
+          params.providerModel,
+        persona: params.persona,
+        personaId: params.persona?.id,
+        target: params.target,
+        timeoutMs: params.timeoutMs,
+        attempt: params.attempt ?? 0,
+      });
+      text = hookResult?.text ?? text;
+      providerOverrides = hookResult?.providerOverrides
+        ? { ...providerOverrides, ...hookResult.providerOverrides }
+        : providerOverrides;
+    } catch (err) {
+      logVerbose(`TTS: tts_prepare hook failed (${formatErrorMessage(err)}); using original text.`);
+    }
+  }
+
   if (!params.provider.prepareSynthesis) {
     return {
-      text: params.text,
+      text,
       providerConfig: params.providerConfig,
-      providerOverrides: params.providerOverrides,
+      providerOverrides,
     };
   }
   const prepared = await params.provider.prepareSynthesis({
-    text: params.text,
+    text,
     cfg: params.cfg,
     providerConfig: params.providerConfig,
-    providerOverrides: params.providerOverrides,
+    providerOverrides,
     persona: params.persona,
     personaProviderConfig: params.personaProviderConfig,
     target: params.target,
     timeoutMs: params.timeoutMs,
   });
   return {
-    text: prepared?.text ?? params.text,
+    text: prepared?.text ?? text,
     providerConfig: prepared?.providerConfig
       ? { ...params.providerConfig, ...prepared.providerConfig }
       : params.providerConfig,
     providerOverrides: prepared?.providerOverrides
-      ? { ...params.providerOverrides, ...prepared.providerOverrides }
-      : params.providerOverrides,
+      ? { ...providerOverrides, ...prepared.providerOverrides }
+      : providerOverrides,
   };
 }
 
@@ -1319,6 +1381,7 @@ export async function textToSpeech(params: {
   timeoutMs?: number;
   agentId?: string;
   accountId?: string;
+  prepareHook?: TtsPrepareHook;
 }): Promise<TtsResult> {
   const synthesis = await synthesizeSpeech(params);
   if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
@@ -1334,8 +1397,10 @@ export async function textToSpeech(params: {
   let audioBuffer = synthesis.audioBuffer;
   let fileExtension = synthesis.fileExtension;
   let outputFormat = synthesis.outputFormat;
+  const voiceDelivery = resolveChannelTtsVoiceDelivery(params.channel);
   const transcoded = await maybePreTranscodeForVoiceDelivery({
     channel: params.channel,
+    delivery: voiceDelivery,
     target: synthesis.target,
     audioBuffer,
     fileExtension,
@@ -1366,7 +1431,7 @@ export async function textToSpeech(params: {
     outputFormat,
     voiceCompatible: synthesis.voiceCompatible,
     audioAsVoice: shouldDeliverTtsAsVoice({
-      channel: params.channel,
+      delivery: voiceDelivery,
       target: synthesis.target,
       voiceCompatible: synthesis.voiceCompatible,
       fileExtension,
@@ -1378,6 +1443,7 @@ export async function textToSpeech(params: {
 
 async function maybePreTranscodeForVoiceDelivery(params: {
   channel: string | undefined;
+  delivery: ChannelTtsVoiceDeliveryCapabilities | undefined;
   target: "audio-file" | "voice-note" | undefined;
   audioBuffer: Buffer;
   fileExtension: string;
@@ -1386,7 +1452,7 @@ async function maybePreTranscodeForVoiceDelivery(params: {
   if (params.target !== "audio-file") {
     return undefined;
   }
-  const delivery = resolveChannelTtsVoiceDelivery(params.channel);
+  const delivery = params.delivery;
   const preferred = delivery?.preferAudioFileFormat?.trim().toLowerCase();
   if (!preferred) {
     return undefined;
@@ -1431,6 +1497,7 @@ export async function synthesizeSpeech(params: {
   timeoutMs?: number;
   agentId?: string;
   accountId?: string;
+  prepareHook?: TtsPrepareHook;
 }): Promise<TtsSynthesisResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
@@ -1462,6 +1529,7 @@ export async function synthesizeSpeech(params: {
     }`,
   );
 
+  let attempt = 0;
   for (const { provider, voiceModel } of providers) {
     attemptedProviders.push(provider);
     const providerStart = Date.now();
@@ -1503,6 +1571,9 @@ export async function synthesizeSpeech(params: {
         personaProviderConfig: resolvedProvider.personaProviderConfig,
         target,
         timeoutMs,
+        prepareHook: params.prepareHook,
+        providerModel: voiceModel?.model,
+        attempt: attempt++,
       });
       const synthesis = await resolvedProvider.provider.synthesize({
         text: prepared.text,
@@ -1945,6 +2016,7 @@ export async function maybeApplyTtsToPayload(params: {
   ttsAuto?: string;
   agentId?: string;
   accountId?: string;
+  prepareHook?: TtsPrepareHook;
 }): Promise<ReplyPayload> {
   if (params.payload.isCompactionNotice) {
     return params.payload;
@@ -2008,6 +2080,12 @@ export async function maybeApplyTtsToPayload(params: {
     return nextPayload;
   }
 
+  // Tool delivery payloads are tool-activity chrome and are never auto-spoken,
+  // even in "all" mode, which voices assistant content blocks (block/final) and
+  // not intermediate tool output. Without this, mode:"all" speaks tool messages.
+  if (params.kind === "tool") {
+    return nextPayload;
+  }
   const mode = config.mode ?? "final";
   if (mode === "final" && params.kind && params.kind !== "final") {
     return nextPayload;
@@ -2075,6 +2153,7 @@ export async function maybeApplyTtsToPayload(params: {
     overrides: directives.overrides,
     agentId: params.agentId,
     accountId: params.accountId,
+    prepareHook: params.prepareHook,
   });
 
   if (result.success && result.audioPath) {

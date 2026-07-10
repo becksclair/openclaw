@@ -459,16 +459,22 @@ function hasSessionLocalHeartbeatRelayRoute(params: {
 function resolveTargetAcpAgentId(params: {
   requestedAgentId?: string;
   cfg: OpenClawConfig;
-}): { ok: true; agentId: string; configAgentId?: string } | { ok: false; error: string } {
+}):
+  | { ok: true; agentId: string; backendId?: string; target?: string; configAgentId?: string }
+  | { ok: false; error: string } {
   const requested = normalizeOptionalAgentId(params.requestedAgentId);
   if (requested) {
     const configuredAgent = params.cfg.agents?.list?.find(
       (agent) => normalizeOptionalAgentId(agent.id) === requested,
     );
     if (configuredAgent?.runtime?.type === "acp") {
+      const backendId = normalizeOptionalString(configuredAgent.runtime.acp?.backend);
+      const target = normalizeOptionalString(configuredAgent.runtime.acp?.target);
       return {
         ok: true,
         agentId: normalizeOptionalAgentId(configuredAgent.runtime.acp?.agent) ?? requested,
+        ...(backendId ? { backendId } : {}),
+        ...(target ? { target } : {}),
         configAgentId: requested,
       };
     }
@@ -999,6 +1005,7 @@ function validateAcpResumeSessionOwnership(params: {
 type AcpSpawnRuntimeOptions = {
   model?: string;
   thinking?: string;
+  target?: string;
   timeoutSeconds?: number;
 };
 
@@ -1015,6 +1022,7 @@ function resolveAcpSpawnRuntimeOptions(params: {
   configAgentId?: string;
   model?: string;
   thinking?: string;
+  target?: string;
   runTimeoutSeconds?: number;
 }): { ok: true; runtimeOptions?: AcpSpawnRuntimeOptions } | { ok: false; error: string } {
   const policyAgentId = params.configAgentId ?? params.targetAgentId;
@@ -1051,10 +1059,11 @@ function resolveAcpSpawnRuntimeOptions(params: {
 
   const timeoutSeconds = resolveAcpRuntimeTimeoutSeconds(params.runTimeoutSeconds);
   const runtimeOptions =
-    model || thinking || timeoutSeconds
+    model || thinking || params.target || timeoutSeconds
       ? {
           ...(model ? { model } : {}),
           ...(thinking ? { thinking } : {}),
+          ...(params.target ? { target: params.target } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
         }
       : undefined;
@@ -1069,6 +1078,7 @@ async function initializeAcpSpawnRuntime(params: {
   resumeSessionId?: string;
   runtimeOptions?: AcpSpawnRuntimeOptions;
   cwd?: string;
+  backendId?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
   let sessionEntry = loadSessionEntry({
@@ -1096,7 +1106,7 @@ async function initializeAcpSpawnRuntime(params: {
     resumeSessionId: params.resumeSessionId,
     runtimeOptions: params.runtimeOptions,
     cwd: params.cwd,
-    backendId: params.cfg.acp?.backend,
+    backendId: params.backendId ?? params.cfg.acp?.backend,
   });
 
   return {
@@ -1359,6 +1369,8 @@ export async function spawnAcpDirect(
     });
   }
   const targetAgentId = targetAgentResult.agentId;
+  const targetBackendId = targetAgentResult.backendId ?? cfg.acp?.backend;
+  const targetRuntimeTarget = targetAgentResult.target;
   const agentPolicyError = resolveAcpAgentPolicyError(cfg, targetAgentId);
   if (agentPolicyError) {
     return createAcpSpawnFailure({
@@ -1412,6 +1424,7 @@ export async function spawnAcpDirect(
     configAgentId: targetAgentResult.configAgentId,
     model: params.model,
     thinking: params.thinking,
+    target: targetRuntimeTarget,
     runTimeoutSeconds,
   });
   if (!runtimeOptionsResult.ok) {
@@ -1495,6 +1508,7 @@ export async function spawnAcpDirect(
       resumeSessionId: params.resumeSessionId,
       runtimeOptions: runtimeOptionsResult.runtimeOptions,
       cwd: runtimeCwd,
+      backendId: targetBackendId,
     });
     initializedRuntime = initializedSession.runtimeCloseHandle;
 

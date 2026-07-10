@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SessionsListResult } from "../../api/types.ts";
 import { saveSettings, type UiSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { RealtimeTalkOptions } from "./components/chat-realtime-controls.ts";
@@ -36,6 +37,7 @@ export type ChatRealtimeState = {
   connected: boolean;
   settings: UiSettings;
   sessionKey: string;
+  sessionsResult: SessionsListResult | null;
   lastError?: string | null;
   chatError?: string | null;
   realtimeTalkActive: boolean;
@@ -179,7 +181,13 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     }
     const inputDeviceId = currentRealtimeTalkInput(state) || undefined;
     const options = state.realtimeTalkOptions;
+    // Subagent sessions must launch realtime Talk under their spawning parent so the
+    // gateway resolves the same agent route the chat transcript belongs to.
+    const selectedSession = state.sessionsResult?.sessions.find(
+      (row) => row.key === state.sessionKey,
+    );
     const launchOptions: RealtimeTalkLaunchOptions = {
+      spawnedBy: selectedSession?.spawnedBy?.trim() || undefined,
       model: options.model.trim() || undefined,
       voice: options.voice.trim() || undefined,
       vadThreshold: Number(options.vadThreshold) || undefined,

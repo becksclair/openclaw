@@ -120,6 +120,7 @@ export type CodexTurnEnvironmentParams = JsonObject & {
 export type CodexThreadStartParams = JsonObject & {
   input?: CodexUserInput[];
   cwd?: string;
+  ephemeral?: boolean;
   model?: string;
   modelProvider?: string | null;
   personality?: CodexPersonality | null;
@@ -128,6 +129,9 @@ export type CodexThreadStartParams = JsonObject & {
   sandbox?: CodexSandboxMode | null;
   serviceTier?: CodexServiceTier | null;
   dynamicTools?: CodexDynamicToolSpec[] | null;
+  // Generic-agent-base seam: Codex 0.143 still honors `baseInstructions` on thread/start as a
+  // base-prompt REPLACEMENT (`developerInstructions` is additive, so it is not a substitute).
+  baseInstructions?: string;
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
   environments?: CodexTurnEnvironmentParams[] | null;

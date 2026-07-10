@@ -1,8 +1,8 @@
 // Register agent tests cover agent command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerAgentsCommands } from "./register.agent.js";
 import { registerAgentTurnCommand } from "./register.agent-turn.js";
+import { registerAgentsCommands } from "./register.agent.js";
 
 const mocks = vi.hoisted(() => ({
   agentCliCommandMock: vi.fn(),
@@ -116,6 +116,14 @@ describe("agent command registration", () => {
     expect((options as { verbose?: string }).verbose).toBe("off");
     expect(callRuntime).toBe(runtime);
     expect(deps).toBeUndefined();
+  });
+
+  it("documents ultra as a supported thinking level", () => {
+    const program = new Command();
+    registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
+    const agent = program.commands.find((command) => command.name() === "agent");
+
+    expect(agent?.helpInformation()).toContain("max | ultra where supported");
   });
 
   it("forwards a message file to the agent command", async () => {

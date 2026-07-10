@@ -9,10 +9,12 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
+import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
 import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import {
   isMaxReasoningCodexModel,
   isModernCodexModel,
+  isUltraReasoningCodexModel,
   readCodexSupportedReasoningEfforts,
   resolveCodexFallbackReasoningEfforts,
   resolveCodexSupportedReasoningEffort,
@@ -145,6 +147,12 @@ const CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent": false,
 };
 
+const CODEX_MEMORY_RECALL_DEVELOPER_INSTRUCTIONS =
+  "Internal OpenClaw memory recall profile: use only the provided memory or lossless-claw tools needed by the recall prompt. Do not message the user, use workspace context, load skills, spawn agents, or perform unrelated work. Return only NONE or the compact memory note requested.";
+
+const CODEX_MEMORY_RECALL_COLLABORATION_INSTRUCTIONS =
+  "Internal memory recall turn. Follow the recall prompt exactly and return only the requested recall output.";
+
 export type CodexThreadLifecycleTimingSpan = {
   name: string;
   durationMs: number;
@@ -158,6 +166,7 @@ export type CodexThreadLifecycleTimingSummary = {
 
 export type CodexThreadLifecycleTimingLogger = {
   isEnabled?: (level: "trace") => boolean;
+  info?: (message: string, meta?: Record<string, unknown>) => void;
   trace: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
@@ -276,7 +285,8 @@ function createCodexThreadLifecycleTimingTracker(options: CodexThreadLifecycleTi
       }
       const summary = snapshot();
       const shouldWarn = shouldWarnCodexThreadLifecycleTimingSummary(summary, options);
-      if (!shouldWarn && !log.isEnabled?.("trace")) {
+      const traceEnabled = log.isEnabled?.("trace") === true;
+      if (!shouldWarn && !traceEnabled && options.enabled !== true) {
         return;
       }
       didLog = true;
@@ -298,8 +308,10 @@ function createCodexThreadLifecycleTimingTracker(options: CodexThreadLifecycleTi
       };
       if (shouldWarn) {
         log.warn(message, meta);
-      } else {
+      } else if (traceEnabled) {
         log.trace(message, meta);
+      } else {
+        (log.info ?? log.trace)(message, meta);
       }
     },
   };
@@ -317,6 +329,12 @@ export async function startOrResumeThread(params: {
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed?: boolean;
   appServer: CodexAppServerRuntimeOptions;
+  baseInstructions?: string;
+  baseInstructionsSource?: Exclude<
+    CodexAppServerThreadBinding["baseInstructionsSource"],
+    "external-thread"
+  >;
+  baseInstructionsFingerprint?: string;
   developerInstructions?: string;
   config?: JsonObject;
   finalConfigPatch?: JsonObject;
@@ -334,6 +352,8 @@ export async function startOrResumeThread(params: {
   appServerRuntimeFingerprint?: string;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
+  contextEngineProjectionTokenBudget?: number | null;
+  contextEngineProjectionMaxChars?: number | null;
   signal?: AbortSignal;
   timing?: CodexThreadLifecycleTimingOptions;
 }): Promise<CodexAppServerThreadLifecycleBinding> {
@@ -372,7 +392,10 @@ export async function startOrResumeThread(params: {
     const webSearchThreadConfigFingerprint = fingerprintJsonObject(webSearchPlan.threadConfig);
     const networkProxyConfigFingerprint = params.appServer.networkProxy?.configFingerprint;
     const contextEngineBinding = lifecycleTiming.measureSync("context-engine-binding", () =>
-      buildContextEngineBinding(params.params, params.contextEngineProjection),
+      buildContextEngineBinding(params.params, params.contextEngineProjection, {
+        contextEngineProjectionTokenBudget: params.contextEngineProjectionTokenBudget,
+        projectionMaxChars: params.contextEngineProjectionMaxChars,
+      }),
     );
     const userMcpServersConfigPatch =
       params.userMcpServersEnabled === false
@@ -444,7 +467,6 @@ export async function startOrResumeThread(params: {
         connectionClass: params.appServer.connectionClass,
       });
       await clearCurrentBinding("rotating a stale thread binding");
-      binding = undefined;
     }
     if (
       binding?.threadId &&
@@ -543,10 +565,20 @@ export async function startOrResumeThread(params: {
       params.nativeCodeModeEnabled === false &&
       binding?.webSearchThreadConfigFingerprint === undefined &&
       !persistentWebSearchRestriction;
+    // Generic-agent-base seam: explicitly attached external `/codex resume` threads
+    // (and legacy unmarked external bindings) legitimately carry no web-search
+    // fingerprint. They must survive OpenClaw-internal config-fingerprint rotation
+    // rather than silently restart as a new thread, so skip web-search rotation for
+    // any binding the app-server lifecycle does not itself manage.
+    const preserveExternalBindingFromWebSearchRotation =
+      binding !== undefined &&
+      binding.webSearchThreadConfigFingerprint === undefined &&
+      !isBaseInstructionsFingerprintManagedBinding(binding);
     if (
       binding?.threadId &&
       webSearchBindingChanged &&
-      !deferLegacyWebSearchRotationToTransientNativeSurface
+      !deferLegacyWebSearchRotationToTransientNativeSurface &&
+      !preserveExternalBindingFromWebSearchRotation
     ) {
       if (transientWebSearchRestriction) {
         embeddedAgentLog.debug(
@@ -577,6 +609,19 @@ export async function startOrResumeThread(params: {
         },
       );
       preserveExistingBinding = true;
+      binding = undefined;
+    }
+    if (
+      binding?.threadId &&
+      isBaseInstructionsFingerprintManagedBinding(binding) &&
+      binding.baseInstructionsFingerprint !== params.baseInstructionsFingerprint
+    ) {
+      embeddedAgentLog.debug("codex app-server base instructions changed; starting a new thread", {
+        threadId: binding.threadId,
+        previous: binding.baseInstructionsFingerprint,
+        next: params.baseInstructionsFingerprint,
+      });
+      await clearCurrentBinding("rotating a stale thread binding");
       binding = undefined;
     }
     if (binding?.threadId && (binding.contextEngine || contextEngineBinding)) {
@@ -798,6 +843,14 @@ export async function startOrResumeThread(params: {
             params.mcpServersFingerprintEvaluated === true
               ? params.mcpServersFingerprint
               : resumeBinding.mcpServersFingerprint;
+          const baseInstructionsManagedBinding =
+            isBaseInstructionsFingerprintManagedBinding(resumeBinding);
+          const nextBaseInstructionsSource = baseInstructionsManagedBinding
+            ? resolveManagedBaseInstructionsSource(params.baseInstructionsSource)
+            : resumeBinding.baseInstructionsSource;
+          const nextBaseInstructionsFingerprint = baseInstructionsManagedBinding
+            ? params.baseInstructionsFingerprint
+            : resumeBinding.baseInstructionsFingerprint;
           const resumePatch = {
             cwd: params.cwd,
             authProfileId: boundAuthProfileId,
@@ -809,6 +862,8 @@ export async function startOrResumeThread(params: {
             dynamicToolsFingerprint,
             dynamicToolsContainDeferred,
             webSearchThreadConfigFingerprint,
+            baseInstructionsSource: nextBaseInstructionsSource,
+            baseInstructionsFingerprint: nextBaseInstructionsFingerprint,
             userMcpServersFingerprint,
             mcpServersFingerprint: nextMcpServersFingerprint,
             networkProxyProfileName: params.appServer.networkProxy?.profileName,
@@ -924,6 +979,7 @@ export async function startOrResumeThread(params: {
         cwd: params.cwd,
         dynamicTools: params.dynamicTools,
         appServer: params.appServer,
+        baseInstructions: params.baseInstructions,
         developerInstructions: params.developerInstructions,
         config,
         nativeCodeModeEnabled: params.nativeCodeModeEnabled,
@@ -977,6 +1033,10 @@ export async function startOrResumeThread(params: {
             dynamicToolsFingerprint,
             dynamicToolsContainDeferred,
             webSearchThreadConfigFingerprint,
+            baseInstructionsSource: resolveManagedBaseInstructionsSource(
+              params.baseInstructionsSource,
+            ),
+            baseInstructionsFingerprint: params.baseInstructionsFingerprint,
             userMcpServersFingerprint,
             mcpServersFingerprint: nextMcpServersFingerprint,
             networkProxyProfileName: params.appServer.networkProxy?.profileName,
@@ -1023,6 +1083,8 @@ export async function startOrResumeThread(params: {
         response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
       dynamicToolsFingerprint,
       dynamicToolsContainDeferred,
+      baseInstructionsSource: resolveManagedBaseInstructionsSource(params.baseInstructionsSource),
+      baseInstructionsFingerprint: params.baseInstructionsFingerprint,
       userMcpServersFingerprint,
       mcpServersFingerprint: nextMcpServersFingerprint,
       networkProxyProfileName: params.appServer.networkProxy?.profileName,
@@ -1130,6 +1192,10 @@ function isTransientWebSearchRestriction(
 export function buildContextEngineBinding(
   params: EmbeddedRunAttemptParams,
   projection?: CodexContextEngineThreadBootstrapProjection,
+  projectionBudget?: {
+    contextEngineProjectionTokenBudget?: number | null;
+    projectionMaxChars?: number | null;
+  },
 ): CodexAppServerContextEngineBinding | undefined {
   const contextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
@@ -1138,6 +1204,13 @@ export function buildContextEngineBinding(
   if (!contextEngine || !engineId) {
     return undefined;
   }
+  const defaultProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
+    contextTokenBudget: params.contextTokenBudget,
+    reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
+      config: params.config,
+    }),
+  });
+  const projectionMaxChars = projectionBudget?.projectionMaxChars ?? defaultProjectionMaxChars;
   return {
     schemaVersion: 1,
     engineId,
@@ -1149,12 +1222,12 @@ export function buildContextEngineBinding(
       turnMaintenanceMode: contextEngine.info.turnMaintenanceMode,
       citationsMode: resolveContextEngineCitationsMode(params.config),
       contextTokenBudget: params.contextTokenBudget,
-      projectionMaxChars: resolveCodexContextEngineProjectionMaxChars({
-        contextTokenBudget: params.contextTokenBudget,
-        reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
-          config: params.config,
-        }),
-      }),
+      ...(projectionBudget?.contextEngineProjectionTokenBudget !== undefined
+        ? {
+            contextEngineProjectionTokenBudget: projectionBudget.contextEngineProjectionTokenBudget,
+          }
+        : {}),
+      projectionMaxChars,
     }),
     projection: projection ? buildContextEngineProjectionBinding(projection) : undefined,
   };
@@ -1250,6 +1323,7 @@ export function buildThreadStartParams(
     cwd: string;
     dynamicTools: CodexDynamicToolSpec[];
     appServer: CodexAppServerRuntimeOptions;
+    baseInstructions?: string;
     developerInstructions?: string;
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
@@ -1280,6 +1354,7 @@ export function buildThreadStartParams(
     model: modelSelection.model,
     ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
     cwd: options.cwd,
+    ...(params.promptProfile === "memory_recall" ? { ephemeral: true } : {}),
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
     ...codexThreadSandboxOrPermissions(options.appServer),
@@ -1296,11 +1371,12 @@ export function buildThreadStartParams(
       appServer: options.appServer,
     }),
     ...resolveCodexThreadEnvironmentSelection(options),
+    ...(options.baseInstructions !== undefined
+      ? { baseInstructions: options.baseInstructions }
+      : {}),
     developerInstructions:
       options.developerInstructions ??
       buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
-    // Canonical typed specs (`type: "function" | "namespace"`); the 0.142 floor
-    // accepts them natively (codex-rs normalize_dynamic_tool_specs).
     dynamicTools: [...options.dynamicTools],
     experimentalRawEvents: true,
   };
@@ -1665,6 +1741,10 @@ function buildTurnScopedCollaborationInstructions(
     heartbeatCollaborationInstructions?: string;
   } = {},
 ): string | null {
+  if (params.promptProfile === "memory_recall") {
+    return CODEX_MEMORY_RECALL_COLLABORATION_INSTRUCTIONS;
+  }
+
   const contextInstructions = joinPresentSections(
     options.turnScopedDeveloperInstructions,
     options.memoryCollaborationInstructions,
@@ -1870,31 +1950,84 @@ function isEmptyDynamicToolsFingerprint(fingerprint: string): boolean {
   );
 }
 
+function isBaseInstructionsFingerprintManagedBinding(
+  binding: CodexAppServerThreadBinding,
+): boolean {
+  if (binding.baseInstructionsSource === "agent-file") {
+    return true;
+  }
+  if (binding.baseInstructionsSource === "runtime-profile") {
+    return true;
+  }
+  if (binding.baseInstructionsSource === "external-thread") {
+    return false;
+  }
+  // Legacy external `/codex resume` bindings predate baseInstructionsSource.
+  // Normal app-server lifecycle bindings carried dynamic-tool metadata, so only
+  // those unmarked bindings participate in first-time base prompt rotation.
+  return (
+    binding.baseInstructionsFingerprint !== undefined ||
+    binding.dynamicToolsFingerprint !== undefined
+  );
+}
+
+function resolveManagedBaseInstructionsSource(
+  source: CodexAppServerThreadBinding["baseInstructionsSource"] | undefined,
+): "agent-file" | "runtime-profile" {
+  return source === "runtime-profile" ? "runtime-profile" : "agent-file";
+}
+
 function compareJsonFingerprint(left: JsonValue, right: JsonValue): number {
   return JSON.stringify(left).localeCompare(JSON.stringify(right));
 }
 
 export function buildDeveloperInstructions(
   params: EmbeddedRunAttemptParams,
-  options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
+  options: {
+    dynamicTools?: readonly CodexDynamicToolSpec[];
+    runtimeDeveloperInstructions?: string;
+  } = {},
 ): string {
+  if (params.promptProfile === "memory_recall") {
+    return CODEX_MEMORY_RECALL_DEVELOPER_INSTRUCTIONS;
+  }
+
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
     surface: "codex_app_server",
     includeLegacyGlobalGuidance: false,
   }).join("\n");
   const sections = [
-    "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
+    "OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
     buildDeferredDynamicToolManifest(options.dynamicTools),
     buildSkillWorkshopInstruction(options.dynamicTools),
-    // Codex defers native collab tools behind tool_search on search-capable
-    // models (codex-rs spec_plan add_collaboration_tools). Without this hint
-    // models cannot see spawn_agent and grab the always-direct sessions_spawn.
+    buildMessagingDeveloperInstruction(params, options.dynamicTools),
     "Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
     buildVisibleReplyInstruction(params, options.dynamicTools),
     nativeCommandGuidance,
+    options.runtimeDeveloperInstructions,
     params.extraSystemPrompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
+}
+
+function buildMessagingDeveloperInstruction(
+  params: EmbeddedRunAttemptParams,
+  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
+): string {
+  const messageToolAvailable = dynamicTools
+    ? dynamicTools.some((tool) => tool.name.trim() === "message")
+    : params.disableMessageTool !== true;
+  const replyGuidance =
+    params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable
+      ? "- Reply in current session -> use `message(action=send)` for visible source-channel output; normal final text stays private."
+      : "- Reply in current session -> automatically routes to the source channel (Signal, Telegram, etc.)";
+  return [
+    "## Messaging",
+    replyGuidance,
+    "- Cross-session messaging -> use `sessions_send(sessionKey, message)`",
+    `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
+    "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
+  ].join("\n");
 }
 
 function buildDeferredDynamicToolManifest(
@@ -1982,10 +2115,13 @@ export function resolveCodexAppServerModelProvider(params: {
   return normalizedLower === "openai" ? "openai" : normalized;
 }
 
-// Modern Codex models reject the legacy CLI `minimal` default. Prefer
-// app-server metadata, then use the provider-owned fallback effort contract
-// for Pro models whose minimum supported effort is `medium`.
-// Other modern models translate `minimal` to `low`. (#71946)
+// Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex-spark) use the
+// none/low/medium/high/xhigh effort enum and reject "minimal". The CLI
+// defaults thinkLevel to "minimal", so without translation EVERY agent turn
+// on those models pays a wasted first request + retry-with-low fallback in
+// embedded-agent-runner. Map "minimal" -> "low" upfront for modern models so the
+// first request is accepted. Older Codex models still accept "minimal"
+// directly. (#71946)
 // Exported for unit-test coverage of the model-aware translation path.
 export function resolveReasoningEffort(
   thinkLevel: EmbeddedRunAttemptParams["thinkLevel"] | "ultra",
@@ -2025,6 +2161,9 @@ export function resolveReasoningEffort(
   }
   if (thinkLevel === "max" && isMaxReasoningCodexModel(modelId)) {
     return "max";
+  }
+  if (thinkLevel === "ultra" && isUltraReasoningCodexModel(modelId)) {
+    return "ultra";
   }
   return null;
 }

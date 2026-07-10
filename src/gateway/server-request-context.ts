@@ -49,6 +49,7 @@ export type GatewayRequestContextParams = {
   chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"];
   agentDeltaSentAt: GatewayRequestContext["agentDeltaSentAt"];
   bufferedAgentEvents: GatewayRequestContext["bufferedAgentEvents"];
+  chatFinalAudio: GatewayRequestContext["chatFinalAudio"];
   clearChatRunState: GatewayRequestContext["clearChatRunState"];
   addChatRun: GatewayRequestContext["addChatRun"];
   removeChatRun: GatewayRequestContext["removeChatRun"];
@@ -195,6 +196,7 @@ export function createGatewayRequestContext(
     chatDeltaLastBroadcastText: params.chatDeltaLastBroadcastText,
     agentDeltaSentAt: params.agentDeltaSentAt,
     bufferedAgentEvents: params.bufferedAgentEvents,
+    chatFinalAudio: params.chatFinalAudio,
     clearChatRunState: params.clearChatRunState,
     addChatRun: params.addChatRun,
     removeChatRun: params.removeChatRun,

@@ -411,8 +411,10 @@ jobs:
                 ? [
                     { check_name: "android-test-play", task: "test-play" },
                     { check_name: "android-test-third-party", task: "test-third-party" },
+                    { check_name: "android-test-wear", task: "test-wear" },
                     { check_name: "android-build-play", task: "build-play" },
                     { check_name: "android-ktlint", task: "ktlint" },
+                    { check_name: "android-build-wear", task: "build-wear" },
                   ]
                 : [],
             ),
@@ -1176,7 +1178,14 @@ jobs:
         run: test "$(go env GOVERSION)" = "go1.25.12"
 
       - name: Configure Node test resources
-        run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+        env:
+          OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
+        run: |
+          if [[ "$OPENCLAW_VITEST_SHARD_NAME" == "core-unit-ui" ]]; then
+            echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
+          else
+            echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+          fi
 
       - name: Run Node test shard
         env:
@@ -2112,6 +2121,9 @@ jobs:
             test-third-party)
               ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest
               ;;
+            test-wear)
+              ./gradlew --no-daemon --build-cache :wear:testDebugUnitTest
+              ;;
             build-play)
               ./gradlew --no-daemon --build-cache \
                 :app:assemblePlayDebug \
@@ -2123,6 +2135,9 @@ jobs:
             ktlint)
               # Mirrors `pnpm android:lint`; keeps formatting drift out of main (see PR #100304 sweep).
               ./gradlew --no-daemon --build-cache :app:ktlintCheck :benchmark:ktlintCheck
+              ;;
+            build-wear)
+              ./gradlew --no-daemon --build-cache :wear:assembleDebug
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2

@@ -88,6 +88,72 @@ describe("resolveLobsterCwd", () => {
       path.resolve(process.cwd(), "extensions/lobster"),
     );
   });
+
+  it("resolves relative paths from an explicit base cwd", () => {
+    const base = path.resolve(process.cwd(), "extensions");
+
+    expect(resolveLobsterCwd("lobster", { baseCwd: base })).toBe(path.join(base, "lobster"));
+  });
+
+  it("allows absolute cwd values inside an explicit base cwd", () => {
+    const base = path.resolve(process.cwd(), "extensions");
+    const cwd = path.join(base, "lobster");
+
+    expect(resolveLobsterCwd(cwd, { baseCwd: base })).toBe(cwd);
+  });
+
+  it("allows a contained cwd whose name starts with two dots", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-cwd-"));
+    const workspace = path.join(tempDir, "workspace");
+    const contained = path.join(workspace, "..contained");
+    await fs.mkdir(contained, { recursive: true });
+
+    try {
+      expect(resolveLobsterCwd("..contained", { baseCwd: workspace })).toBe(contained);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects cwd values outside the working directory", () => {
+    expect(() => resolveLobsterCwd(path.dirname(process.cwd()))).toThrow(/must stay within/);
+    expect(() => resolveLobsterCwd("..", { baseCwd: process.cwd() })).toThrow(/must stay within/);
+  });
+
+  it("canonicalizes a symlinked workspace and contained cwd", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-cwd-"));
+    const workspace = path.join(tempDir, "workspace");
+    const nested = path.join(workspace, "nested");
+    const workspaceLink = path.join(tempDir, "workspace-link");
+    await fs.mkdir(nested, { recursive: true });
+    await fs.symlink(workspace, workspaceLink, "dir");
+
+    try {
+      expect(resolveLobsterCwd("nested", { baseCwd: workspaceLink })).toBe(nested);
+      expect(
+        resolveLobsterCwd(path.join(workspaceLink, "nested"), { baseCwd: workspaceLink }),
+      ).toBe(nested);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a contained-looking cwd symlink that escapes the workspace", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-cwd-"));
+    const workspace = path.join(tempDir, "workspace");
+    const outside = path.join(tempDir, "outside");
+    const escape = path.join(workspace, "escape");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.mkdir(outside, { recursive: true });
+    await fs.symlink(outside, escape, "dir");
+
+    try {
+      expect(() => resolveLobsterCwd("escape", { baseCwd: workspace })).toThrow(/must stay within/);
+      expect(() => resolveLobsterCwd(escape, { baseCwd: workspace })).toThrow(/must stay within/);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("createEmbeddedLobsterRunner", () => {

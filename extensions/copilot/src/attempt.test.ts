@@ -391,6 +391,75 @@ describe("runCopilotAttempt", () => {
     );
   });
 
+  it("suppresses generic and native hooks for hidden plugin runs", async () => {
+    const beforePromptBuild = vi.fn(() => ({
+      prependContext: "visible context must not leak",
+      appendSystemContext: "visible system context must not leak",
+    }));
+    const afterToolCall = vi.fn();
+    const beforeCompaction = vi.fn();
+    const afterCompaction = vi.fn();
+    const llmInput = vi.fn();
+    const llmOutput = vi.fn();
+    const agentEnd = vi.fn();
+    const nativePromptHook = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_prompt_build", handler: beforePromptBuild },
+        { hookName: "after_tool_call", handler: afterToolCall },
+        { hookName: "before_compaction", handler: beforeCompaction },
+        { hookName: "after_compaction", handler: afterCompaction },
+        { hookName: "llm_input", handler: llmInput },
+        { hookName: "llm_output", handler: llmOutput },
+        { hookName: "agent_end", handler: agentEnd },
+      ]),
+    );
+    const sdk = makeFakeSdk({
+      onCreateSession: (session) => {
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("session.compaction_start", {});
+          session.emit("session.compaction_complete", { messagesRemoved: 1, success: true });
+          return makeAssistantMessageEvent("done");
+        });
+      },
+    });
+    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+      await input.onToolCompleted?.({
+        args: { path: "README.md" },
+        result: { content: [{ text: "read result", type: "text" }] },
+        startedAt: Date.now(),
+        toolCallId: "tool-call-1",
+        toolName: "read",
+      });
+      return { sdkTools: [], sourceTools: [] };
+    });
+
+    await runCopilotAttempt(
+      makeParams({
+        hooksConfig: { onUserPromptSubmitted: nativePromptHook },
+        suppressPluginHooks: true,
+      } as never),
+      {
+        createToolBridge,
+        pool: makeFakePool(sdk),
+      },
+    );
+    await waitForEventLoopTurn();
+
+    const cfg = sdk.createSession.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(cfg.hooks).toBeUndefined();
+    const messageOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as { prompt?: string };
+    expect(messageOptions.prompt).toBe("hello");
+    expect(beforePromptBuild).not.toHaveBeenCalled();
+    expect(afterToolCall).not.toHaveBeenCalled();
+    expect(beforeCompaction).not.toHaveBeenCalled();
+    expect(afterCompaction).not.toHaveBeenCalled();
+    expect(llmInput).not.toHaveBeenCalled();
+    expect(llmOutput).not.toHaveBeenCalled();
+    expect(agentEnd).not.toHaveBeenCalled();
+    expect(nativePromptHook).not.toHaveBeenCalled();
+  });
+
   it("keeps generic compaction hooks attached through asynchronous SDK completion", async () => {
     const beforeCompaction = vi.fn();
     const afterCompaction = vi.fn();

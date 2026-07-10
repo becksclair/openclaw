@@ -229,6 +229,7 @@ export type EmbeddedRunAttemptResult = {
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
   hasToolMediaBlockReply?: boolean;
+  toolSpokenText?: string;
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;

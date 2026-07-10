@@ -70,6 +70,39 @@ if (!fs.existsSync(codexBin)) {
 }
 assertPathInside(npmRoot, codexBin, "managed Codex binary");
 
+const platformTargets = {
+  "darwin-arm64": ["darwin-arm64", "aarch64-apple-darwin"],
+  "darwin-x64": ["darwin-x64", "x86_64-apple-darwin"],
+  "linux-arm64": ["linux-arm64", "aarch64-unknown-linux-musl"],
+  "linux-x64": ["linux-x64", "x86_64-unknown-linux-musl"],
+  "win32-arm64": ["win32-arm64", "aarch64-pc-windows-msvc"],
+  "win32-x64": ["win32-x64", "x86_64-pc-windows-msvc"],
+};
+const platformTarget = platformTargets[`${process.platform}-${process.arch}`];
+if (!platformTarget) {
+  throw new Error(`unsupported managed Codex platform: ${process.platform}-${process.arch}`);
+}
+const [packageSuffix, targetTriple] = platformTarget;
+const platformPackageJson = findPackageJson(`@openai/codex-${packageSuffix}`, [
+  installPath,
+  npmProjectRoot,
+  npmRoot,
+]);
+if (!platformPackageJson) {
+  throw new Error(`missing managed Codex platform package: @openai/codex-${packageSuffix}`);
+}
+assertPathInside(npmRoot, platformPackageJson, "managed Codex platform package");
+const nativeBinDir = path.join(path.dirname(platformPackageJson), "vendor", targetTriple, "bin");
+const executableSuffix = process.platform === "win32" ? ".exe" : "";
+const nativeCodexBin = path.join(nativeBinDir, `codex${executableSuffix}`);
+if (!fs.existsSync(nativeCodexBin)) {
+  throw new Error(`missing managed Codex codex binary: ${nativeCodexBin}`);
+}
+assertPathInside(npmRoot, nativeCodexBin, "managed Codex codex binary");
+if (process.platform !== "win32") {
+  fs.accessSync(nativeCodexBin, fs.constants.X_OK);
+}
+
 const list = readJson("/tmp/openclaw-plugins-list.json");
 const plugin = (list.plugins || []).find((entry) => entry.id === "codex");
 if (!plugin || plugin.enabled !== true || plugin.status !== "loaded") {

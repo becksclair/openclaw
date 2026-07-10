@@ -10,6 +10,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.node.ConnectionManager
+import ai.openclaw.app.gateway.OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE
 import ai.openclaw.app.node.InvokeDispatcher
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 import ai.openclaw.app.voice.MicCaptureManager
@@ -150,46 +151,55 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun doesNotConnectOperatorSessionWhenOnlyBootstrapAuthExists() {
-    assertFalse(
+  fun connectsOperatorSessionWhenOnlyBootstrapAuthExists() {
+    // Blank token/password/stored normalize to absent, so a bootstrap-only gateway still connects via the bootstrap token.
+    val expected = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null)
+    assertEquals(
+      expected,
       resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = "", bootstrapToken = "bootstrap-1", password = ""),
         storedOperatorToken = "",
-      ) != null,
+      ),
     )
-    assertFalse(
+    assertEquals(
+      expected,
       resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
-      ) != null,
+      ),
     )
   }
 
   @Test
   fun connectsOperatorSessionWhenSharedPasswordOrStoredAuthExists() {
-    assertTrue(
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
       resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
-      ) != null,
+      ),
     )
-    assertTrue(
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = "shared-password"),
       resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = "shared-password"),
         storedOperatorToken = null,
-      ) != null,
+      ),
     )
-    assertTrue(
+    // Stored operator token resolves to the no-auth handoff shape (connect proceeds via the stored token elsewhere).
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = null),
       resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = "stored-token",
-      ) != null,
+      ),
     )
-    assertTrue(
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = null),
       resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "", password = null),
         storedOperatorToken = null,
-      ) != null,
+      ),
     )
   }
 
@@ -205,14 +215,14 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun resolveOperatorSessionConnectAuthIgnoresBootstrapWhenNoStoredOperatorTokenExists() {
+  fun resolveOperatorSessionConnectAuthUsesBootstrapWhenNoStoredOperatorTokenExists() {
     val resolved =
       resolveOperatorSessionConnectAuth(
         auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
       )
 
-    assertNull(resolved)
+    assertEquals(NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null), resolved)
   }
 
   @Test
@@ -443,7 +453,7 @@ class GatewayBootstrapAuthTest {
 
       assertEquals("f1", prefs.loadGatewayTlsFingerprint(endpoint.stableId))
       assertEquals("setup-bootstrap-token", waitForDesiredBootstrapToken(runtime, "nodeSession"))
-      assertNull(desiredBootstrapToken(runtime, "operatorSession"))
+      assertEquals("setup-bootstrap-token", waitForDesiredBootstrapToken(runtime, "operatorSession"))
     }
 
   @Test
@@ -729,6 +739,12 @@ class GatewayBootstrapAuthTest {
     assertEquals(current, readField<GatewayEndpoint?>(runtime, "connectedEndpoint"))
     assertEquals(current.stableId, prefs.gatewayRegistry.activeStableId.value)
     assertEquals("Gateway not currently discoverable", runtime.statusText.value)
+  }
+
+  @Test
+  fun nodesDevicesRefreshMode_keepsNormalRefreshOffPairingList() {
+    assertFalse(GatewayNodesDevicesRefreshMode.Normal.includePairingDevices)
+    assertTrue(GatewayNodesDevicesRefreshMode.PairingManagement.includePairingDevices)
   }
 
   @Test

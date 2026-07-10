@@ -26,6 +26,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  shouldResolvePromptBuildHookResult,
   shouldWarnOnOrphanedUserRepair,
 } from "./attempt.prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
@@ -251,6 +252,29 @@ describe("resolvePromptBuildHookResult", () => {
     expect(hookRunner.runHeartbeatPromptContribution).not.toHaveBeenCalled();
     expect(userResult.prependContext).toBeUndefined();
     expect(userResult.appendContext).toBeUndefined();
+  });
+});
+
+describe("shouldResolvePromptBuildHookResult", () => {
+  it("skips destructive prompt-build drains for raw and suppressed helper runs", () => {
+    expect(
+      shouldResolvePromptBuildHookResult({
+        isRawModelRun: false,
+        suppressPluginHooks: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldResolvePromptBuildHookResult({
+        isRawModelRun: true,
+        suppressPluginHooks: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldResolvePromptBuildHookResult({
+        isRawModelRun: false,
+        suppressPluginHooks: true,
+      }),
+    ).toBe(false);
   });
 });
 

@@ -72,6 +72,9 @@ import type {
   PluginHookMessageSentEvent,
   PluginHookName,
   PluginHookRegistration,
+  PluginHookTtsPrepareContext,
+  PluginHookTtsPrepareEvent,
+  PluginHookTtsPrepareResult,
   PluginHookSessionContext,
   PluginHookSessionEndEvent,
   PluginHookSessionStartEvent,
@@ -109,6 +112,9 @@ export type {
   PluginHookReplyPayloadSendingEvent,
   PluginHookReplyPayloadSendingResult,
   PluginHookReplyPayload,
+  PluginHookTtsPrepareContext,
+  PluginHookTtsPrepareEvent,
+  PluginHookTtsPrepareResult,
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
@@ -236,6 +242,9 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   before_agent_finalize: 15_000,
   before_prompt_build: 15_000,
   resolve_exec_env: 15_000,
+  // Host backstop above the voice-emotion plugin's own ~12s total annotation
+  // budget; a hung annotation handler must never wedge the synthesis attempt.
+  tts_prepare: 15_000,
 };
 
 type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
@@ -1174,6 +1183,67 @@ export function createHookRunner(
   }
 
   /**
+   * Run tts_prepare hook.
+   * Fires at the speech-synthesis seam once per non-skipped provider fallback
+   * candidate, before the provider's own prepareSynthesis. Sequential-modifying:
+   * text chains last-writer-wins across handlers, providerOverrides shallow
+   * spread-merge. Transform-only (no cancel). Fail-open per handler via
+   * handleHookError so a thrown/timed-out handler never fails synthesis.
+   */
+  async function runTtsPrepare(
+    event: PluginHookTtsPrepareEvent,
+    ctx: PluginHookTtsPrepareContext,
+  ): Promise<PluginHookTtsPrepareResult | undefined> {
+    const hooks = getHooksForName(registry, "tts_prepare");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(`[hooks] running tts_prepare (${hooks.length} handlers, sequential)`);
+
+    let currentText = event.text;
+    let providerOverrides: Record<string, unknown> | undefined;
+
+    for (const hook of hooks) {
+      try {
+        const handler = hook.handler as (
+          event: PluginHookTtsPrepareEvent,
+          ctx: PluginHookTtsPrepareContext,
+        ) => Promise<PluginHookTtsPrepareResult | void> | PluginHookTtsPrepareResult | void;
+        const promise = Promise.resolve(handler({ ...event, text: currentText }, ctx));
+        const timeoutMs = getModifyingHookTimeoutMs("tts_prepare", hook);
+        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+
+        if (!handlerResult) {
+          continue;
+        }
+
+        if (typeof handlerResult.text === "string") {
+          currentText = handlerResult.text;
+        }
+        if (handlerResult.providerOverrides) {
+          providerOverrides ??= {};
+          Object.assign(providerOverrides, handlerResult.providerOverrides);
+        }
+      } catch (err) {
+        handleHookError({ hookName: "tts_prepare", pluginId: hook.pluginId, error: err });
+      }
+    }
+
+    const result: PluginHookTtsPrepareResult = {};
+    if (currentText !== event.text) {
+      result.text = currentText;
+    }
+    if (providerOverrides) {
+      result.providerOverrides = providerOverrides;
+    }
+    if (result.text === undefined && result.providerOverrides === undefined) {
+      return undefined;
+    }
+    return result;
+  }
+
+  /**
    * Run message_sending hook.
    * Allows plugins to modify or cancel outgoing messages.
    * Runs sequentially.
@@ -1665,6 +1735,7 @@ export function createHookRunner(
     runBeforeDispatch,
     runReplyDispatch,
     runReplyPayloadSending,
+    runTtsPrepare,
     runMessageSending,
     runMessageSent,
     // Tool hooks

@@ -15,6 +15,7 @@ import {
   buildRuntimeConfigOptionPairs,
   buildRuntimeControlSignature,
   normalizeText,
+  resolveRuntimeConfigOptionKey,
   resolveRuntimeOptionsFromMeta,
 } from "./runtime-options.js";
 
@@ -113,9 +114,17 @@ export async function resolveManagerRuntimeCapabilities(params: {
       // answer status before a turn.
     }
   }
+  const normalizedManagedKeys = new Set(
+    (reported?.managedRuntimeOptionKeys ?? [])
+      .map((entry) => normalizeText(entry))
+      .filter(Boolean) as string[],
+  );
   return {
     controls: [...controls].toSorted(),
     ...(normalizedKeys.size > 0 ? { configOptionKeys: [...normalizedKeys] } : {}),
+    ...(normalizedManagedKeys.size > 0
+      ? { managedRuntimeOptionKeys: [...normalizedManagedKeys].toSorted() }
+      : {}),
   };
 }
 
@@ -148,6 +157,15 @@ export async function applyManagerRuntimeControls(params: {
       .map((entry) => normalizeLowercaseStringOrEmpty(entry))
       .filter(Boolean),
   );
+  const managedKeys = new Set(
+    (capabilities.managedRuntimeOptionKeys ?? [])
+      .map((entry) => resolveRuntimeConfigOptionKey(entry, capabilities.configOptionKeys))
+      .map((entry) => normalizeLowercaseStringOrEmpty(entry))
+      .filter(Boolean),
+  );
+  const unmanagedConfigOptions = configOptions.filter(
+    ([key]) => !managedKeys.has(normalizeLowercaseStringOrEmpty(key)),
+  );
 
   await withAcpRuntimeErrorBoundary({
     run: async () => {
@@ -164,7 +182,7 @@ export async function applyManagerRuntimeControls(params: {
         });
       }
 
-      if (configOptions.length > 0) {
+      if (unmanagedConfigOptions.length > 0) {
         if (
           !capabilities.controls.includes("session/set_config_option") ||
           !params.runtime.setConfigOption
@@ -174,7 +192,7 @@ export async function applyManagerRuntimeControls(params: {
             control: "session/set_config_option",
           });
         }
-        for (const [key, value] of configOptions) {
+        for (const [key, value] of unmanagedConfigOptions) {
           if (
             advertisedKeys.size > 0 &&
             !advertisedKeys.has(normalizeLowercaseStringOrEmpty(key))

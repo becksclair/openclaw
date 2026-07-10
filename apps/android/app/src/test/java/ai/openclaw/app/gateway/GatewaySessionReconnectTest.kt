@@ -541,6 +541,120 @@ class GatewaySessionReconnectTest {
     }
 
   @Test
+  fun nodeEventBeforeHelloWaitsForConnectHandshake() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val frameOrder = ConcurrentLinkedQueue<String>()
+      val connectFrame = CompletableDeferred<Pair<WebSocket, String>>()
+      val nodeEventReceived = CompletableDeferred<Unit>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          frameOrder += method
+          when (method) {
+            // Hold the hello-ok response so the connection stays pre-hello while the
+            // test fires a node.event.
+            "connect" -> connectFrame.complete(webSocket to id)
+            "node.event" -> {
+              webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{}}""")
+              nodeEventReceived.complete(Unit)
+            }
+          }
+        }
+      val harness = createReconnectHarness()
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        val (socket, connectId) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connectFrame.await() }
+
+        // Fire a node.event while the handshake is still incomplete (pre-hello).
+        val nodeEvent = async { harness.session.sendNodeEvent("presence", "{}") }
+
+        // The gate must hold it: connect stays the only frame on the wire and the
+        // connection is not rejected.
+        delay(200)
+        assertFalse(nodeEventReceived.isCompleted)
+        assertEquals(listOf("connect"), frameOrder.toList())
+
+        // Completing the handshake flushes the queued event after connect.
+        socket.send(connectResponseFrame(connectId))
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { nodeEventReceived.await() }
+        assertTrue(nodeEvent.await())
+        assertEquals(listOf("connect", "node.event"), frameOrder.toList())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun cancelledNodeEventBeforeHelloNeverReachesTheWire() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val frameOrder = ConcurrentLinkedQueue<String>()
+      val connectFrame = CompletableDeferred<Pair<WebSocket, String>>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          frameOrder += method
+          if (method == "connect") connectFrame.complete(webSocket to id)
+        }
+      val harness = createReconnectHarness()
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        val (socket, connectId) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connectFrame.await() }
+        val nodeEvent = async { harness.session.sendNodeEvent("presence", "{}") }
+
+        delay(100)
+        nodeEvent.cancelAndJoin()
+        socket.send(connectResponseFrame(connectId))
+        delay(200)
+
+        assertEquals(listOf("connect"), frameOrder.toList())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun nodeEventDeadlineIncludesPreHelloWait() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val frameOrder = ConcurrentLinkedQueue<String>()
+      val connectFrame = CompletableDeferred<Pair<WebSocket, String>>()
+      val nodeEventReceived = CompletableDeferred<Unit>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          frameOrder += method
+          when (method) {
+            "connect" -> connectFrame.complete(webSocket to id)
+            "node.event" -> nodeEventReceived.complete(Unit)
+          }
+        }
+      val harness = createReconnectHarness()
+      var nodeEvent: kotlinx.coroutines.Deferred<GatewaySession.RpcResult>? = null
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        val (socket, connectId) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connectFrame.await() }
+        nodeEvent =
+          async {
+            harness.session.sendNodeEventDetailed("presence", "{}", timeoutMs = 1_000)
+          }
+
+        delay(600)
+        assertEquals(listOf("connect"), frameOrder.toList())
+        socket.send(connectResponseFrame(connectId))
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { nodeEventReceived.await() }
+
+        val result = withTimeout(700) { nodeEvent.await() }
+        assertFalse(result.ok)
+        assertEquals(listOf("connect", "node.event"), frameOrder.toList())
+      } finally {
+        nodeEvent?.cancelAndJoin()
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
   fun bootstrapNodePairingRequiredKeepsReconnectActive() {
     val error =
       GatewaySession.ErrorShape(

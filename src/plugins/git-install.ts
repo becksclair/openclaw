@@ -245,22 +245,24 @@ function resolveGitInstallRepoDir(params: {
   return path.join(gitRoot, `git-${sha256HexPrefix(redactedSpec, 16)}`, "repo");
 }
 
-async function withGitStagingDir<T>(
+/**
+ * Stages the clone on the same filesystem as `persistentRepoDir`, because the commit renames the
+ * staged repo into place with `replaceDirectoryAtomic` and rename(2) fails with EXDEV across
+ * devices. Upstream falls back to a tmpdir root when staging setup fails; that reopens EXDEV on
+ * hosts where /tmp is tmpfs, so staging failure fails clean before any clone runs instead.
+ * A dry run passes no persistent dir: nothing is renamed into place, so tmpdir staging is safe.
+ */
+async function withGitStagingDir(
   persistentRepoDir: string | undefined,
-  fn: (tmpDir: string) => Promise<T>,
-): Promise<T> {
+  fn: (tmpDir: string) => Promise<GitPluginInstallResult>,
+): Promise<GitPluginInstallResult> {
   if (!persistentRepoDir) {
     return await withTempDir("openclaw-git-plugin-", fn);
   }
   const targetParent = path.dirname(persistentRepoDir);
-  try {
-    await fs.mkdir(targetParent, { recursive: true });
-  } catch {
-    return await withTempDir("openclaw-git-plugin-", fn);
-  }
-
   let callbackStarted = false;
   try {
+    await fs.mkdir(targetParent, { recursive: true });
     return await withTempDir(
       "openclaw-git-plugin-",
       async (tmpDir) => {
@@ -270,12 +272,15 @@ async function withGitStagingDir<T>(
       { rootDir: targetParent },
     );
   } catch (err) {
-    // Workspace creation can fail on read-only mounts. Never retry after the
-    // callback starts, because that could clone or install dependencies twice.
+    // Never convert a clone/install failure into a staging error, and never retry after the
+    // callback starts: that could clone or install dependencies twice.
     if (callbackStarted) {
       throw err;
     }
-    return await withTempDir("openclaw-git-plugin-", fn);
+    return {
+      ok: false,
+      error: `failed to stage managed git plugin repository: ${String(err)}`,
+    };
   }
 }
 
@@ -370,7 +375,10 @@ export async function installPluginFromGitSpec(
     };
   }
 
-  const persistentRepoDir = resolveGitInstallRepoDir({ gitDir: params.gitDir, source: parsed });
+  const persistentRepoDir = resolveGitInstallRepoDir({
+    gitDir: params.gitDir,
+    source: parsed,
+  });
   const effectiveMode =
     params.mode === "update" && (await pathExists(persistentRepoDir)) ? "update" : "install";
   const stagingRepoDir = params.dryRun ? undefined : persistentRepoDir;

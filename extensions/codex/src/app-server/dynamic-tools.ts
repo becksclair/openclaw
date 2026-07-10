@@ -352,6 +352,8 @@ export type CodexDynamicToolBridge = {
     heartbeatToolResponse?: HeartbeatToolResponse;
     toolMediaUrls: string[];
     toolAudioAsVoice: boolean;
+    toolTrustedLocalMedia: boolean;
+    toolSpokenText?: string;
     successfulCronAdds?: number;
     quarantinedTools: CodexDynamicToolSchemaQuarantine[];
   };
@@ -383,19 +385,20 @@ export function createCodexDynamicToolBridge(params: {
   registeredTools?: AnyAgentTool[];
   signal: AbortSignal;
   hookContext?: CodexDynamicToolHookContext;
+  suppressPluginHooks?: boolean;
   loading?: CodexDynamicToolsLoading;
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
+  const hooksEnabled = params.suppressPluginHooks !== true;
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
   const toolResultMaxChars = resolveCodexDynamicToolResultMaxChars(params.hookContext);
   const availableProjection = projectCodexDynamicTools(params.tools);
   const registeredProjection = params.registeredTools
     ? projectCodexDynamicTools(params.registeredTools)
     : availableProjection;
-  const wrappedAvailableProjection = wrapProjectedCodexDynamicTools(
-    availableProjection.tools,
-    params.hookContext,
-  );
+  const wrappedAvailableProjection = hooksEnabled
+    ? wrapProjectedCodexDynamicTools(availableProjection.tools, params.hookContext)
+    : { tools: availableProjection.tools, quarantinedTools: [] };
   const availableTools = wrappedAvailableProjection.tools;
   const quarantinedAvailableToolNames = new Set(
     [...availableProjection.quarantinedTools, ...wrappedAvailableProjection.quarantinedTools].map(
@@ -424,11 +427,14 @@ export function createCodexDynamicToolBridge(params: {
     toolMediaUrls: [],
     toolAudioAsVoice: false,
     quarantinedTools,
+    toolTrustedLocalMedia: false,
   };
-  const middlewareRunner = createAgentToolResultMiddlewareRunner({
-    runtime: "codex",
-    ...toolResultHookContext,
-  });
+  const middlewareRunner = hooksEnabled
+    ? createAgentToolResultMiddlewareRunner({
+        runtime: "codex",
+        ...toolResultHookContext,
+      })
+    : undefined;
   const isReplaySafeToolInstance = (tool: AnyAgentTool): boolean => {
     const pluginMeta = getPluginToolMeta(tool);
     if (pluginMeta) {
@@ -436,8 +442,9 @@ export function createCodexDynamicToolBridge(params: {
     }
     return getChannelAgentToolMeta(tool as never) === undefined;
   };
-  const legacyExtensionRunner =
-    createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
+  const legacyExtensionRunner = hooksEnabled
+    ? createCodexAppServerToolResultExtensionRunner(toolResultHookContext)
+    : undefined;
   const directToolNames = new Set([
     ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
     ...(params.directToolNames ?? []),
@@ -530,23 +537,27 @@ export function createCodexDynamicToolBridge(params: {
         const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isCodexToolResultError(rawResult);
         const rawResultFailureKind = resolveToolResultFailureKind(rawResult);
-        const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
-          threadId: call.threadId,
-          turnId: call.turnId,
-          toolCallId: call.callId,
-          toolName,
-          args: structuredClone(executedArgs),
-          isError: rawIsError,
-          result: rawResult,
-        });
-        const result = await legacyExtensionRunner.applyToolResultExtensions({
-          threadId: call.threadId,
-          turnId: call.turnId,
-          toolCallId: call.callId,
-          toolName,
-          args: structuredClone(executedArgs),
-          result: middlewareResult,
-        });
+        const middlewareResult = middlewareRunner
+          ? await middlewareRunner.applyToolResultMiddleware({
+              threadId: call.threadId,
+              turnId: call.turnId,
+              toolCallId: call.callId,
+              toolName,
+              args: structuredClone(executedArgs),
+              isError: rawIsError,
+              result: rawResult,
+            })
+          : rawResult;
+        const result = legacyExtensionRunner
+          ? await legacyExtensionRunner.applyToolResultExtensions({
+              threadId: call.threadId,
+              turnId: call.turnId,
+              toolCallId: call.callId,
+              toolName,
+              args: structuredClone(executedArgs),
+              result: middlewareResult,
+            })
+          : middlewareResult;
         const resultIsError = rawIsError || isCodexToolResultError(result);
         const finalResultFailureKind = resolveToolResultFailureKind(result);
         const resultFailureKind = rawResultFailureKind ?? finalResultFailureKind;
@@ -561,18 +572,20 @@ export function createCodexDynamicToolBridge(params: {
               }
             : result;
         notifyAgentToolResult(options?.onAgentToolResult, toolName, observerResult, resultIsError);
-        void runAgentHarnessAfterToolCallHook({
-          toolName,
-          toolCallId: call.callId,
-          runId: toolResultHookContext.runId,
-          agentId: toolResultHookContext.agentId,
-          sessionId: toolResultHookContext.sessionId,
-          sessionKey: toolResultHookContext.sessionKey,
-          channelId: toolResultHookContext.channelId,
-          startArgs: executedArgs,
-          result,
-          startedAt,
-        });
+        if (hooksEnabled) {
+          void runAgentHarnessAfterToolCallHook({
+            toolName,
+            toolCallId: call.callId,
+            runId: toolResultHookContext.runId,
+            agentId: toolResultHookContext.agentId,
+            sessionId: toolResultHookContext.sessionId,
+            sessionKey: toolResultHookContext.sessionKey,
+            channelId: toolResultHookContext.channelId,
+            startArgs: executedArgs,
+            result,
+            startedAt,
+          });
+        }
         finalizeToolTerminalPresentation({
           toolCallId: call.callId,
           runId: toolResultHookContext.runId,
@@ -630,6 +643,9 @@ export function createCodexDynamicToolBridge(params: {
         const receiptConfirmedSourceReply =
           params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
           toolName === "message" &&
+          // progress:true sends are mid-turn status pings; they must never
+          // count as the delivered source reply that releases the Codex turn.
+          executedArgs.progress !== true &&
           normalizeRouteToken(
             typeof executedArgs.action === "string" ? executedArgs.action : undefined,
           ) === "reply" &&
@@ -709,18 +725,20 @@ export function createCodexDynamicToolBridge(params: {
           telemetry,
           isError: true,
         });
-        void runAgentHarnessAfterToolCallHook({
-          toolName,
-          toolCallId: call.callId,
-          runId: toolResultHookContext.runId,
-          agentId: toolResultHookContext.agentId,
-          sessionId: toolResultHookContext.sessionId,
-          sessionKey: toolResultHookContext.sessionKey,
-          channelId: toolResultHookContext.channelId,
-          startArgs: executedArgs,
-          error: errorMessage,
-          startedAt,
-        });
+        if (hooksEnabled) {
+          void runAgentHarnessAfterToolCallHook({
+            toolName,
+            toolCallId: call.callId,
+            runId: toolResultHookContext.runId,
+            agentId: toolResultHookContext.agentId,
+            sessionId: toolResultHookContext.sessionId,
+            sessionKey: toolResultHookContext.sessionKey,
+            channelId: toolResultHookContext.channelId,
+            startArgs: executedArgs,
+            error: errorMessage,
+            startedAt,
+          });
+        }
         const replaySafe =
           !didStartExecution ||
           executionPrevented ||
@@ -1108,6 +1126,12 @@ function collectToolTelemetry(params: {
       if (media.audioAsVoice) {
         params.telemetry.toolAudioAsVoice = true;
       }
+      if (media.trustedLocalMedia && mediaUrls.length > 0) {
+        params.telemetry.toolTrustedLocalMedia = true;
+      }
+      if (media.spokenText && mediaUrls.length > 0) {
+        params.telemetry.toolSpokenText ??= media.spokenText;
+      }
     }
   }
   if (!isMessagingTool(params.toolName)) {
@@ -1130,7 +1154,11 @@ function collectToolTelemetry(params: {
     return;
   }
   params.telemetry.didSendViaMessagingTool = true;
-  const sourceReplyPayload = extractInternalSourceReplyPayload(params.result?.details);
+  const sourceReplyPayload = extractInternalSourceReplyPayload({
+    details: params.result?.details,
+    result: params.mediaTrustResult ?? params.result,
+    toolName: params.toolName,
+  });
   if (sourceReplyPayload) {
     params.telemetry.messagingToolSourceReplyPayloads.push(sourceReplyPayload);
     return;
@@ -1154,9 +1182,14 @@ function collectToolTelemetry(params: {
   });
 }
 
-function extractInternalSourceReplyPayload(
-  details: unknown,
-): MessagingToolSourceReplyPayload | undefined {
+function extractInternalSourceReplyPayload(params: {
+  details: unknown;
+  // Forwarded only to filterToolResultMediaUrls (which accepts unknown); the sanitized raw
+  // result is typed unknown upstream, so widen here instead of asserting an AgentToolResult shape.
+  result: unknown;
+  toolName: string;
+}): MessagingToolSourceReplyPayload | undefined {
+  const { details } = params;
   if (!isRecord(details) || details.sourceReplySink !== "internal-ui") {
     return undefined;
   }
@@ -1165,16 +1198,25 @@ function extractInternalSourceReplyPayload(
     return undefined;
   }
   const text = readFirstString(rawPayload, ["text", "message"]);
-  const mediaUrls = collectMediaUrls(rawPayload);
+  const mediaUrls = filterToolResultMediaUrls(
+    params.toolName,
+    collectMediaUrls(rawPayload),
+    params.result,
+  );
+  const preferredMediaUrl =
+    typeof rawPayload.mediaUrl === "string" ? rawPayload.mediaUrl.trim() : undefined;
   const mediaUrl =
-    typeof rawPayload.mediaUrl === "string" && rawPayload.mediaUrl.trim()
-      ? rawPayload.mediaUrl.trim()
-      : mediaUrls[0];
+    preferredMediaUrl && mediaUrls.includes(preferredMediaUrl) ? preferredMediaUrl : mediaUrls[0];
+  const hasLocalMediaUrl = mediaUrls.some((url) => !isHttpMediaUrl(url));
   const payload: MessagingToolSourceReplyPayload = {
     ...(text ? { text } : {}),
     ...(mediaUrl ? { mediaUrl } : {}),
     ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
     ...(rawPayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
+    ...(rawPayload.trustedLocalMedia === true && hasLocalMediaUrl
+      ? { trustedLocalMedia: true }
+      : {}),
+    ...extractInternalSourceReplyTtsMetadata(rawPayload),
     ...(isRecord(rawPayload.presentation)
       ? { presentation: rawPayload.presentation as never }
       : {}),
@@ -1187,6 +1229,31 @@ function extractInternalSourceReplyPayload(
   return text || mediaUrls.length > 0 || payload.presentation || payload.interactive
     ? payload
     : undefined;
+}
+
+function isHttpMediaUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url.trim());
+}
+
+function extractInternalSourceReplyTtsMetadata(
+  rawPayload: Record<string, unknown>,
+): Pick<MessagingToolSourceReplyPayload, "spokenText" | "ttsSupplement"> {
+  const spokenText = readFirstString(rawPayload, ["spokenText"]);
+  const supplement = isRecord(rawPayload.ttsSupplement) ? rawPayload.ttsSupplement : undefined;
+  const supplementSpokenText = supplement ? readFirstString(supplement, ["spokenText"]) : undefined;
+  return {
+    ...(spokenText ? { spokenText } : {}),
+    ...(supplementSpokenText
+      ? {
+          ttsSupplement: {
+            spokenText: supplementSpokenText,
+            ...(supplement?.visibleTextAlreadyDelivered === true
+              ? { visibleTextAlreadyDelivered: true }
+              : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 function readPositiveInteger(value: unknown): number | undefined {

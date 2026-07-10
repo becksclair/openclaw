@@ -4,6 +4,7 @@ import {
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { readCodexAppServerAgentBasePrompt } from "openclaw/plugin-sdk/codex-app-server-base-prompt";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
@@ -349,10 +350,16 @@ export async function handleCodexConversationBindingResolved(
     return;
   }
   const identity = conversationBindingIdentity(data);
-  const binding = await options.bindingStore.read(identity);
-  if (!data.start?.id || binding?.conversationStartId === data.start.id) {
-    await options.bindingStore.mutate(identity, { kind: "clear" });
-  }
+  await options.bindingStore.withLease(identity, async () => {
+    const binding = await options.bindingStore.read(identity);
+    if (!binding || (data.start?.id && binding.conversationStartId !== data.start.id)) {
+      return;
+    }
+    await options.bindingStore.mutate(identity, {
+      kind: "clear",
+      threadId: binding.threadId,
+    });
+  });
 }
 
 type CodexThreadBindingParams = {
@@ -367,6 +374,10 @@ type CodexThreadBindingParams = {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
+  baseInstructionsSource?: "agent-file" | "runtime-profile" | "external-thread";
+  baseInstructionsFingerprint?: string;
+  conversationStartId?: string;
+  conversationSourceTransferComplete?: true;
   config?: CodexAppServerAuthProfileLookup["config"];
   agentId?: string;
   sessionKey?: string;
@@ -492,6 +503,7 @@ function codexConversationSandboxOrPermissions(
 async function requestNewConversationBindingThread(
   params: CodexThreadBindingParams,
   resolved: CodexThreadBindingRuntime,
+  baseInstructions?: string,
 ): Promise<CodexThreadStartResponse> {
   return await resolved.client.request(
     "thread/start",
@@ -501,6 +513,9 @@ async function requestNewConversationBindingThread(
       ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
       personality: CODEX_NATIVE_PERSONALITY_NONE,
       ...buildThreadRequestRuntimeOptions(params, resolved),
+      // Generic agent base prompt seam: inject the resolved agent-file base prompt as
+      // thread/start.baseInstructions so OpenClaw-managed Codex threads carry it.
+      ...(baseInstructions !== undefined ? { baseInstructions } : {}),
       developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
       experimentalRawEvents: true,
     },
@@ -512,6 +527,11 @@ async function writeThreadBindingFromResponse(
   params: CodexThreadBindingParams,
   resolved: CodexThreadBindingRuntime,
   response: CodexThreadResumeResponse | CodexThreadStartResponse,
+  options: {
+    baseInstructionsFingerprint?: string;
+    externalThread?: boolean;
+    managedBaseInstructions?: boolean;
+  } = {},
 ): Promise<void> {
   const runtimeApprovalPolicy =
     typeof resolved.runtime.approvalPolicy === "string"
@@ -538,6 +558,16 @@ async function writeThreadBindingFromResponse(
       serviceTier: params.serviceTier ?? resolved.runtime.serviceTier ?? undefined,
       networkProxyProfileName: resolved.runtime.networkProxy?.profileName,
       networkProxyConfigFingerprint: resolved.runtime.networkProxy?.configFingerprint,
+      baseInstructionsSource: options.externalThread
+        ? "external-thread"
+        : options.managedBaseInstructions || options.baseInstructionsFingerprint !== undefined
+          ? "agent-file"
+          : params.baseInstructionsSource,
+      baseInstructionsFingerprint: options.externalThread
+        ? undefined
+        : (options.baseInstructionsFingerprint ?? params.baseInstructionsFingerprint),
+      conversationStartId: params.conversationStartId,
+      conversationSourceTransferComplete: params.conversationSourceTransferComplete,
     },
   });
   if (!committed) {
@@ -549,6 +579,7 @@ async function attachExistingThread(
   params: CodexThreadBindingParams & {
     threadId: string;
   },
+  options: { preserveInheritedBaseInstructions?: boolean } = {},
 ): Promise<void> {
   const resolved = await resolveThreadBindingRuntime(params);
   try {
@@ -568,17 +599,32 @@ async function attachExistingThread(
           },
           { timeoutMs: resolved.runtime.requestTimeoutMs },
         );
-    await writeThreadBindingFromResponse(params, resolved, response);
+    const resumedInheritedThread =
+      options.preserveInheritedBaseInstructions && response.thread.id === params.threadId;
+    await writeThreadBindingFromResponse(params, resolved, response, {
+      externalThread: !resumedInheritedThread,
+    });
   } finally {
     releaseLeasedSharedCodexAppServerClient(resolved.client);
   }
 }
 
 async function createThread(params: CodexThreadBindingParams): Promise<void> {
+  const basePrompt = params.agentDir
+    ? await readCodexAppServerAgentBasePrompt({ agentDir: params.agentDir })
+    : { source: "none" as const };
   const resolved = await resolveThreadBindingRuntime(params);
   try {
-    const response = await requestNewConversationBindingThread(params, resolved);
-    await writeThreadBindingFromResponse(params, resolved, response);
+    const response = await requestNewConversationBindingThread(
+      params,
+      resolved,
+      basePrompt.source === "agent-file" ? basePrompt.text : undefined,
+    );
+    await writeThreadBindingFromResponse(params, resolved, response, {
+      baseInstructionsFingerprint:
+        basePrompt.source === "agent-file" ? basePrompt.fingerprint : undefined,
+      managedBaseInstructions: true,
+    });
   } finally {
     releaseLeasedSharedCodexAppServerClient(resolved.client);
   }
@@ -716,6 +762,8 @@ async function runBoundTurn(params: {
           serviceTier: serviceTier ?? undefined,
           networkProxyProfileName: modelScopedRuntime.networkProxy?.profileName,
           networkProxyConfigFingerprint: modelScopedRuntime.networkProxy?.configFingerprint,
+          baseInstructionsSource: binding.baseInstructionsSource,
+          baseInstructionsFingerprint: binding.baseInstructionsFingerprint,
           conversationStartId: binding.conversationStartId,
           conversationSourceTransferComplete: binding.conversationSourceTransferComplete,
           historyCoveredThrough: binding.historyCoveredThrough,
@@ -857,84 +905,201 @@ async function prepareConversationBinding(
   options: { forceNew?: boolean } = {},
 ): Promise<void> {
   const identity = conversationBindingIdentity(params.data);
-  await params.bindingStore.withLease(identity, async () => {
-    const current = await params.bindingStore.read(identity);
-    const requested =
-      params.data.start && current?.conversationStartId !== params.data.start.id
-        ? params.data.start
-        : undefined;
-    if (current && !requested && !options.forceNew) {
-      return;
-    }
-    const sourceIdentity = params.data.source
-      ? sessionBindingIdentity({
-          agentId: params.data.source.agentId,
-          sessionId: params.data.source.sessionId,
-          sessionKey: params.data.source.sessionKey,
-          config: params.config,
-        })
-      : undefined;
-    const sourceBinding = sourceIdentity
-      ? await params.bindingStore.read(sourceIdentity)
-      : undefined;
-    const inherited = current ?? sourceBinding;
-    const execPolicy = resolveConversationExecPolicy({
-      config: params.config,
-      agentId: params.data.agentId,
-      sessionKey: params.sessionKey,
-    });
-    const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir, config: params.config });
-    const bindingParams: CodexThreadBindingParams = {
+  const sourceIdentity = params.data.source
+    ? sessionBindingIdentity({
+        agentId: params.data.source.agentId,
+        sessionId: params.data.source.sessionId,
+        sessionKey: params.data.source.sessionKey,
+        config: params.config,
+      })
+    : undefined;
+  const prepareWithDestinationLease = () =>
+    params.bindingStore.withLease(identity, () =>
+      prepareConversationBindingWithLeases(params, options, identity, sourceIdentity),
+    );
+  if (sourceIdentity) {
+    // A session source can seed multiple requested destinations. Serialize on that
+    // owner before any destination can resume or retire its native thread.
+    await params.bindingStore.withLease(sourceIdentity, prepareWithDestinationLease);
+  } else {
+    await prepareWithDestinationLease();
+  }
+}
+
+async function prepareConversationBindingWithLeases(
+  params: {
+    bindingStore: CodexAppServerBindingStore;
+    data: CodexAppServerConversationBindingData;
+    pluginConfig?: unknown;
+    config?: CodexConversationConfig;
+    sessionKey?: string;
+  },
+  options: { forceNew?: boolean },
+  identity: CodexAppServerBindingIdentity,
+  sourceIdentity?: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
+): Promise<void> {
+  let current = await params.bindingStore.read(identity);
+  const source = params.data.source;
+  const sourceBinding = sourceIdentity ? await params.bindingStore.read(sourceIdentity) : undefined;
+  if (sourceIdentity && source && !current && !sourceBinding) {
+    throw new Error("Codex conversation source binding disappeared before ownership transfer.");
+  }
+  if (sourceBinding && source && sourceBinding.threadId !== source.threadId) {
+    throw new Error("Codex conversation source binding changed before ownership transfer.");
+  }
+  let inherited = current ?? sourceBinding;
+  const readBasePromptState = async () => {
+    const basePrompt = params.data.agentDir
+      ? await readCodexAppServerAgentBasePrompt({ agentDir: params.data.agentDir })
+      : { source: "none" as const };
+    const basePromptFingerprint =
+      basePrompt.source === "agent-file" ? basePrompt.fingerprint : undefined;
+    return {
+      basePromptChanged:
+        inherited &&
+        isConversationBasePromptManagedBinding(inherited) &&
+        inherited.baseInstructionsFingerprint !== basePromptFingerprint,
+    };
+  };
+  let { basePromptChanged } = await readBasePromptState();
+  if (current && sourceIdentity && source && !current.conversationSourceTransferComplete) {
+    const incompleteStartId = current.conversationStartId;
+    await completeConversationSourceTransferWithLeases({
       bindingStore: params.bindingStore,
       identity,
-      pluginConfig: params.pluginConfig,
-      workspaceDir: requested
-        ? params.data.workspaceDir
-        : (inherited?.cwd ?? params.data.workspaceDir),
-      ...agentLookup,
-      model: requested?.model ?? inherited?.model,
-      modelProvider: requested?.modelProvider ?? inherited?.modelProvider,
-      authProfileId: requested?.authProfileId ?? inherited?.authProfileId,
-      approvalPolicy: execPolicy.touched ? undefined : inherited?.approvalPolicy,
-      sandbox: execPolicy.touched ? undefined : inherited?.sandbox,
-      serviceTier: inherited?.serviceTier,
-      config: params.config,
-      sessionKey: params.sessionKey,
-      agentId: params.data.agentId,
-    };
-    const threadId = requested?.threadId ?? (!current ? params.data.source?.threadId : undefined);
-    if (threadId && !options.forceNew) {
-      await attachExistingThread({ ...bindingParams, threadId });
-    } else {
-      await createThread(bindingParams);
-    }
-    const stored = await params.bindingStore.read(identity);
-    if (!stored) {
-      throw new Error("Codex conversation binding disappeared while initializing its thread.");
-    }
-    if (sourceIdentity && params.data.source && !current?.conversationSourceTransferComplete) {
-      await params.bindingStore.withLease(sourceIdentity, async () => {
-        const source = await params.bindingStore.read(sourceIdentity);
-        if (source && source.threadId === params.data.source?.threadId) {
-          await params.bindingStore.mutate(sourceIdentity, {
-            kind: "clear",
-            threadId: source.threadId,
-          });
-        }
-      });
-    }
-    const patched = await params.bindingStore.mutate(identity, {
-      kind: "patch",
-      threadId: stored.threadId,
-      patch: {
-        ...(params.data.start ? { conversationStartId: params.data.start.id } : {}),
-        ...(sourceIdentity ? { conversationSourceTransferComplete: true } : {}),
-      },
+      destinationThreadId: current.threadId,
+      sourceIdentity,
+      sourceThreadId: source.threadId,
+      allowMissingSource: true,
     });
-    if (!patched) {
-      throw new Error("Codex conversation binding changed while initializing its thread.");
+    current = await params.bindingStore.read(identity);
+    if (!current) {
+      throw new Error(
+        "Codex conversation binding disappeared while completing ownership transfer.",
+      );
     }
+    inherited = current;
+    ({ basePromptChanged } = await readBasePromptState());
+    const newerStartPending =
+      params.data.start !== undefined && params.data.start.id !== incompleteStartId;
+    if (!newerStartPending && !options.forceNew && !basePromptChanged) {
+      // Destination creation commits before source retirement. A retry must finish that
+      // ownership transfer without creating or resuming a second native thread.
+      return;
+    }
+  }
+  const requested =
+    params.data.start && current?.conversationStartId !== params.data.start.id
+      ? params.data.start
+      : undefined;
+  if (current && !requested && !options.forceNew && !basePromptChanged) {
+    return;
+  }
+  const needsSourceTransfer = Boolean(
+    sourceIdentity && source && !current?.conversationSourceTransferComplete,
+  );
+  const execPolicy = resolveConversationExecPolicy({
+    config: params.config,
+    agentId: params.data.agentId,
+    sessionKey: params.sessionKey,
   });
+  const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir, config: params.config });
+  const bindingParams: CodexThreadBindingParams = {
+    bindingStore: params.bindingStore,
+    identity,
+    pluginConfig: params.pluginConfig,
+    workspaceDir: requested
+      ? params.data.workspaceDir
+      : (inherited?.cwd ?? params.data.workspaceDir),
+    ...agentLookup,
+    model: requested?.model ?? inherited?.model,
+    modelProvider: requested?.modelProvider ?? inherited?.modelProvider,
+    authProfileId: requested?.authProfileId ?? inherited?.authProfileId,
+    approvalPolicy: execPolicy.touched ? undefined : inherited?.approvalPolicy,
+    sandbox: execPolicy.touched ? undefined : inherited?.sandbox,
+    serviceTier: inherited?.serviceTier,
+    baseInstructionsSource: inherited?.baseInstructionsSource,
+    baseInstructionsFingerprint: inherited?.baseInstructionsFingerprint,
+    conversationStartId: params.data.start?.id ?? current?.conversationStartId,
+    conversationSourceTransferComplete: current?.conversationSourceTransferComplete,
+    config: params.config,
+    sessionKey: params.sessionKey,
+    agentId: params.data.agentId,
+  };
+  const threadId = requested?.threadId ?? (!current ? source?.threadId : undefined);
+  if (threadId && !options.forceNew && !basePromptChanged) {
+    const resumingSourceThread = needsSourceTransfer && sourceBinding?.threadId === threadId;
+    await attachExistingThread(
+      { ...bindingParams, threadId },
+      { preserveInheritedBaseInstructions: resumingSourceThread },
+    );
+  } else {
+    await createThread(bindingParams);
+  }
+  const stored = await params.bindingStore.read(identity);
+  if (!stored) {
+    throw new Error("Codex conversation binding disappeared while initializing its thread.");
+  }
+  if (needsSourceTransfer && sourceIdentity && source) {
+    await completeConversationSourceTransferWithLeases({
+      bindingStore: params.bindingStore,
+      identity,
+      destinationThreadId: stored.threadId,
+      sourceIdentity,
+      sourceThreadId: source.threadId,
+      allowMissingSource: false,
+    });
+  }
+}
+
+async function completeConversationSourceTransferWithLeases(params: {
+  bindingStore: CodexAppServerBindingStore;
+  identity: CodexAppServerBindingIdentity;
+  destinationThreadId: string;
+  sourceIdentity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
+  sourceThreadId: string;
+  allowMissingSource: boolean;
+}): Promise<void> {
+  const source = await params.bindingStore.read(params.sourceIdentity);
+  if (!source) {
+    if (!params.allowMissingSource) {
+      throw new Error("Codex conversation source binding disappeared before ownership transfer.");
+    }
+  } else {
+    if (source.threadId !== params.sourceThreadId) {
+      throw new Error("Codex conversation source binding changed before ownership transfer.");
+    }
+    const cleared = await params.bindingStore.mutate(params.sourceIdentity, {
+      kind: "clear",
+      threadId: source.threadId,
+    });
+    if (!cleared) {
+      throw new Error("Codex conversation source binding changed while transferring ownership.");
+    }
+  }
+  const patched = await params.bindingStore.mutate(params.identity, {
+    kind: "patch",
+    threadId: params.destinationThreadId,
+    patch: { conversationSourceTransferComplete: true },
+  });
+  if (!patched) {
+    throw new Error("Codex conversation binding changed while initializing its thread.");
+  }
+}
+
+function isConversationBasePromptManagedBinding(binding: {
+  baseInstructionsSource?: string;
+  baseInstructionsFingerprint?: string;
+}): boolean {
+  if (binding.baseInstructionsSource === "agent-file") {
+    return true;
+  }
+  if (binding.baseInstructionsSource === "external-thread") {
+    return false;
+  }
+  // Legacy `/codex resume` sidecars had no source marker. Leave those attached
+  // unless a binding already carries OpenClaw-owned base prompt metadata.
+  return binding.baseInstructionsFingerprint !== undefined;
 }
 
 function resolveConversationExecPolicy(params: {

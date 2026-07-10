@@ -602,6 +602,7 @@ describe("codex command", () => {
       authProfileId: "openai:work",
       model: "gpt-5.4",
       historyCoveredThrough: expect.any(String),
+      baseInstructionsSource: "external-thread",
     });
   });
 

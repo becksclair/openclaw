@@ -122,6 +122,7 @@ function startThreadWithHarness(
     finalConfigPatch: undefined,
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled: true,
+    userMcpServersEnabled: true,
     nativeProviderWebSearchSupport: "supported",
     sandboxExecServerEnabled: false,
     sandbox: null,
@@ -141,7 +142,7 @@ async function answerInitialize(harness: ClientHarness): Promise<void> {
     timeout: HARNESS_REQUEST_TIMEOUT_MS,
   });
   const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.143.0 (macOS; test)" } });
+  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.144.1 (macOS; test)" } });
 }
 
 async function waitForRequest(

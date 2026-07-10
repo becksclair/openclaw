@@ -413,6 +413,7 @@ function normalizeSimpleCompletionReasoning(
       return "medium";
     case "ultra":
     case "max":
+    case "ultra":
       return isOpenAIProvider(model.provider) && supportsOpenAIReasoningEffort(model, "max")
         ? "max"
         : "xhigh";

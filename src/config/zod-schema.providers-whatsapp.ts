@@ -108,6 +108,15 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     pluginHooks: WhatsAppPluginHooksSchema,
+    /** Raw inbound/outbound message archive tap (off by default). */
+    archive: z
+      .object({
+        enabled: z.boolean().optional(),
+        /** SQLite file receiving archived messages (wa-fetch messages.db schema). */
+        dbPath: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   };
 }
 

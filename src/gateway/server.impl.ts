@@ -1,11 +1,11 @@
-// Gateway server implementation builds runtime state, method registries, HTTP
-// and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { ensureAgentAndCodexAppServerBasePromptTemplates } from "../agents/codex-app-server-base-prompt.js";
 import {
   getActiveEmbeddedRunCount,
   resolveActiveEmbeddedRunSessionId,
 } from "../agents/embedded-agent-runner/run-state.js";
+import { getDetachedTtsTaskCount } from "../auto-reply/reply/detached-tts-tasks.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import {
   getLoadedChannelPluginEntryById,
@@ -23,6 +23,7 @@ import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
 import { isNixMode, normalizeStateDirEnv } from "../config/paths.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -44,7 +45,11 @@ import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  captureCurrentPluginMetadataSnapshotState,
+  restoreCurrentPluginMetadataSnapshotState,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import { cleanupRetainedManagedNpmInstallGenerations } from "../plugins/managed-npm-retention.js";
@@ -58,7 +63,7 @@ import { getTotalQueueSize, isGatewayDraining } from "../process/command-queue.j
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeConfigSnapshot,
+  getActiveSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -131,9 +136,9 @@ const loadGatewayModelCatalogModule = createLazyRuntimeModule(
 );
 
 export async function resetModelCatalogCacheForTest(): Promise<void> {
-  const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
+  const { resetModelCatalogCacheForTest: resetServerModelCatalogCacheForTest } =
     await loadGatewayModelCatalogModule();
-  await resetModelCatalogCacheForTestLocal();
+  await resetServerModelCatalogCacheForTest();
 }
 
 ensureOpenClawCliOnPath();
@@ -600,9 +605,6 @@ export async function startGatewayServer(
   const activateRuntimeSecrets = createRuntimeSecretsActivator({
     logSecrets,
     emitStateEvent: emitSecretsStateEvent,
-    ...(startupConfigLoad.pluginMetadataSnapshot
-      ? { pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot }
-      : {}),
   });
 
   let cfgAtStart: OpenClawConfig;
@@ -620,7 +622,6 @@ export async function startGatewayServer(
         authOverride: opts.auth,
         tailscaleOverride: opts.tailscale,
         activateRuntimeSecrets,
-        log,
         measure: (name, run, measureOptions) => startupTrace.measure(name, run, measureOptions),
       }),
     { omitErrorMessage: true },
@@ -644,6 +645,7 @@ export async function startGatewayServer(
     () =>
       getTotalQueueSize() +
       getTotalPendingReplies() +
+      getDetachedTtsTaskCount() +
       getActiveEmbeddedRunCount() +
       getActiveCronJobCount() +
       getActiveTaskCount(),
@@ -671,6 +673,18 @@ export async function startGatewayServer(
     startupLastGoodSnapshot = startupSnapshot;
   }
   setRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
+  if (!isVitestRuntimeEnv() || process.env.OPENCLAW_STATE_DIR) {
+    await startupTrace.measure("agent.base-template", async () => {
+      try {
+        await ensureAgentAndCodexAppServerBasePromptTemplates({
+          config: cfgAtStart,
+          env: process.env,
+        });
+      } catch (error) {
+        log.warn(`gateway: failed to write agent base prompt templates: ${String(error)}`);
+      }
+    });
+  }
   const { prepareGatewayPluginBootstrap } = await loadStartupPluginsModule();
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
     prepareGatewayPluginBootstrap({
@@ -681,7 +695,6 @@ export async function startGatewayServer(
       minimalTestGateway,
       log,
       loadRuntimePlugins: false,
-      loadSetupRuntimePlugins: true,
     }),
   );
   const {
@@ -768,8 +781,7 @@ export async function startGatewayServer(
   const getResolvedAuth = () =>
     resolveGatewayAuth({
       authConfig:
-        getActiveSecretsRuntimeConfigSnapshot()?.config.gateway?.auth ??
-        getRuntimeConfig().gateway?.auth,
+        getActiveSecretsRuntimeSnapshot()?.config.gateway?.auth ?? getRuntimeConfig().gateway?.auth,
       authOverride: opts.auth,
       env: process.env,
       tailscaleMode,
@@ -852,9 +864,9 @@ export async function startGatewayServer(
   const { createChannelManager } = await import("./server-channels.js");
   const channelManager = createChannelManager({
     getRuntimeConfig: () => {
-      const runtimeConfigLocal = getRuntimeConfig();
       return resolveGatewayPluginConfig({
-        config: runtimeConfigLocal,
+        config: getRuntimeConfig(),
+        env: process.env,
       });
     },
     channelLogs,
@@ -897,6 +909,7 @@ export async function startGatewayServer(
     chatRunBuffers,
     chatDeltaSentAt,
     chatDeltaLastBroadcastLen,
+    chatFinalAudio,
     addChatRun,
     removeChatRun,
     chatAbortControllers,
@@ -934,6 +947,13 @@ export async function startGatewayServer(
     }),
   );
   const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
+  const clearChatRunState = (runId: string) => {
+    chatRunState.clearRun(runId);
+  };
+  const clearExpiredChatRunState = (runId: string) => {
+    clearChatRunState(runId);
+    chatFinalAudio.deleteRun(runId);
+  };
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
     nodeRegistry,
@@ -1020,11 +1040,9 @@ export async function startGatewayServer(
   };
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
-  const refreshGatewayHealthSnapshotWithRuntime: typeof refreshGatewayHealthSnapshot = (
-    optsResult,
-  ) =>
+  const refreshGatewayHealthSnapshotWithRuntime: typeof refreshGatewayHealthSnapshot = (options) =>
     refreshGatewayHealthSnapshot({
-      ...optsResult,
+      ...options,
       getRuntimeSnapshot,
       getEventLoopHealth: readinessEventLoopHealth.snapshot,
       getConfigReloaderHotReloadStatus: () => runtimeState?.configReloader.hotReloadStatus?.(),
@@ -1043,7 +1061,7 @@ export async function startGatewayServer(
       await gatewayLifetimeSidecar.stop();
     }
   };
-  const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
+  const createCloseHandler = () => async (closeOptions?: GatewayCloseOptions) => {
     const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
     const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
       await loadGatewayCloseModule();
@@ -1101,14 +1119,14 @@ export async function startGatewayServer(
           reason,
         });
       },
-      getPendingReplyCount: getTotalPendingReplies,
+      getPendingReplyCount: () => getTotalPendingReplies() + getDetachedTtsTaskCount(),
       clients,
       configReloader: runtimeState.configReloader,
       wss,
       httpServer,
       httpServers,
       drainActiveSessionsForShutdown,
-    })(optsValue);
+    })(closeOptions);
   };
   let clearFallbackGatewayContextForServer = () => {};
   const closeOnStartupFailure = async () => {
@@ -1150,6 +1168,7 @@ export async function startGatewayServer(
           chatQueuedTurns,
           restartRecoveryCandidates,
           chatRunState,
+          clearChatRunState: clearExpiredChatRunState,
           chatRunBuffers,
           chatDeltaSentAt,
           chatDeltaLastBroadcastLen,
@@ -1188,6 +1207,7 @@ export async function startGatewayServer(
         nodeSendToSession,
         agentRunSeq,
         chatRunState,
+        clearChatRunState,
         toolEventRecipients,
         sessionEventSubscribers,
         sessionMessageSubscribers,
@@ -1207,25 +1227,30 @@ export async function startGatewayServer(
     );
     Object.assign(runtimeState, runtimeServices);
 
-    const { execApprovalManager, pluginApprovalManager, extraHandlers, coreGatewayHandlers } =
-      await startupTrace.measure("gateway.handlers", async () => {
-        const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: coreGatewayHandlersLocal }] =
-          await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
-        return {
-          ...createGatewayAuxHandlers({
-            log,
-            activateRuntimeSecrets,
-            sharedGatewaySessionGenerationState,
-            resolveSharedGatewaySessionGenerationForConfig,
-            clients,
-            startChannel,
-            stopChannel,
-            getChannelAutostartSuppression: channelManager.getAutostartSuppression,
-            logChannels,
-          }),
-          coreGatewayHandlers: coreGatewayHandlersLocal,
-        };
-      });
+    const {
+      execApprovalManager,
+      pluginApprovalManager,
+      extraHandlers,
+      coreGatewayHandlers: resolvedCoreGatewayHandlers,
+    } = await startupTrace.measure("gateway.handlers", async () => {
+      const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: importedCoreGatewayHandlers }] =
+        await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
+      return {
+        ...createGatewayAuxHandlers({
+          log,
+          activateRuntimeSecrets,
+          sharedGatewaySessionGenerationState,
+          resolveSharedGatewaySessionGenerationForConfig,
+          clients,
+          startChannel,
+          stopChannel,
+          getChannelAutostartSuppression: channelManager.getAutostartSuppression,
+          logChannels,
+        }),
+        coreGatewayHandlers: importedCoreGatewayHandlers,
+      };
+    });
+
     const attachedGatewayExtraHandlers: GatewayRequestHandlers = {
       ...pluginRegistry.gatewayHandlers,
       ...extraHandlers,
@@ -1234,7 +1259,7 @@ export async function startGatewayServer(
     const buildAttachedGatewayMethodRegistry = (
       nextPluginRegistry: typeof pluginRegistry,
     ): GatewayMethodRegistry => {
-      const coreDescriptorHandlers: GatewayRequestHandlers = { ...coreGatewayHandlers };
+      const coreDescriptorHandlers: GatewayRequestHandlers = { ...resolvedCoreGatewayHandlers };
       const auxHandlers: GatewayRequestHandlers = {};
       for (const [method, handler] of Object.entries(extraHandlers)) {
         if (isCoreGatewayMethodClassified(method)) {
@@ -1341,59 +1366,81 @@ export async function startGatewayServer(
           loadGatewayPluginBootstrapModule(),
           import("../plugins/services.js"),
         ]);
-      const nextPluginLookUpTable = loadPluginLookUpTable({
-        config: params.nextConfig,
-        workspaceDir: defaultWorkspaceDir,
-        env: process.env,
-        activationSourceConfig: params.nextConfig,
-      });
-      const nextStartupPluginIds = new Set(nextPluginLookUpTable.startup.pluginIds);
-      const nextStartupChannelIds = new Set<ChannelId>();
-      for (const plugin of nextPluginLookUpTable.manifestRegistry.plugins) {
-        if (!nextStartupPluginIds.has(plugin.id)) {
-          continue;
+      const previousPluginMetadataState = captureCurrentPluginMetadataSnapshotState();
+      clearPluginMetadataLifecycleCaches();
+      let nextPluginLookUpTable: ReturnType<typeof loadPluginLookUpTable>;
+      let loaded: ReturnType<typeof prepareGatewayPluginLoad>;
+      let nextPluginRuntimeConfig: OpenClawConfig;
+      try {
+        nextPluginLookUpTable = loadPluginLookUpTable({
+          config: params.nextConfig,
+          workspaceDir: defaultWorkspaceDir,
+          env: process.env,
+          activationSourceConfig: params.nextConfig,
+        });
+        const nextStartupPluginIds = new Set(nextPluginLookUpTable.startup.pluginIds);
+        const nextStartupChannelIds = new Set<ChannelId>();
+        for (const plugin of nextPluginLookUpTable.manifestRegistry.plugins) {
+          if (!nextStartupPluginIds.has(plugin.id)) {
+            continue;
+          }
+          if (plugin.channels.length === 0) {
+            nextStartupChannelIds.add(plugin.id);
+            continue;
+          }
+          for (const channelId of plugin.channels) {
+            nextStartupChannelIds.add(channelId);
+          }
         }
-        if (plugin.channels.length === 0) {
-          nextStartupChannelIds.add(plugin.id);
-          continue;
+        const channelsToStopBeforeReplace = new Set<ChannelId>();
+        for (const channelId of beforeChannelIds) {
+          const targetIds = beforeChannelTargets.get(channelId) ?? new Set([channelId]);
+          if (
+            !nextStartupChannelIds.has(channelId) ||
+            pluginConfigTargetsChanged(targetIds, params.changedPaths)
+          ) {
+            channelsToStopBeforeReplace.add(channelId);
+          }
         }
-        for (const channelId of plugin.channels) {
-          nextStartupChannelIds.add(channelId);
+        await params.beforeReplace(channelsToStopBeforeReplace);
+        // If an in-process restart signalled abort during beforeReplace,
+        // stop before any plugin metadata/runtime side effects continue.
+        if (params.isAborted?.()) {
+          // clearPluginMetadataLifecycleCaches() above wiped the global snapshot; the
+          // old plugin runtime is still active on abort, so restore it (mirroring the
+          // catch path) instead of leaving getCurrentPluginMetadataSnapshot() undefined
+          // during the drain/restart window.
+          restoreCurrentPluginMetadataSnapshotState(previousPluginMetadataState);
+          return {
+            restartChannels: new Set(),
+            activeChannels: new Set(beforeChannelIds),
+            cancelled: true,
+          };
         }
-      }
-      const channelsToStopBeforeReplace = new Set<ChannelId>();
-      for (const channelId of beforeChannelIds) {
-        const targetIds = beforeChannelTargets.get(channelId) ?? new Set([channelId]);
-        if (
-          !nextStartupChannelIds.has(channelId) ||
-          pluginConfigTargetsChanged(targetIds, params.changedPaths)
-        ) {
-          channelsToStopBeforeReplace.add(channelId);
-        }
-      }
-      await params.beforeReplace(channelsToStopBeforeReplace);
-      // If an in-process restart signalled abort during beforeReplace,
-      // stop before any plugin metadata/runtime side effects continue.
-      if (params.isAborted?.()) {
-        return {
-          restartChannels: new Set(),
-          activeChannels: new Set(beforeChannelIds),
-          cancelled: true,
-        };
+        nextPluginRuntimeConfig = applyPluginAutoEnable({
+          config: params.nextConfig,
+          env: process.env,
+          manifestRegistry: nextPluginLookUpTable.manifestRegistry,
+          discovery: nextPluginLookUpTable.discovery,
+        }).config;
+        loaded = prepareGatewayPluginLoad({
+          cfg: params.nextConfig,
+          workspaceDir: defaultWorkspaceDir,
+          log,
+          coreGatewayMethodNames,
+          hostServices: pluginHostServices,
+          baseMethods,
+          pluginLookUpTable: nextPluginLookUpTable,
+        });
+      } catch (err) {
+        restoreCurrentPluginMetadataSnapshotState(previousPluginMetadataState);
+        throw err;
       }
       setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
         config: params.nextConfig,
+        compatibleConfigs: [nextPluginRuntimeConfig],
         env: process.env,
         workspaceDir: defaultWorkspaceDir,
-      });
-      const loaded = prepareGatewayPluginLoad({
-        cfg: params.nextConfig,
-        workspaceDir: defaultWorkspaceDir,
-        log,
-        coreGatewayMethodNames,
-        hostServices: pluginHostServices,
-        baseMethods,
-        pluginLookUpTable: nextPluginLookUpTable,
       });
       const previousPluginServices = runtimeState.pluginServices;
       runtimeState.pluginServices = null;
@@ -1487,7 +1534,8 @@ export async function startGatewayServer(
           chatDeltaLastBroadcastText: chatRunState.deltaLastBroadcastText,
           agentDeltaSentAt: chatRunState.agentDeltaSentAt,
           bufferedAgentEvents: chatRunState.bufferedAgentEvents,
-          clearChatRunState: chatRunState.clearRun,
+          chatFinalAudio,
+          clearChatRunState,
           addChatRun,
           removeChatRun,
           subscribeSessionEvents: sessionEventSubscribers.subscribe,
@@ -1646,7 +1694,6 @@ export async function startGatewayServer(
             broadcast,
             tailscaleMode,
             resetOnExit: tailscaleConfig.resetOnExit ?? false,
-            serviceName: tailscaleConfig.serviceName,
             preserveFunnel: tailscaleConfig.preserveFunnel ?? false,
             controlUiBasePath,
             logTailscale,
@@ -1848,7 +1895,7 @@ export async function startGatewayServer(
   const close = createCloseHandler();
 
   return {
-    close: async (optsLocal) => {
+    close: async (closeOptions) => {
       try {
         markClosePreludeStarted();
         // Kill any live operator shells before the socket layer tears down.
@@ -1858,12 +1905,12 @@ export async function startGatewayServer(
         // Run gateway_stop plugin hook before shutdown
         const { runGlobalGatewayStopSafely } = await import("../plugins/hook-runner-global.js");
         await runGlobalGatewayStopSafely({
-          event: { reason: optsLocal?.reason ?? "gateway stopping" },
+          event: { reason: closeOptions?.reason ?? "gateway stopping" },
           ctx: { port },
           onError: (err) => log.warn(`gateway_stop hook failed: ${String(err)}`),
         });
         await runClosePrelude();
-        await close(optsLocal);
+        await close(closeOptions);
       } finally {
         clearFallbackGatewayContextForServer();
       }

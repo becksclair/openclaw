@@ -39,6 +39,7 @@ type JsonLike =
 type LobsterToolOptions = {
   runner?: LobsterRunner;
   taskFlow?: BoundTaskFlow;
+  cwdBase?: string;
 };
 
 type ManagedFlowRunParams = {
@@ -248,7 +249,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       cwd: Type.Optional(
         Type.String({
           description:
-            "Relative working directory (optional). Must stay within the gateway working directory.",
+            "Working directory (optional). Relative paths resolve inside the active workspace; absolute paths must stay within that workspace.",
         }),
       ),
       timeoutMs: optionalPositiveIntegerSchema(),
@@ -270,7 +271,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
         throw new Error(`Unknown action: ${action}`);
       }
 
-      const cwd = resolveLobsterCwd(params.cwd);
+      const cwd = resolveLobsterCwd(params.cwd, { baseCwd: options?.cwdBase });
       const timeoutMs = readPositiveIntegerParam(params, "timeoutMs") ?? 20_000;
       const maxStdoutBytes = readPositiveIntegerParam(params, "maxStdoutBytes") ?? 512_000;
 

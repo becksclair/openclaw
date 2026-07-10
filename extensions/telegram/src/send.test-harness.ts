@@ -54,6 +54,10 @@ const { probeVideoDimensions } = vi.hoisted(() => ({
   probeVideoDimensions: vi.fn(),
 }));
 
+const { transcodeAudioBufferToOpus } = vi.hoisted(() => ({
+  transcodeAudioBufferToOpus: vi.fn(async () => Buffer.from("opus")),
+}));
+
 const { loadConfig, resolveStorePath } = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
   resolveStorePath: vi.fn(
@@ -105,11 +109,20 @@ type TelegramSendTestMocks = {
   maybePersistResolvedTelegramTarget: MockFn;
   imageMetadata: { width: number | undefined; height: number | undefined };
   probeVideoDimensions: MockFn;
+  transcodeAudioBufferToOpus: MockFn;
 };
 
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+  return {
+    ...actual,
+    transcodeAudioBufferToOpus,
+  };
+});
 
 vi.mock("grammy", () => ({
   API_CONSTANTS: {
@@ -182,6 +195,7 @@ vi.mock("./send.runtime.js", () => ({
   requireRuntimeConfig: vi.fn((cfg: unknown) => cfg ?? loadConfig()),
   resolveMarkdownTableMode,
   resolveStorePath,
+  transcodeAudioBufferToOpus,
 }));
 
 vi.mock("./target-writeback.js", () => ({
@@ -200,6 +214,7 @@ export function getTelegramSendTestMocks(): TelegramSendTestMocks {
     maybePersistResolvedTelegramTarget,
     imageMetadata,
     probeVideoDimensions,
+    transcodeAudioBufferToOpus,
   };
 }
 
@@ -208,6 +223,8 @@ export function installTelegramSendTestHooks() {
     loadConfig.mockReturnValue({});
     resolveStorePath.mockReturnValue("/tmp/openclaw-telegram-send-tests.json");
     loadWebMedia.mockReset();
+    transcodeAudioBufferToOpus.mockReset();
+    transcodeAudioBufferToOpus.mockResolvedValue(Buffer.from("opus"));
     probeVideoDimensions.mockReset();
     probeVideoDimensions.mockResolvedValue(undefined);
     imageMetadata.width = 1200;

@@ -26,6 +26,7 @@ import {
   errorShape,
   formatValidationErrors,
   validateChatAbortParams,
+  validateChatFinalAudioGetParams,
   validateChatHistoryParams,
   validateChatInjectParams,
   validateChatMetadataParams,
@@ -156,6 +157,10 @@ import {
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
+import {
+  resolveChatFinalAudioGetPayload,
+  resolveTrustedFinalAudioCandidate,
+} from "../chat-final-audio.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import {
   abortQueuedChatTurnById,
@@ -211,6 +216,7 @@ import {
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "../session-utils.js";
+import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -516,8 +522,47 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return false;
 }
 
+function registerChatFinalAudioFromPayloads(params: {
+  context: GatewayRequestContext;
+  runId: string;
+  sessionKey: string;
+  agentId?: string;
+  mediaAgentId?: string;
+  payloads: readonly ReplyPayload[];
+}) {
+  const candidate = resolveTrustedFinalAudioCandidate(params.payloads);
+  if (!candidate) {
+    return;
+  }
+  params.context.chatFinalAudio.set({
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    mediaAgentId: params.mediaAgentId,
+    mediaPath: candidate.mediaPath,
+    spokenText: candidate.spokenText,
+  });
+}
+
 function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyPayload {
   return isReplyPayloadTtsSupplement(payload) ? buildTtsSupplementMediaPayload(payload) : payload;
+}
+
+function normalizePromotedToolSpokenText(text: string | undefined): string | undefined {
+  const trimmed = text?.trim();
+  return trimmed ? trimmed.replace(/^\(spoken\)\s*/i, "") : undefined;
+}
+
+function promoteToolMediaPayloadToFinal(payload: ReplyPayload): ReplyPayload {
+  const spokenText =
+    payload.spokenText ??
+    getReplyPayloadTtsSupplement(payload)?.spokenText ??
+    (payload.audioAsVoice === true ? normalizePromotedToolSpokenText(payload.text) : undefined);
+  return {
+    ...payload,
+    text: undefined,
+    ...(spokenText ? { spokenText } : {}),
+  };
 }
 
 function resolveTtsSupplementMarkerText(text: string): string {
@@ -3333,6 +3378,25 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
   },
   "chat.metadata": handleChatMetadataRequest,
+  "chat.finalAudio.get": async ({ params, respond, context }) => {
+    if (!validateChatFinalAudioGetParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid chat.finalAudio.get params: ${formatValidationErrors(validateChatFinalAudioGetParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const result = await resolveChatFinalAudioGetPayload({ context, params });
+    if (!result.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error));
+      return;
+    }
+    respond(true, result.payload);
+  },
   "chat.message.get": async ({ params, respond, context }) => {
     if (!validateChatMessageGetParams(params)) {
       respond(
@@ -3347,6 +3411,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const { sessionKey, messageId, maxChars } = params as {
       sessionKey: string;
+      spawnedBy?: string;
       agentId?: string;
       messageId: string;
       maxChars?: number;
@@ -3715,6 +3780,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       agentId?: string;
       sessionId?: string;
+      spawnedBy?: string;
       message: string;
       thinking?: string;
       fastMode?: FastMode;
@@ -3799,6 +3865,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const rawSessionKey = p.sessionKey;
     const agentIdOverride = normalizeOptionalText(p.agentId);
+    const requestedSpawnedBy = normalizeOptionalText(p.spawnedBy);
     const clientRunId = p.idempotencyKey;
     const pendingChatSendKey = pendingChatSendDedupeKey(clientRunId);
     const requestedAgentId = resolveRequestedChatAgentId({
@@ -3844,6 +3911,35 @@ export const chatHandlers: GatewayRequestHandlers = {
     if (!selectedAgent.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
       return;
+    }
+    let spawnedBy: string | undefined;
+    if (requestedSpawnedBy) {
+      const resolvedSpawnLineage = await resolveSessionKeyFromResolveParams({
+        cfg,
+        p: {
+          key: rawSessionKey,
+          ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+          spawnedBy: requestedSpawnedBy,
+          includeGlobal: true,
+          includeUnknown: true,
+        },
+      });
+      if (
+        !resolvedSpawnLineage.ok ||
+        "missing" in resolvedSpawnLineage ||
+        resolvedSpawnLineage.key !== sessionKey
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "chat.send spawnedBy does not match session lineage",
+          ),
+        );
+        return;
+      }
+      spawnedBy = requestedSpawnedBy;
     }
     const requestedSessionId = normalizeOptionalText(p.sessionId);
     const backingSessionId = entry?.sessionId ?? requestedSessionId;
@@ -4381,6 +4477,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         clientRunId,
         ...(chatSendTiming ? { chatSendTiming } : {}),
       });
+      if (p.thinking) {
+        context.logGateway.info(
+          `chat.send thinking override sessionKey=${JSON.stringify(sessionKey)} runId=${clientRunId} agentId=${agentId} provider=${resolvedSessionModel.provider} model=${resolvedSessionModel.model} thinking=${p.thinking} fastMode=${String(p.fastMode ?? false)}`,
+        );
+      }
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,
@@ -4517,6 +4618,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         AccountId: accountId,
         MessageThreadId: messageThreadId,
         ChatType: "direct",
+        ...(spawnedBy ? { SpawnedBy: spawnedBy } : {}),
         ...(commandSource ? { CommandSource: commandSource } : {}),
         CommandAuthorized: !suppressCommandInterpretation,
         CommandTurn: commandSource
@@ -4734,6 +4836,16 @@ export const chatHandlers: GatewayRequestHandlers = {
             case "block":
             case "final":
               deliveredReplies.push({ payload, kind: info.kind });
+              if (info.kind === "final") {
+                registerChatFinalAudioFromPayloads({
+                  context,
+                  runId: clientRunId,
+                  sessionKey,
+                  agentId: selectedAgent.agentId,
+                  mediaAgentId: agentId,
+                  payloads: [payload],
+                });
+              }
               await appendWebchatAgentMediaTranscriptIfNeeded(payload);
               break;
             case "tool":
@@ -4741,9 +4853,15 @@ export const chatHandlers: GatewayRequestHandlers = {
               // to "final" so the downstream audio extraction path can pick them up.
               // Strip text to avoid leaking tool summary into the combined reply.
               if (isMediaBearingPayload(payload)) {
-                deliveredReplies.push({
-                  payload: { ...payload, text: undefined },
-                  kind: "final",
+                const finalPayload = promoteToolMediaPayloadToFinal(payload);
+                deliveredReplies.push({ payload: finalPayload, kind: "final" });
+                registerChatFinalAudioFromPayloads({
+                  context,
+                  runId: clientRunId,
+                  sessionKey,
+                  agentId: selectedAgent.agentId,
+                  mediaAgentId: agentId,
+                  payloads: [finalPayload],
                 });
               }
               break;
@@ -4884,6 +5002,16 @@ export const chatHandlers: GatewayRequestHandlers = {
                         }
                       }
                     }
+                  },
+                  onFinalReplyPayload: (payload) => {
+                    registerChatFinalAudioFromPayloads({
+                      context,
+                      runId: clientRunId,
+                      sessionKey,
+                      agentId: selectedAgent.agentId,
+                      mediaAgentId: agentId,
+                      payloads: [payload],
+                    });
                   },
                   onModelSelected: (modelSelection) => {
                     updateChatRunProvider(context.chatAbortControllers, {

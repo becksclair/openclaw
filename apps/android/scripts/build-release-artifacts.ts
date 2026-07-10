@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { resolveAndroidVersion, syncAndroidVersioning } from "../../../scripts/lib/android-version.ts";
 
 type ReleaseArtifact = {
-  flavorName: "play" | "third-party";
+  flavorName: "play" | "third-party" | "wear";
   kind: "aab" | "apk";
   gradleTask: string;
   sourcePath: string;
@@ -75,7 +75,7 @@ function parseArgs(argv: string[]): CliOptions {
           [
             "Usage: bun apps/android/scripts/build-release-artifacts.ts [--artifact all|play|third-party] [--dry-run] [--verify-apk PATH]",
             "",
-            "Builds the signed Play AAB and third-party APK from apps/android/version.json.",
+            "Builds the signed Play AAB, third-party APK, and Wear OS AAB from apps/android/version.json.",
           ].join("\n"),
         );
         process.exit(0);
@@ -135,6 +135,22 @@ function releaseArtifacts(versionName: string): ReleaseArtifact[] {
         `openclaw-${versionName}-thirdParty-release.apk`,
       ),
     },
+    {
+      // Wear OS companion ships as its own AAB (no store flavor). The unflavored
+      // bundle output is named after the module, so the source is wear-release.aab.
+      flavorName: "wear",
+      kind: "aab",
+      gradleTask: ":wear:bundleRelease",
+      sourcePath: join(
+        androidDir,
+        "wear",
+        "build",
+        "outputs",
+        "bundle",
+        "release",
+        "wear-release.aab",
+      ),
+    },
   ];
 }
 
@@ -163,12 +179,12 @@ function resolveApkSignerFromSdk(sdkRoot: string | undefined): string | null {
     return null;
   }
 
-  const candidates = readdirSync(buildToolsDir)
-    .toSorted((left, right) => right.localeCompare(left))
-    .map((version) => join(buildToolsDir, version, "apksigner"))
-    .filter((candidate) => existsSync(candidate));
-
-  return candidates[0] ?? null;
+  return (
+    readdirSync(buildToolsDir)
+      .toSorted((left, right) => right.localeCompare(left))
+      .map((version) => join(buildToolsDir, version, "apksigner"))
+      .find((candidate) => existsSync(candidate)) ?? null
+  );
 }
 
 function resolveApkSigner(): string {

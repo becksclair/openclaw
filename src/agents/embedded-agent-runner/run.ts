@@ -22,7 +22,10 @@ import {
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import { resolveCompactionSuccessorTranscript } from "../../context-engine/types.js";
+import {
+  type ContextEngine,
+  resolveCompactionSuccessorTranscript,
+} from "../../context-engine/types.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -274,6 +277,25 @@ const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentParams & { sessionFile: string };
+
+function resolveContextEngineConfigForRun(
+  params: RunEmbeddedAgentParams,
+): RunEmbeddedAgentParams["config"] {
+  if (params.disableContextEngine !== true) {
+    return params.config;
+  }
+  const config = params.config ?? {};
+  const plugins = config.plugins ?? {};
+  const slots = { ...plugins.slots };
+  delete slots.contextEngine;
+  return {
+    ...config,
+    plugins: {
+      ...plugins,
+      slots,
+    },
+  };
+}
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -1012,7 +1034,14 @@ async function runEmbeddedAgentInternal(
         modelFallbacksOverride: params.modelFallbacksOverride,
       });
       const resolvedSessionKey = normalizedSessionKey;
-      const hookRunner = getGlobalHookRunner();
+      const hookRunner = params.suppressPluginHooks === true ? null : getGlobalHookRunner();
+      if (params.suppressPluginHooks === true) {
+        log.info("embedded helper run suppressed plugin hooks", {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          trigger: params.trigger,
+        });
+      }
       const hookCtx = {
         runId: params.runId,
         jobId: params.jobId,
@@ -1023,6 +1052,9 @@ async function runEmbeddedAgentInternal(
         modelProviderId: provider,
         modelId,
         trigger: params.trigger,
+        fastMode: params.fastMode,
+        fastModeStartedAtMs: fastModeStarted,
+        fastModeAutoOnSeconds,
         ...buildAgentHookContextChannelFields(params),
       };
       if (params.trigger === "cron" && hookRunner?.hasHooks("before_agent_reply")) {
@@ -1433,11 +1465,15 @@ async function runEmbeddedAgentInternal(
         );
         return fallbackAttempt?.reason ?? lastRetryFailoverReason ?? null;
       };
+      let contextEngine: ContextEngine | undefined;
       const buildEmbeddedContextEngineRuntimeSettings = (settingsParams: {
         tokenBudget?: number | null;
         maxOutputTokens?: number | null;
         degradedReason?: string | null;
       }) => {
+        if (!contextEngine) {
+          throw new Error("Context engine is disabled for this embedded helper run.");
+        }
         const fallbackReason = resolveRuntimeFallbackReason();
         return buildContextEngineRuntimeSettings({
           contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
@@ -1882,14 +1918,24 @@ async function runEmbeddedAgentInternal(
         });
         return true;
       };
-      // Resolve the context engine once and reuse across retries to avoid
-      // repeated initialization/connection overhead per attempt.
-      ensureContextEnginesInitialized();
-      const contextEngine = await resolveContextEngine(params.config, {
-        agentDir,
-        workspaceDir: resolvedWorkspace,
-      });
-      const resolveContextEnginePluginId = () => resolveContextEngineOwnerPluginId(contextEngine);
+      if (params.disableContextEngine === true) {
+        log.info("embedded helper run disabled context engine", {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          trigger: params.trigger,
+        });
+      } else {
+        // Resolve the context engine once and reuse across retries to avoid
+        // repeated initialization/connection overhead per attempt.
+        ensureContextEnginesInitialized();
+        const contextEngineConfig = resolveContextEngineConfigForRun(params);
+        contextEngine = await resolveContextEngine(contextEngineConfig, {
+          agentDir,
+          workspaceDir: resolvedWorkspace,
+        });
+      }
+      const resolveContextEnginePluginId = () =>
+        contextEngine ? resolveContextEngineOwnerPluginId(contextEngine) : undefined;
       startupStages.mark("context-engine");
       notifyExecutionPhase("context_engine", { provider, model: modelId });
       try {
@@ -1898,7 +1944,7 @@ async function runEmbeddedAgentInternal(
           sessionId: activeSessionId,
         });
         const adoptCompactionTranscript = (
-          compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
+          compactResult: Awaited<ReturnType<ContextEngine["compact"]>>,
         ): string | undefined => {
           const previousSessionId = activeSessionId;
           const successor = resolveCompactionSuccessorTranscript(compactResult);
@@ -1933,6 +1979,7 @@ async function runEmbeddedAgentInternal(
         // subscribers like memory extensions and usage trackers.
         const runOwnsCompactionBeforeHook = async (reason: string) => {
           if (
+            !contextEngine ||
             contextEngine.info.ownsCompaction !== true ||
             !hookRunner?.hasHooks("before_compaction")
           ) {
@@ -1949,10 +1996,11 @@ async function runEmbeddedAgentInternal(
         };
         const runOwnsCompactionAfterHook = async (
           reason: string,
-          compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
+          compactResult: Awaited<ReturnType<ContextEngine["compact"]>>,
           previousSessionId?: string,
         ) => {
           if (
+            !contextEngine ||
             contextEngine.info.ownsCompaction !== true ||
             !compactResult.ok ||
             !compactResult.compacted ||
@@ -2257,6 +2305,7 @@ async function runEmbeddedAgentInternal(
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
             toolProgressDetail: params.toolProgressDetail,
+            toolResultCommandText: params.toolResultCommandText,
             execOverrides: params.execOverrides,
             bashElevated: params.bashElevated,
             timeoutMs: params.timeoutMs,
@@ -2304,6 +2353,7 @@ async function runEmbeddedAgentInternal(
             streamParams: params.streamParams,
             modelRun: params.modelRun,
             promptMode: params.promptMode,
+            promptProfile: params.promptProfile,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
             silentExpected: params.silentExpected,
@@ -2315,6 +2365,11 @@ async function runEmbeddedAgentInternal(
             crestodianTool: params.crestodianTool,
             cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
             disableMessageTool: params.disableMessageTool,
+            disableTts: params.disableTts,
+            disableSkills: params.disableSkills,
+            disableMcpServers: params.disableMcpServers,
+            disableCodexPlugins: params.disableCodexPlugins,
+            suppressPluginHooks: params.suppressPluginHooks,
             forceMessageTool: params.forceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,
             forceHeartbeatTool: params.forceHeartbeatTool,
@@ -2552,6 +2607,7 @@ async function runEmbeddedAgentInternal(
             throw new LiveSessionModelSwitchError(requestedSelection);
           }
           if (
+            contextEngine &&
             timedOut &&
             !timedOutDuringCompaction &&
             !timedOutDuringToolExecution &&
@@ -2578,7 +2634,7 @@ async function runEmbeddedAgentInternal(
                 `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
                   `attempting compaction before retry (attempt ${timeoutCompactionAttempts}/${MAX_TIMEOUT_COMPACTION_ATTEMPTS}) diagId=${timeoutDiagId}`,
               );
-              let timeoutCompactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
+              let timeoutCompactResult: Awaited<ReturnType<ContextEngine["compact"]>>;
               await runOwnsCompactionBeforeHook("timeout recovery");
               try {
                 const timeoutCompactionRuntimeContext = {
@@ -2772,6 +2828,7 @@ async function runEmbeddedAgentInternal(
             // already auto-compact.
             if (
               !isCompactionFailure &&
+              contextEngine &&
               !hadAttemptLevelCompaction &&
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
             ) {
@@ -2786,7 +2843,7 @@ async function runEmbeddedAgentInternal(
               log.warn(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
-              let compactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
+              let compactResult: Awaited<ReturnType<ContextEngine["compact"]>>;
               let previousSessionId: string | undefined;
               await runOwnsCompactionBeforeHook("overflow recovery");
               try {
@@ -3730,6 +3787,7 @@ async function runEmbeddedAgentInternal(
             toolMediaUrls: attempt.toolMediaUrls,
             toolAudioAsVoice: attempt.toolAudioAsVoice,
             toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
+            toolSpokenText: attempt.toolSpokenText,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           });
           const timedOutDuringPrompt =
@@ -4310,7 +4368,7 @@ async function runEmbeddedAgentInternal(
           step: "context-engine-dispose",
           log,
           cleanup: async () => {
-            await contextEngine.dispose?.();
+            await contextEngine?.dispose?.();
           },
         });
         if (params.cleanupBundleMcpOnRunEnd === true) {

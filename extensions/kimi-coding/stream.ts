@@ -443,7 +443,7 @@ function stripAnthropicCacheControlMarkers(payloadObj: Record<string, unknown>):
 export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
   const thinkingConfig = resolveKimiThinkingConfig({
     configuredThinking: ctx.extraParams?.thinking,
-    thinkingLevel: ctx.thinkingLevel,
+    thinkingLevel: ctx.thinkingLevel === "ultra" ? "max" : ctx.thinkingLevel,
   });
   return createKimiToolCallMarkupWrapper(createKimiThinkingWrapper(ctx.streamFn, thinkingConfig));
 }

@@ -135,6 +135,27 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, lowercase variants). Prefer host-level proxy config over per-channel settings.
 - With `messages.removeAckAfterReply` enabled, OpenClaw clears the ack reaction once a visible reply is delivered.
 
+## Raw message archive (optional)
+
+WhatsApp can copy eligible raw `messages.upsert` events into a wa-fetch-compatible SQLite database. The archive is disabled by default and includes inbound messages before access-control filtering plus outbound `fromMe` echoes, so treat it as sensitive message history.
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      archive: {
+        enabled: true,
+        dbPath: "/home/openclaw/.openclaw/whatsapp/messages.db",
+      },
+    },
+  },
+}
+```
+
+Set an account-specific override under `channels.whatsapp.accounts.<id>.archive`. Changing either the channel-level or account-level archive config restarts the WhatsApp listener so the new database path takes effect.
+
+OpenClaw creates a new archive directory with owner-only `0700` permissions and keeps the SQLite database, WAL, and shared-memory files at `0600` on Unix. Archival is best-effort and never delays WhatsApp dispatch: eligible events enter a bounded 2,000-message FIFO queue, persistence runs after the socket callback, and new overflow messages or a batch that cannot acquire the SQLite writer are dropped with a warning. Reconnect replay can fill gaps when WhatsApp redelivers the same message ids; `INSERT OR IGNORE` keeps those replays idempotent.
+
 ## Call the current requester with MeowCaller (experimental)
 
 The plugin can expose `whatsapp_call` in WhatsApp-originated agent turns. It uses [MeowCaller](https://github.com/purpshell/meowcaller) to place a WhatsApp voice call to the current authorized requester and play an OpenClaw TTS message after they answer. The tool has no destination-number parameter, so a prompt cannot redirect the call. Disabled by default.

@@ -13,6 +13,7 @@ const DEFAULT_SAFE_BIN_TRUSTED_DIRS = ["/bin", "/usr/bin"];
 
 type TrustedSafeBinPathParams = {
   resolvedPath: string;
+  resolvedRealPath?: string;
   trustedDirs?: ReadonlySet<string>;
 };
 
@@ -190,7 +191,16 @@ export function getTrustedSafeBinDirs(
 export function isTrustedSafeBinPath(params: TrustedSafeBinPathParams): boolean {
   const trustedDirs = params.trustedDirs ?? getTrustedSafeBinDirs();
   const resolvedDir = normalizeTrustComparisonPath(path.dirname(path.resolve(params.resolvedPath)));
-  return trustedDirs.has(resolvedDir);
+  if (!trustedDirs.has(resolvedDir)) {
+    return false;
+  }
+  if (params.resolvedRealPath) {
+    const resolvedRealDir = normalizeTrustComparisonPath(
+      path.dirname(path.resolve(params.resolvedRealPath)),
+    );
+    return trustedDirs.has(resolvedRealDir);
+  }
+  return true;
 }
 
 export function listWritableExplicitTrustedSafeBinDirs(

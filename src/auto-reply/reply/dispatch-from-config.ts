@@ -105,6 +105,7 @@ import {
   shouldCleanTtsDirectiveText,
   shouldAttemptTtsPayload,
 } from "../../tts/tts-config.js";
+import { buildTtsPrepareHook } from "../../tts/tts-prepare-hook.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import {
@@ -123,8 +124,8 @@ import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
-  markReplyPayloadAsTtsSupplement,
   setReplyPayloadMetadata,
+  isReplyPayloadTtsSupplement,
   type ReplyPayload,
 } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -134,6 +135,7 @@ import {
   type CommandSessionMetadataChange,
 } from "./command-session-metadata.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
+import { detachTtsSupplement } from "./detached-tts-supplement.js";
 import {
   createInternalHookEvent,
   loadSessionStore,
@@ -166,6 +168,7 @@ import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
 import {
   forceClearReplyRunBySessionId,
   replyRunRegistry,
+  runAfterReplyOperationClear,
   type ReplyOperation,
   waitForReplyBarrierSettlement,
 } from "./reply-run-registry.js";
@@ -189,6 +192,7 @@ import {
 } from "./source-reply-delivery-mode.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
+import { markGeneratedTtsLocalMediaTrusted } from "./tts-trusted-media.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 type SourceReplyTranscriptMirror = NonNullable<
@@ -416,9 +420,14 @@ async function maybeApplyTtsToReplyPayload(
   }
   const { maybeApplyTtsToPayload } = await loadTtsRuntime();
   const ttsPayload = await maybeApplyTtsToPayload(params);
-  return ttsPayload === params.payload
-    ? ttsPayload
-    : copyReplyPayloadMetadata(params.payload, ttsPayload);
+  const payloadWithMetadata =
+    ttsPayload === params.payload
+      ? ttsPayload
+      : copyReplyPayloadMetadata(params.payload, ttsPayload);
+  return markGeneratedTtsLocalMediaTrusted({
+    input: params.payload,
+    output: payloadWithMetadata,
+  });
 }
 
 const resolveRoutedPolicyConversationType = (
@@ -2095,6 +2104,103 @@ export async function dispatchReplyFromConfig(
     });
   };
 
+  // Deliver a detached TTS voice supplement to the ORIGINATING chat via the
+  // process-scoped route-reply primitive. This runs AFTER the reply operation
+  // clears its lane, so it must not touch the per-turn dispatcher (torn down at
+  // turn end). `routeReply` wraps the same out-of-turn sender cron/gateway use
+  // and is safe post-clear; dispatch only *gates* it to cross-channel, so we
+  // load the runtime and target the current surface directly for the
+  // same-channel case (`routedReplyChannel`/`routedReplyDelivery`/
+  // `routedReplyAccountId` are undefined when not routing cross-channel).
+  const deliverTtsSupplementToOriginating = async (
+    payload: ReplyPayload,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    if (signal.aborted) {
+      return;
+    }
+    const originatingChannel = deliveryChannel;
+    if (!originatingChannel || !routeReplyTo) {
+      return;
+    }
+    const { routeReply } = await loadRouteReplyRuntime();
+    const agentRuntimeSessionKey =
+      ctx.CommandSource === "native"
+        ? (resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey)
+        : ctx.SessionKey;
+    const supplementAccountId = routedReplyAccountId ?? replyContextAccountId;
+    // routedReplyDelivery is only prepared for cross-channel routing; build the
+    // matching same-channel threading context so voice notes thread like text.
+    const supplementReplyDelivery =
+      routedReplyDelivery ??
+      createReplyDeliveryContext(
+        resolveReplyToMode(cfg, originatingChannel, supplementAccountId, replyRoute.chatType),
+        replyRoute.chatType,
+      );
+    await routeReply({
+      payload,
+      channel: originatingChannel,
+      to: routeReplyTo,
+      sessionKey: agentRuntimeSessionKey,
+      policySessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
+      policyConversationType: resolveRoutedPolicyConversationType(ctx),
+      accountId: supplementAccountId,
+      requesterSenderId: ctx.SenderId,
+      requesterSenderName: ctx.SenderName,
+      requesterSenderUsername: ctx.SenderUsername,
+      requesterSenderE164: ctx.SenderE164,
+      threadId: routeReplyThreadId,
+      replyDelivery: supplementReplyDelivery,
+      cfg,
+      abortSignal: signal,
+      // Text was already mirrored in-turn; the supplement carries no visible text.
+      mirror: false,
+      isGroup,
+      groupId,
+      replyKind: "final",
+      runId: params.replyOptions?.runId,
+    });
+  };
+
+  // Start a detached TTS supplement after the reply operation clears its lane so
+  // slow synthesis never keeps the session in `processing`. Falls back to firing
+  // immediately when no operation was admitted (the lane is already free).
+  const detachTtsSupplementAfterClear = (visibleText: string): void => {
+    const detach = () =>
+      detachTtsSupplement({
+        opAbortSignal:
+          dispatchReplyOperation?.abortSignal ??
+          params.replyOptions?.abortSignal ??
+          new AbortController().signal,
+        visibleText,
+        synthesize: () =>
+          maybeApplyTtsToReplyPayload({
+            payload: { text: visibleText },
+            cfg,
+            channel: deliveryChannel,
+            kind: "final",
+            inboundAudio,
+            ttsAuto: sessionTtsAuto,
+            agentId: sessionAgentId,
+            accountId: replyRoute.accountId,
+            prepareHook: buildTtsPrepareHook({
+              agentId: sessionAgentId,
+              channelId: deliveryChannel,
+              accountId: replyRoute.accountId,
+            }),
+          }),
+        normalize: normalizeReplyMediaPayload,
+        deliver: deliverTtsSupplementToOriginating,
+        onFinalReplyPayload: params.replyOptions?.onFinalReplyPayload,
+        log: logVerbose,
+      });
+    if (dispatchReplyOperation) {
+      runAfterReplyOperationClear(dispatchReplyOperation, detach);
+    } else {
+      detach();
+    }
+  };
+
   const isRoutedReplyDelivered = (result: { ok: boolean; suppressed?: boolean }) =>
     result.ok && result.suppressed !== true;
 
@@ -2795,7 +2901,9 @@ export async function dispatchReplyFromConfig(
         finalReplyDeliveryStarted = true;
       }
       const ttsPayload =
-        payload.isReasoning === true || payload.isCommentary === true
+        payload.isReasoning === true ||
+        payload.isCommentary === true ||
+        (sourceReplyTranscriptMirror && isReplyPayloadTtsSupplement(payload))
           ? payload
           : await maybeApplyTtsToReplyPayload({
               payload,
@@ -2806,9 +2914,16 @@ export async function dispatchReplyFromConfig(
               ttsAuto: sessionTtsAuto,
               agentId: sessionAgentId,
               accountId: replyRoute.accountId,
+              prepareHook: buildTtsPrepareHook({
+                agentId: sessionAgentId,
+                channelId: deliveryChannel,
+                accountId: replyRoute.accountId,
+              }),
             });
       throwIfFinalDeliveryAborted();
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
+      throwIfFinalDeliveryAborted();
+      await params.replyOptions?.onFinalReplyPayload?.(normalizedPayload);
       throwIfFinalDeliveryAborted();
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
@@ -3531,6 +3646,11 @@ export async function dispatchReplyFromConfig(
                         ttsAuto: sessionTtsAuto,
                         agentId: sessionAgentId,
                         accountId: replyRoute.accountId,
+                        prepareHook: buildTtsPrepareHook({
+                          agentId: sessionAgentId,
+                          channelId: deliveryChannel,
+                          accountId: replyRoute.accountId,
+                        }),
                       });
                       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
                       const deliveryPayload = isForcedToolProgress
@@ -3780,6 +3900,11 @@ export async function dispatchReplyFromConfig(
                               ttsAuto: sessionTtsAuto,
                               agentId: sessionAgentId,
                               accountId: replyRoute.accountId,
+                              prepareHook: buildTtsPrepareHook({
+                                agentId: sessionAgentId,
+                                channelId: deliveryChannel,
+                                accountId: replyRoute.accountId,
+                              }),
                             });
                       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
                       if (isDispatchOperationAborted()) {
@@ -3960,6 +4085,11 @@ export async function dispatchReplyFromConfig(
       throwIfDispatchOperationAborted();
     }
 
+    // A block-only turn (visible blocks delivered, final payload dropped by block
+    // streaming) is not a silent turn. Recorded below so detaching the audio
+    // supplement cannot flip no-visible-reply fallback eligibility, which the old
+    // inline TTS-final send used to suppress via counts.final (only feishu consumes it).
+    let blockOnlyVisibleFinalDelivered = false;
     if (!suppressDelivery) {
       const ttsMode = resolveConfiguredTtsMode(cfg, {
         agentId: sessionAgentId,
@@ -3975,57 +4105,20 @@ export async function dispatchReplyFromConfig(
         blockCount > 0 &&
         accumulatedBlockTtsText.trim()
       ) {
+        // Visible block text was delivered; this turn is not a silent reply. The
+        // old inline TTS-final send bumped counts.final, which incidentally
+        // suppressed the no-visible-reply fallback. Detaching the audio drops that
+        // count, so record the visible delivery here to preserve the suppression.
+        blockOnlyVisibleFinalDelivered = true;
         try {
+          // Preserve ordering against in-flight block replies in-turn, then hand
+          // synthesis + the audio-only voice-note send to a detached task that runs
+          // after the reply operation clears its lane. The blocks already carry the
+          // visible text, so the detached audio no longer contributes to
+          // queuedFinal/routedFinalCount.
           await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
           throwIfDispatchOperationAborted();
-          const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
-            payload: { text: accumulatedBlockTtsText },
-            cfg,
-            channel: deliveryChannel,
-            kind: "final",
-            inboundAudio: hasInboundAudioForTts(),
-            ttsAuto: sessionTtsAuto,
-            agentId: sessionAgentId,
-            accountId: replyRoute.accountId,
-          });
-          throwIfDispatchOperationAborted();
-          // Only send if TTS was actually applied (mediaUrl exists)
-          if (ttsSyntheticReply.mediaUrl) {
-            // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content.
-            // Keep the spoken text only for hooks/archive consumers.
-            const ttsOnlyPayload = markReplyPayloadAsTtsSupplement(
-              {
-                mediaUrl: ttsSyntheticReply.mediaUrl,
-                audioAsVoice: ttsSyntheticReply.audioAsVoice,
-                spokenText: accumulatedBlockTtsText,
-                trustedLocalMedia: true,
-              },
-              accumulatedBlockTtsText,
-              { visibleTextAlreadyDelivered: true },
-            );
-            const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
-            throwIfDispatchOperationAborted();
-            const result = await routeReplyToOriginating(normalizedTtsOnlyPayload, {
-              abortSignal: getDispatchAbortSignal(),
-              kind: "final",
-            });
-            if (result) {
-              queuedFinal = result.ok || queuedFinal;
-              if (isRoutedReplyDelivered(result)) {
-                routedFinalCount += 1;
-              }
-              if (!result.ok) {
-                logVerbose(
-                  `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,
-                );
-              }
-            } else {
-              throwIfDispatchOperationAborted();
-              markInboundDedupeReplayUnsafe();
-              const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
-              queuedFinal = didQueue || queuedFinal;
-            }
-          }
+          detachTtsSupplementAfterClear(accumulatedBlockTtsText);
         } catch (err) {
           if (isDispatchReplyOperationAbortedError(err)) {
             throw err;
@@ -4055,7 +4148,10 @@ export async function dispatchReplyFromConfig(
         ? { sessionMetadataChanges: sessionMetadataChangesForResult }
         : {}),
       ...(observedReplyDelivery ? { observedReplyDelivery } : {}),
-      ...(!queuedFinal && !observedReplyDelivery && !emptyFinalAllowedAsSilent
+      ...(!queuedFinal &&
+      !observedReplyDelivery &&
+      !emptyFinalAllowedAsSilent &&
+      !blockOnlyVisibleFinalDelivered
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),

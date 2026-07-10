@@ -1,3 +1,4 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
@@ -8,7 +9,7 @@ import type {
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { TtsAutoMode } from "../config/types.tts.js";
+import type { ResolvedTtsPersona, TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type {
   PluginHookBeforeAgentStartEvent,
@@ -98,6 +99,7 @@ export type PluginHookName =
   | "message_received"
   | "message_sending"
   | "reply_payload_sending"
+  | "tts_prepare"
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
@@ -146,6 +148,7 @@ export const PLUGIN_HOOK_NAMES = [
   "message_received",
   "message_sending",
   "reply_payload_sending",
+  "tts_prepare",
   "message_sent",
   "before_tool_call",
   "after_tool_call",
@@ -286,6 +289,12 @@ export type PluginHookAgentContext = {
   contextWindowSource?: PluginHookContextWindowSource;
   /** Native/configured reference window when a lower cap wins. */
   contextWindowReferenceTokens?: number;
+  /** Resolved per-run fast mode policy inherited by hidden/plugin subagent work. */
+  fastMode?: FastMode;
+  /** Stable outer-run start time for auto fast-mode cutoff inheritance. */
+  fastModeStartedAtMs?: number;
+  /** Effective auto fast-mode cutoff for this run, in seconds. */
+  fastModeAutoOnSeconds?: number;
   /**
    * @deprecated Core does not populate cross-app sender ids. Channel plugins
    * should expose channel-specific identities by augmenting `channelContext.sender`.
@@ -627,6 +636,43 @@ export type PluginHookReplyPayloadSendingResult = {
   payload?: PluginHookReplyPayload;
   cancel?: boolean;
   reason?: string;
+};
+
+/**
+ * tts_prepare — fires at the speech-synthesis seam, once per non-skipped
+ * provider fallback candidate, before the provider's own `prepareSynthesis`.
+ * Lets a plugin enrich the text about to be spoken (e.g. inline audio tags) or
+ * supply per-request provider overrides, with full knowledge of the resolved
+ * provider, model, and persona. Transform-only: there is no cancel path, and
+ * hook failures are fail-open (the original text is spoken).
+ */
+export type PluginHookTtsPrepareEvent = {
+  /** Text about to be synthesized for this attempt. */
+  text: string;
+  /** Resolved speech provider id for this attempt (e.g. `google`, `elevenlabs`). */
+  providerId: string;
+  /** Resolved provider model id for this attempt, when known (strategy-load-bearing). */
+  providerModelId?: string;
+  /** Active persona id, when a persona is bound. */
+  personaId?: string;
+  /** Full resolved persona object, when a persona is bound. */
+  persona?: ResolvedTtsPersona;
+  /** Zero-based fallback attempt index; increments per provider candidate tried. */
+  attempt: number;
+  /**
+   * Owning agent id for this synthesis call, when the host call site knows it.
+   * Surfaced so a plugin can resolve model/credentials against the bound agent
+   * (e.g. `runtime.llm.complete`). Absent on agent-less call sites like the
+   * gateway `tts.convert` RPC.
+   */
+  agentId?: string;
+};
+
+export type PluginHookTtsPrepareContext = PluginHookMessageContext;
+
+export type PluginHookTtsPrepareResult = {
+  text?: string;
+  providerOverrides?: Record<string, unknown>;
 };
 
 export type PluginHookToolKind = "code_mode_exec";
@@ -1186,6 +1232,10 @@ export type PluginHookHandlerMap = {
     | Promise<PluginHookReplyPayloadSendingResult | void>
     | PluginHookReplyPayloadSendingResult
     | void;
+  tts_prepare: (
+    event: PluginHookTtsPrepareEvent,
+    ctx: PluginHookTtsPrepareContext,
+  ) => Promise<PluginHookTtsPrepareResult | void> | PluginHookTtsPrepareResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

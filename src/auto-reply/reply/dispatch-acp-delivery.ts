@@ -13,6 +13,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
+import { buildTtsPrepareHook } from "../../tts/tts-prepare-hook.js";
 import { isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -25,6 +26,7 @@ import {
   resolveReplyToMode,
 } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
+import { markGeneratedTtsLocalMediaTrusted } from "./tts-trusted-media.js";
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
 const dispatchAcpTtsRuntimeLoader = createLazyImportLoader(
@@ -137,7 +139,7 @@ async function maybeApplyAcpTts(params: {
     return params.payload;
   }
   const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
-  return await maybeApplyTtsToPayload({
+  const payload = await maybeApplyTtsToPayload({
     payload: params.payload,
     cfg: params.cfg,
     channel: params.channel,
@@ -146,7 +148,13 @@ async function maybeApplyAcpTts(params: {
     ttsAuto: params.ttsAuto,
     agentId: params.agentId,
     accountId: params.accountId,
+    prepareHook: buildTtsPrepareHook({
+      agentId: params.agentId,
+      channelId: params.channel,
+      accountId: params.accountId,
+    }),
   });
+  return markGeneratedTtsLocalMediaTrusted({ input: params.payload, output: payload });
 }
 
 type AcpDispatchDeliveryState = {
@@ -398,6 +406,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return false;
     }
 
+    // TTS synthesis stays inline here (and in dispatch-acp.ts finalizeAcpTurnOutput):
+    // this coordinator has no ReplyOperation lane-clear hook to detach onto, and the
+    // deliver result feeds turn-local counters read synchronously at turn end. The
+    // main dispatch path (dispatch-from-config.ts) detaches final TTS; the ACP detach
+    // is a documented follow-up (attach-swift-adleman.md ACP-direct caveat).
     const ttsPayload = await maybeApplyAcpTts({
       payload: visiblePayload,
       cfg: params.cfg,

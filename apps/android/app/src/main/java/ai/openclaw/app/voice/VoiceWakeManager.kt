@@ -1,12 +1,12 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.common.speech.SpeechRecognizerHelper
+import ai.openclaw.common.speech.bestRecognitionText
 import android.content.Context
-import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -81,13 +81,7 @@ class VoiceWakeManager(
 
   private fun startListeningInternal() {
     val r = recognizer ?: return
-    val intent =
-      Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-        putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
-      }
+    val intent = SpeechRecognizerHelper.createRecognizerIntent(context.packageName)
 
     _statusText.value = "Listening"
     _isListening.value = true
@@ -144,35 +138,19 @@ class VoiceWakeManager(
       override fun onError(error: Int) {
         if (stopRequested) return
         _isListening.value = false
-        if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-          _statusText.value = "Microphone permission required"
-          return
-        }
-
-        _statusText.value =
-          when (error) {
-            SpeechRecognizer.ERROR_AUDIO -> "Audio error"
-            SpeechRecognizer.ERROR_CLIENT -> "Client error"
-            SpeechRecognizer.ERROR_NETWORK -> "Network error"
-            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
-            SpeechRecognizer.ERROR_NO_MATCH -> "Listening"
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy"
-            SpeechRecognizer.ERROR_SERVER -> "Server error"
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Listening"
-            else -> "Speech error ($error)"
-          }
+        _statusText.value = SpeechRecognizerHelper.errorMessage(error)
+        // Permission errors are not transient; retrying would loop forever.
+        if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) return
         scheduleRestart(delayMs = 600)
       }
 
       override fun onResults(results: Bundle?) {
-        val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-        list.firstOrNull()?.let(::handleTranscription)
+        results.bestRecognitionText().takeIf { it.isNotEmpty() }?.let(::handleTranscription)
         scheduleRestart()
       }
 
       override fun onPartialResults(partialResults: Bundle?) {
-        val list = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-        list.firstOrNull()?.let(::handleTranscription)
+        partialResults.bestRecognitionText().takeIf { it.isNotEmpty() }?.let(::handleTranscription)
       }
 
       override fun onEvent(

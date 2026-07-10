@@ -42,15 +42,17 @@ function resolveMergedNamedWhatsAppAccountConfig(params: {
 }): WhatsAppAccountConfig {
   const rootCfg = params.cfg.channels?.whatsapp;
   const accountConfig = resolveWhatsAppAccountConfigForTest(params.cfg, params.accountId);
-  return {
-    ...mergeAccountConfig<WhatsAppAccountConfig>({
-      channelConfig: rootCfg as WhatsAppAccountConfig | undefined,
-      accountConfig: undefined,
-      omitKeys: ["defaultAccount"],
-    }),
-    ...resolveWhatsAppDefaultAccountSharedConfig(params.cfg),
-    ...accountConfig,
-  };
+  const sharedConfig = mergeAccountConfig<WhatsAppAccountConfig>({
+    channelConfig: rootCfg as WhatsAppAccountConfig | undefined,
+    accountConfig: resolveWhatsAppDefaultAccountSharedConfig(params.cfg),
+    omitKeys: ["defaultAccount"],
+    nestedObjectKeys: ["archive"],
+  });
+  return mergeAccountConfig<WhatsAppAccountConfig>({
+    channelConfig: sharedConfig,
+    accountConfig,
+    nestedObjectKeys: ["archive"],
+  });
 }
 
 export function resolveMergedWhatsAppAccountConfig(params: {
@@ -64,6 +66,7 @@ export function resolveMergedWhatsAppAccountConfig(params: {
     accounts: rootCfg?.accounts as Record<string, Partial<WhatsAppAccountConfig>> | undefined,
     accountId,
     omitKeys: ["defaultAccount"],
+    nestedObjectKeys: ["archive"],
   });
   const merged =
     accountId === DEFAULT_ACCOUNT_ID

@@ -492,7 +492,13 @@ const ToolsWebSchema = z
   .optional();
 
 const ToolProfileSchema = z
-  .union([z.literal("minimal"), z.literal("coding"), z.literal("messaging"), z.literal("full")])
+  .union([
+    z.literal("minimal"),
+    z.literal("coding"),
+    z.literal("messaging"),
+    z.literal("full"),
+    z.literal("voice"),
+  ])
   .optional();
 
 type AllowlistPolicy = {
@@ -513,7 +519,7 @@ function addAllowAlsoAllowConflictIssue(
   }
 }
 
-const ToolPolicyWithProfileSchema = z
+export const ToolPolicyWithProfileSchema = z
   .object({
     allow: z.array(z.string()).optional(),
     alsoAllow: z.array(z.string()).optional(),
@@ -525,7 +531,7 @@ const ToolPolicyWithProfileSchema = z
     addAllowAlsoAllowConflictIssue(
       value,
       ctx,
-      "tools.byProvider policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
+      "tools policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
     );
   });
 
@@ -994,6 +1000,7 @@ const AgentRuntimeAcpSchema = z
     backend: z.string().optional(),
     mode: z.enum(["persistent", "oneshot"]).optional(),
     cwd: z.string().optional(),
+    target: z.string().optional(),
   })
   .strict()
   .optional();

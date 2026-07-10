@@ -89,6 +89,10 @@
         "mimeType": {
           "type": "string"
         },
+        "progress": {
+          "description": "Mark this send as a mid-turn progress update. It does not count as the final source reply, so the turn continues; send the final answer without it.",
+          "type": "boolean"
+        },
         "quoteText": {
           "description": "Telegram reply quote text.",
           "type": "string"

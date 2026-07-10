@@ -257,7 +257,7 @@ Notes:
 {
   "action": "run",
   "pipeline": "gog.gmail.search --query 'newer_than:1d' | email.triage",
-  "cwd": "workspace",
+  "cwd": ".",
   "timeoutMs": 30000,
   "maxStdoutBytes": 512000
 }
@@ -268,18 +268,18 @@ Run a workflow file with args:
 ```json
 {
   "action": "run",
-  "pipeline": "/path/to/inbox-triage.lobster",
+  "pipeline": "workflows/inbox-triage.lobster",
   "argsJson": "{\"tag\":\"family\"}"
 }
 ```
 
-| Field            | Default     | Notes                                                                                                        |
-| ---------------- | ----------- | ------------------------------------------------------------------------------------------------------------ |
-| `pipeline`       | required    | Inline pipeline string, or a path ending in `.lobster`/`.yaml`/`.yml`/`.json` for a workflow file.           |
-| `cwd`            | gateway cwd | Relative working directory; must resolve inside the gateway working directory (absolute paths are rejected). |
-| `timeoutMs`      | `20000`     | Aborts the run if exceeded.                                                                                  |
-| `maxStdoutBytes` | `512000`    | Aborts the run if captured stdout or stderr exceeds this size.                                               |
-| `argsJson`       | -           | JSON string of args for a workflow file (ignored for inline pipelines).                                      |
+| Field            | Default          | Notes                                                                                                                                                         |
+| ---------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pipeline`       | required         | Inline pipeline string, or a path ending in `.lobster`/`.yaml`/`.yml`/`.json` for a workflow file.                                                            |
+| `cwd`            | active workspace | Working directory inside the active workspace. Relative paths resolve from the workspace; contained absolute paths are allowed. Symlink escapes are rejected. |
+| `timeoutMs`      | `20000`          | Aborts the run if exceeded.                                                                                                                                   |
+| `maxStdoutBytes` | `512000`         | Aborts the run if captured stdout or stderr exceeds this size.                                                                                                |
+| `argsJson`       | -                | JSON string of args for a workflow file (ignored for inline pipelines).                                                                                       |
 
 ### `resume`
 

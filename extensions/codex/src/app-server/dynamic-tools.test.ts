@@ -39,13 +39,18 @@ function createTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
   } as unknown as AnyAgentTool;
 }
 
-function mediaResult(mediaUrl: string, audioAsVoice?: boolean): AgentToolResult<unknown> {
+function mediaResult(
+  mediaUrl: string,
+  audioAsVoice?: boolean,
+  trustedLocalMedia?: boolean,
+): AgentToolResult<unknown> {
   return {
     content: [{ type: "text", text: "Generated media reply." }],
     details: {
       media: {
         mediaUrl,
         ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
+        ...(trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
       },
     },
   };
@@ -893,6 +898,7 @@ describe("createCodexDynamicToolBridge", () => {
       expect(result).toEqual(expectInputText("Generated media reply."));
       expect(bridge.telemetry.toolMediaUrls).toEqual([mediaUrl]);
       expect(bridge.telemetry.toolAudioAsVoice).toBe(audioAsVoice === true);
+      expect(bridge.telemetry.toolTrustedLocalMedia).toBe(false);
     },
   );
 
@@ -903,6 +909,8 @@ describe("createCodexDynamicToolBridge", () => {
         media: {
           mediaUrl: "/tmp/reply.opus",
           audioAsVoice: true,
+          trustedLocalMedia: true,
+          spokenText: "hello",
         },
       },
     } satisfies AgentToolResult<unknown>;
@@ -929,6 +937,42 @@ describe("createCodexDynamicToolBridge", () => {
     });
     expect(bridge.telemetry.toolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(bridge.telemetry.toolAudioAsVoice).toBe(true);
+    expect(bridge.telemetry.toolTrustedLocalMedia).toBe(true);
+    expect(bridge.telemetry.toolSpokenText).toBe("hello");
+  });
+
+  it("preserves trusted local tts spoken text without audio-as-voice", async () => {
+    const toolResult = {
+      content: [{ type: "text", text: "(spoken) hello" }],
+      details: {
+        media: {
+          mediaUrl: "/tmp/reply.wav",
+          trustedLocalMedia: true,
+          spokenText: "hello",
+        },
+      },
+    } satisfies AgentToolResult<unknown>;
+    const tool = createTool({
+      execute: vi.fn(async () => toolResult),
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "tts",
+      arguments: { text: "hello" },
+    });
+
+    expect(bridge.telemetry.toolMediaUrls).toEqual(["/tmp/reply.wav"]);
+    expect(bridge.telemetry.toolAudioAsVoice).toBe(false);
+    expect(bridge.telemetry.toolTrustedLocalMedia).toBe(true);
+    expect(bridge.telemetry.toolSpokenText).toBe("hello");
   });
 
   it("records messaging tool side effects while returning concise text to app-server", async () => {
@@ -1221,6 +1265,13 @@ describe("createCodexDynamicToolBridge", () => {
       sourceReply: {
         text: "visible reply",
         mediaUrls: ["/tmp/reply.png"],
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+        spokenText: "visible reply",
+        ttsSupplement: {
+          spokenText: "visible reply",
+          visibleTextAlreadyDelivered: true,
+        },
       },
     });
     const bridge = createBridgeWithToolResult("message", toolResult);
@@ -1240,6 +1291,45 @@ describe("createCodexDynamicToolBridge", () => {
         text: "visible reply",
         mediaUrl: "/tmp/reply.png",
         mediaUrls: ["/tmp/reply.png"],
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+        spokenText: "visible reply",
+        ttsSupplement: {
+          spokenText: "visible reply",
+          visibleTextAlreadyDelivered: true,
+        },
+      },
+    ]);
+  });
+
+  it("strips untrusted local media from internal UI source replies", async () => {
+    const toolResult = textToolResult("Sent to current chat.", {
+      mcpServer: "external",
+      mcpTool: "message",
+      status: "ok",
+      sourceReplySink: "internal-ui",
+      sourceReply: {
+        text: "visible reply",
+        mediaUrls: ["/tmp/reply.ogg", "https://media.example/reply.ogg"],
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+        spokenText: "visible reply",
+      },
+    });
+    const bridge = createBridgeWithToolResult("message", toolResult);
+
+    await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "visible reply",
+    });
+
+    expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
+      {
+        text: "visible reply",
+        mediaUrl: "https://media.example/reply.ogg",
+        mediaUrls: ["https://media.example/reply.ogg"],
+        audioAsVoice: true,
+        spokenText: "visible reply",
       },
     ]);
   });
@@ -1260,6 +1350,54 @@ describe("createCodexDynamicToolBridge", () => {
     expect(result.terminate).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(Object.keys(result)).not.toContain("terminate");
+  });
+
+  it("does not terminate on delivered progress sends in message-tool-only mode", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", { messageId: "imessage-6264" }),
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "status ping",
+      progress: true,
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
+  it("does not let progress reply receipts terminate message-tool-only source replies", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", {
+        ok: true,
+        messageId: "provider-message-1",
+        repliedTo: "provider-guid-857",
+      }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "imessage",
+        currentChannelId: "imessage:any;-;+12069106512",
+        currentMessageId: "provider-guid-857",
+      },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "imessage",
+      target: "+12069106512",
+      messageId: "857",
+      message: "status ping",
+      progress: true,
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
 
   it("keeps message-tool-only source replies terminal when middleware redacts receipt details", async () => {
@@ -2720,6 +2858,92 @@ describe("createCodexDynamicToolBridge", () => {
       runId: "run-1",
       toolCallId: "call-1",
     });
+  });
+
+  it("suppresses plugin hooks, middleware, and legacy extensions for hidden tools", async () => {
+    const beforeToolCall = vi.fn(async () => ({ params: { mode: "safe" } }));
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: beforeToolCall },
+        { hookName: "after_tool_call", handler: afterToolCall },
+      ]),
+    );
+    const registry = createEmptyPluginRegistry();
+    const middleware = vi.fn(
+      async (event: { result: AgentToolResult<unknown>; toolName: string }) => ({
+        result: {
+          ...event.result,
+          content: [{ type: "text" as const, text: `${event.toolName} compacted` }],
+        },
+      }),
+    );
+    const factory = vi.fn(
+      async (codex: {
+        on: (
+          event: "tool_result",
+          handler: (event: unknown) => Promise<{ result: AgentToolResult<unknown> }>,
+        ) => void;
+      }) => {
+        codex.on("tool_result", async (event) => {
+          const eventRecord = requireRecord(event, "legacy event");
+          return {
+            result: {
+              ...(eventRecord.result as AgentToolResult<unknown>),
+              content: [{ type: "text" as const, text: "legacy compacted" }],
+            },
+          };
+        });
+      },
+    );
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    registry.codexAppServerExtensionFactories.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawFactory: factory,
+      factory,
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const execute = vi.fn(async () => textToolResult("raw output", { ok: true }));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: new AbortController().signal,
+      suppressPluginHooks: true,
+      hookContext: {
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: "agent:agent-1:session-1",
+        runId: "run-1",
+      },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "pwd" },
+    });
+
+    expect(result).toEqual(expectInputText("raw output"));
+    expectExecuteCall(execute, { callId: "call-1", args: { command: "pwd" } });
+    expect(beforeToolCall).not.toHaveBeenCalled();
+    expect(middleware).not.toHaveBeenCalled();
+    expect(factory).not.toHaveBeenCalled();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(afterToolCall).not.toHaveBeenCalled();
   });
 
   it("does not execute dynamic tools blocked by before_tool_call", async () => {

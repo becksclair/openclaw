@@ -2,6 +2,7 @@
 // delegation mode, workspace-only safety, memory sections, and active processes.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
+import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import type { AgentSession } from "../sessions/index.js";
 import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
@@ -26,6 +27,7 @@ describe("buildEmbeddedSystemPrompt", () => {
     // Memory prompt sections are shared plugin state, so each prompt-rendering
     // test leaves the global registry clean.
     clearMemoryPluginState();
+    vi.mocked(buildTtsSystemPromptHint).mockReturnValue(undefined);
   });
 
   it("forwards provider prompt contributions into the embedded prompt", () => {
@@ -80,6 +82,35 @@ describe("buildEmbeddedSystemPrompt", () => {
 
     expect(prompt).toContain("## Sub-Agent Delegation");
     expect(prompt).toContain("Mode: prefer");
+  });
+
+  it("suppresses config-backed TTS guidance when disabled", () => {
+    vi.mocked(buildTtsSystemPromptHint).mockReturnValue("Voice (TTS) is enabled.");
+    const params = {
+      config: {},
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        agentId: "main",
+        host: "local",
+        os: "linux",
+        arch: "x64",
+        node: process.version,
+        model: "gpt-5.5",
+        provider: "openai",
+      },
+      tools: [],
+      userTimezone: "UTC",
+    } satisfies Parameters<typeof buildEmbeddedSystemPrompt>[0];
+
+    const visible = buildEmbeddedSystemPrompt(params);
+    const hidden = buildEmbeddedSystemPrompt({ ...params, disableTts: true });
+
+    expect(visible).toContain("## Voice (TTS)");
+    expect(visible).toContain("Voice (TTS) is enabled.");
+    expect(hidden).not.toContain("## Voice (TTS)");
+    expect(hidden).not.toContain("Voice (TTS) is enabled.");
   });
 
   it("uses deferred capability names without listing them as visible tools", () => {

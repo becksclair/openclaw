@@ -829,6 +829,7 @@ export function runAgentAttempt(params: {
     config: params.cfg,
     agentHarnessId: embeddedAgentHarnessOverride,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
+    disableTts: params.opts.disableTts,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
     transcriptPrompt: params.transcriptBody,

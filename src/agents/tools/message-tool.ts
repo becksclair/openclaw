@@ -537,6 +537,12 @@ function buildSendSchema(options: {
     threadId: Type.Optional(Type.String()),
     asVoice: Type.Optional(Type.Boolean()),
     silent: Type.Optional(Type.Boolean()),
+    progress: Type.Optional(
+      Type.Boolean({
+        description:
+          "Mark this send as a mid-turn progress update. It does not count as the final source reply, so the turn continues; send the final answer without it.",
+      }),
+    ),
     quoteText: Type.Optional(Type.String({ description: "Telegram reply quote text." })),
     gifPlayback: Type.Optional(Type.Boolean()),
     forceDocument: Type.Optional(

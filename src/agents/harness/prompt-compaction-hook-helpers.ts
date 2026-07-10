@@ -34,7 +34,15 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   ctx: AgentHarnessHookContext;
   beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
   bootstrapContextRunKind?: BootstrapContextRunKind;
+  suppressPluginHooks?: boolean;
 }): Promise<AgentHarnessPromptBuildResult> {
+  if (params.suppressPluginHooks === true) {
+    return {
+      prompt: params.prompt,
+      developerInstructions: params.developerInstructions,
+      promptInputRange: { start: 0, end: params.prompt.length },
+    };
+  }
   const hookRunner = getGlobalHookRunner();
   const hasPrecomputedBeforeAgentStartResult = "beforeAgentStartResult" in params;
   // heartbeat_prompt_contribution fires only on heartbeat turns. Harness runtimes

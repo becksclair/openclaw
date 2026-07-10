@@ -139,12 +139,19 @@ class ChatController internal constructor(
   private val terminalWithoutReplyRunIds = ConcurrentHashMap.newKeySet<String>()
   private val unknownOutcomeRunIds = ConcurrentHashMap.newKeySet<String>()
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
+  private val pendingRunHistoryPollJobs = ConcurrentHashMap<String, Job>()
 
   // Preserve sent messages locally until chat.history includes the gateway-confirmed copy.
   private val optimisticMessagesByRunId = ConcurrentHashMap<String, ChatMessage>()
 
   // Keep reply ownership after the user row persists; the assistant row can land later.
   private val unresolvedRepliesByRunId = ConcurrentHashMap<String, ChatMessage>()
+
+  // Serializes every optimisticMessagesByRunId access and every _messages read-modify-write.
+  // The gateway event stream, send, timeout, and history-poll coroutines all run on the shared
+  // Dispatchers.IO pool, so without this the non-thread-safe map is iterated and mutated
+  // concurrently (ConcurrentModificationException) and concurrent _messages rewrites lose updates.
+  private val optimisticLock = Any()
   private val pendingRunTimeoutMs = 120_000L
   private val recoveryHistoryRetryDelayMs = 750L
   private var recoveryHistoryReconciliationGeneration = -1L
@@ -688,7 +695,9 @@ class ChatController internal constructor(
     _sessionId.value = null
     _historyLoading.value = markLoading
     if (clearMessages) {
-      _messages.value = emptyList()
+      synchronized(optimisticLock) {
+        _messages.value = emptyList()
+      }
       _messagesFromCache.value = false
     }
     return generation
@@ -802,11 +811,13 @@ class ChatController internal constructor(
         role = "user",
         content = userContent,
         timestampMs = System.currentTimeMillis(),
-        idempotencyKey = "$runId:user",
+        idempotencyKey = optimisticUserIdempotencyKey(runId),
       )
-    optimisticMessagesByRunId[runId] = optimisticMessage
-    unresolvedRepliesByRunId[runId] = optimisticMessage
-    _messages.value = _messages.value + optimisticMessage
+    synchronized(optimisticLock) {
+      optimisticMessagesByRunId[runId] = optimisticMessage
+      unresolvedRepliesByRunId[runId] = optimisticMessage
+      _messages.value = _messages.value + optimisticMessage
+    }
 
     armPendingRunTimeout(runId)
     synchronized(pendingRuns) {
@@ -848,7 +859,11 @@ class ChatController internal constructor(
       val ack = parseChatSendAck(json, res)
       val actualRunId = ack.runId ?: runId
       if (actualRunId != runId) {
-        transferRunOwnership(runId, actualRunId, optimisticMessage)
+        transferRunOwnership(
+          oldRunId = runId,
+          newRunId = actualRunId,
+          fallbackMessage = optimisticMessage,
+        )
       }
       if (ack.isTerminal) {
         clearPendingRun(actualRunId)
@@ -868,6 +883,8 @@ class ChatController internal constructor(
           false
         }
       } else {
+        // Run is still in flight: poll history so the assistant reply is reconciled once it lands.
+        armPendingRunHistoryPoll(actualRunId)
         true
       }
     } catch (err: CancellationException) {
@@ -1110,34 +1127,36 @@ class ChatController internal constructor(
             _selectedModelRef.value = history.sessionInfo?.providerQualifiedModelRef()
           }
         }
-        transferLostAckOwnershipFromHistory(history)
-        resolvePersistedReplies(history.messages)
-        val snapshotRunId =
-          history.inFlightRun
-            ?.runId
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-        latestAppliedInFlightRunId = snapshotRunId
-        val optimisticRunIds = runIdsToReconcile.filterTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
-        prunePersistedOptimisticMessages(history.messages)
-        if (snapshotRunId == null) {
-          optimisticRunIds
-            .filterNot { runId ->
-              unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
-            }.filterNotTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
-            .forEach(::clearPendingRun)
+        synchronized(optimisticLock) {
+          transferLostAckOwnershipFromHistory(history)
+          resolvePersistedReplies(history.messages)
+          val snapshotRunId =
+            history.inFlightRun
+              ?.runId
+              ?.trim()
+              ?.takeIf { it.isNotEmpty() }
+          latestAppliedInFlightRunId = snapshotRunId
+          val optimisticRunIds = runIdsToReconcile.filterTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
+          prunePersistedOptimisticMessages(history.messages)
+          if (snapshotRunId == null) {
+            optimisticRunIds
+              .filterNot { runId ->
+                unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
+              }.filterNotTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
+              .forEach { clearPendingRun(it) }
+          }
+          if (snapshotRunId != null) {
+            runIdsToReconcile
+              .filterTo(mutableSetOf()) {
+                it != snapshotRunId &&
+                  !optimisticMessagesByRunId.containsKey(it) &&
+                  !unresolvedRepliesByRunId.containsKey(it)
+              }.forEach { clearPendingRun(it) }
+          }
+          _messagesFromCache.value = false
+          _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
+          _sessionId.value = history.sessionId
         }
-        if (snapshotRunId != null) {
-          runIdsToReconcile
-            .filterTo(mutableSetOf()) {
-              it != snapshotRunId &&
-                !optimisticMessagesByRunId.containsKey(it) &&
-                !unresolvedRepliesByRunId.containsKey(it)
-            }.forEach(::clearPendingRun)
-        }
-        _messagesFromCache.value = false
-        _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
-        _sessionId.value = history.sessionId
         markLiveHistoryApplied(sessionKey = sessionKey, sessionId = history.sessionId, generation = generation)
         _historyLoading.value = false
         if (historyLoadErrorGeneration == generation) {
@@ -1208,8 +1227,10 @@ class ChatController internal constructor(
           requestCacheScope == currentCacheScope() &&
           isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())
         ) {
-          _messagesFromCache.value = true
-          _messages.value = cached
+          synchronized(optimisticLock) {
+            _messagesFromCache.value = true
+            _messages.value = cached
+          }
         }
       }
     }
@@ -1862,6 +1883,7 @@ class ChatController internal constructor(
             pendingRuns.contains(runId)
           }
         if (!stillPending && !replyStillUnresolved) return@launch
+        if (refreshHistoryForPendingRun(runId)) return@launch
         clearPendingRun(runId)
         clearTransientRunUiIfIdle()
         removeOptimisticMessage(runId)
@@ -1872,9 +1894,104 @@ class ChatController internal constructor(
       }
   }
 
+  private fun armPendingRunHistoryPoll(runId: String) {
+    pendingRunHistoryPollJobs[runId]?.cancel()
+    pendingRunHistoryPollJobs[runId] =
+      scope.launch {
+        var delayMs = 1_500L
+        while (true) {
+          delay(delayMs)
+          val stillPending =
+            synchronized(pendingRuns) {
+              pendingRuns.contains(runId)
+            }
+          if (!stillPending) return@launch
+          if (refreshHistoryForPendingRun(runId)) return@launch
+          delayMs = (delayMs * 2).coerceAtMost(5_000L)
+        }
+      }
+  }
+
+  private suspend fun refreshHistoryForPendingRun(runId: String): Boolean {
+    return try {
+      val currentSessionKey = _sessionKey.value
+      val currentGeneration = historyLoadGeneration.get()
+      val historyJson =
+        requestGateway(
+          "chat.history",
+          buildJsonObject { put("sessionKey", JsonPrimitive(currentSessionKey)) }.toString(),
+        )
+      if (
+        !isCurrentHistoryLoad(
+          currentSessionKey,
+          _sessionKey.value,
+          currentGeneration,
+          historyLoadGeneration.get(),
+        )
+      ) {
+        return false
+      }
+      val history =
+        parseHistory(
+          historyJson,
+          sessionKey = currentSessionKey,
+          previousMessages = _messages.value,
+        )
+      val resolved = applyHistorySnapshot(history, resolveForRunId = runId)
+      if (resolved) {
+        clearPendingRun(runId)
+        pendingToolCallsById.clear()
+        publishPendingToolCalls()
+        _streamingAssistantText.value = null
+        _errorText.value = null
+      }
+      resolved
+    } catch (cancel: CancellationException) {
+      throw cancel
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  /**
+   * Reconciles a fetched history snapshot into the transcript. The optimistic-map read, prune,
+   * and the `_messages` rewrite run together under [optimisticLock] so concurrent send, timeout,
+   * and history-poll coroutines on Dispatchers.IO cannot iterate the map while it mutates or lose
+   * a `_messages` update. Returns whether [resolveForRunId]'s pending turn now appears in history.
+   */
+  private fun applyHistorySnapshot(
+    history: ChatHistory,
+    resolveForRunId: String? = null,
+  ): Boolean {
+    val resolved =
+      synchronized(optimisticLock) {
+        val isResolved =
+          resolveForRunId?.let { runId ->
+            pendingRunResolvedInHistory(
+              incoming = history.messages,
+              optimistic = optimisticMessagesByRunId[runId],
+            )
+          } ?: false
+        prunePersistedOptimisticMessages(history.messages)
+        _messages.value =
+          mergeOptimisticMessages(
+            incoming = history.messages,
+            optimistic = optimisticMessagesByRunId.values,
+          )
+        isResolved
+      }
+    _sessionId.value = history.sessionId
+    history.thinkingLevel
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
+      ?.let { _thinkingLevel.value = it }
+    return resolved
+  }
+
   private fun clearPendingRun(runId: String) {
     pendingRunTimeoutJobs.remove(runId)?.cancel()
     unknownOutcomeRunIds.remove(runId)
+    pendingRunHistoryPollJobs.remove(runId)?.cancel()
     synchronized(pendingRuns) {
       disconnectedPendingRunIds.remove(runId)
       pendingRuns.remove(runId)
@@ -1896,13 +2013,19 @@ class ChatController internal constructor(
     for ((_, job) in pendingRunTimeoutJobs) {
       job.cancel()
     }
+    for ((_, job) in pendingRunHistoryPollJobs) {
+      job.cancel()
+    }
     pendingRunTimeoutJobs.clear()
+    pendingRunHistoryPollJobs.clear()
     if (clearOptimisticMessages) {
       recoveryHistoryReconciliationJob?.cancel()
       recoveryHistoryReconciliationGeneration = -1L
       recoveryHistoryReconciliationJob = null
-      optimisticMessagesByRunId.clear()
-      unresolvedRepliesByRunId.clear()
+      synchronized(optimisticLock) {
+        optimisticMessagesByRunId.clear()
+        unresolvedRepliesByRunId.clear()
+      }
       timedOutRunIds.clear()
       terminalWithoutReplyRunIds.clear()
       unknownOutcomeRunIds.clear()
@@ -1917,43 +2040,17 @@ class ChatController internal constructor(
   }
 
   private fun removeOptimisticMessage(runId: String) {
-    val message = optimisticMessagesByRunId.remove(runId) ?: return
-    _messages.value = _messages.value.filterNot { it.id == message.id }
-  }
-
-  private fun transferRunOwnership(
-    oldRunId: String,
-    newRunId: String,
-    fallbackMessage: ChatMessage,
-    messageIdempotencyKey: String? = fallbackMessage.idempotencyKey,
-  ) {
-    if (oldRunId == newRunId) return
-    val optimistic = optimisticMessagesByRunId.remove(oldRunId)
-    val unresolved = unresolvedRepliesByRunId.remove(oldRunId)
-    val terminalWithoutReply = terminalWithoutReplyRunIds.remove(oldRunId)
-    unknownOutcomeRunIds.remove(oldRunId)
-    val original = optimistic ?: unresolved ?: fallbackMessage
-    // Run ownership can change independently of the client key persisted on the
-    // user row. Only history proof may replace that transcript identity.
-    val rekeyed = original.copy(idempotencyKey = messageIdempotencyKey)
-    if (optimistic != null) optimisticMessagesByRunId[newRunId] = rekeyed
-    if (unresolved != null) unresolvedRepliesByRunId[newRunId] = rekeyed
-    if (terminalWithoutReply) terminalWithoutReplyRunIds.add(newRunId)
-    _messages.value = _messages.value.map { if (it.id == original.id) rekeyed else it }
-    clearPendingRun(oldRunId)
-    synchronized(pendingRuns) {
-      pendingRuns.add(newRunId)
-      _pendingRunCount.value = pendingRuns.size
+    synchronized(optimisticLock) {
+      val message = optimisticMessagesByRunId.remove(runId) ?: return
+      _messages.value = _messages.value.filterNot { it.id == message.id }
     }
-    armPendingRunTimeout(newRunId)
   }
 
+  // Must run under optimisticLock: the gateway may have accepted a send that the client
+  // marked as unknown outcome; when the reconnect snapshot exposes a single in-flight run,
+  // transfer ownership of the optimistic user row so the reply can land on the canonical run.
   private fun transferLostAckOwnershipFromHistory(history: ChatHistory) {
-    val snapshotRunId =
-      history.inFlightRun
-        ?.runId
-        ?.trim()
-        ?.takeIf { it.isNotEmpty() } ?: return
+    val snapshotRunId = history.inFlightRun?.runId?.trim()?.takeIf { it.isNotEmpty() } ?: return
     if (unresolvedRepliesByRunId.containsKey(snapshotRunId)) return
     val localRunId =
       synchronized(pendingRuns) {
@@ -1980,6 +2077,36 @@ class ChatController internal constructor(
     }
   }
 
+  private fun transferRunOwnership(
+    oldRunId: String,
+    newRunId: String,
+    fallbackMessage: ChatMessage,
+    messageIdempotencyKey: String? = fallbackMessage.idempotencyKey,
+  ) {
+    if (oldRunId == newRunId) return
+    synchronized(optimisticLock) {
+      val optimistic = optimisticMessagesByRunId.remove(oldRunId)
+      val unresolved = unresolvedRepliesByRunId.remove(oldRunId)
+      val terminalWithoutReply = terminalWithoutReplyRunIds.remove(oldRunId)
+      unknownOutcomeRunIds.remove(oldRunId)
+      val original = optimistic ?: unresolved ?: fallbackMessage
+      // Run ownership can change independently of the client key persisted on the
+      // user row. Only history proof may replace that transcript identity.
+      val rekeyed = original.copy(idempotencyKey = messageIdempotencyKey)
+      if (optimistic != null) optimisticMessagesByRunId[newRunId] = rekeyed
+      if (unresolved != null) unresolvedRepliesByRunId[newRunId] = rekeyed
+      if (terminalWithoutReply) terminalWithoutReplyRunIds.add(newRunId)
+      _messages.value = _messages.value.map { if (it.id == original.id) rekeyed else it }
+    }
+    clearPendingRun(oldRunId)
+    synchronized(pendingRuns) {
+      pendingRuns.add(newRunId)
+      _pendingRunCount.value = pendingRuns.size
+    }
+    armPendingRunTimeout(newRunId)
+  }
+
+  // Must run under optimisticLock: mutates optimisticMessagesByRunId while iterating its values.
   private fun prunePersistedOptimisticMessages(incoming: List<ChatMessage>) {
     val retained =
       retainUnmatchedOptimisticMessages(
@@ -2561,6 +2688,45 @@ internal fun retainUnmatchedOptimisticMessages(
       true
     }
   }
+}
+
+internal fun pendingRunResolvedInHistory(
+  incoming: List<ChatMessage>,
+  optimistic: ChatMessage?,
+): Boolean {
+  if (optimistic == null) return false
+  val pendingRunId = pendingRunIdFromOptimisticMessage(optimistic) ?: return false
+  val userIndex = incoming.indexOfFirst { incomingMessageConsumesOptimistic(it, optimistic) }
+  if (userIndex < 0) return false
+  return incoming
+    .drop(userIndex + 1)
+    .any { message ->
+      message.role.trim().equals("assistant", ignoreCase = true) &&
+        assistantMessageMatchesPendingRun(message, pendingRunId) &&
+        message.content.any { part -> !part.text.isNullOrBlank() }
+    }
+}
+
+/** Idempotency key the gateway mirrors back as the persisted user turn for [runId]. */
+internal fun optimisticUserIdempotencyKey(runId: String): String = "$runId:user"
+
+private fun pendingRunIdFromOptimisticMessage(message: ChatMessage): String? {
+  val idempotencyKey = message.idempotencyKey?.trim().orEmpty()
+  return idempotencyKey
+    .takeIf { it.endsWith(":user") }
+    ?.removeSuffix(":user")
+    ?.takeIf { it.isNotBlank() }
+}
+
+private fun assistantMessageMatchesPendingRun(
+  message: ChatMessage,
+  pendingRunId: String,
+): Boolean {
+  val idempotencyKey = message.idempotencyKey?.trim().orEmpty()
+  if (idempotencyKey.isEmpty()) return false
+  if (idempotencyKey == pendingRunId) return true
+  if (idempotencyKey.startsWith("$pendingRunId:")) return true
+  return idempotencyKey == "cli-assistant:$pendingRunId"
 }
 
 /**

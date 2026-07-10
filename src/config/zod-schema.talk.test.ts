@@ -40,6 +40,11 @@ describe("OpenClawSchema talk validation", () => {
             },
             instructions: "Speak with crisp diction.",
             consultRouting: "force-agent-consult",
+            tools: {
+              profile: "voice",
+              alsoAllow: ["bundle-mcp"],
+              deny: ["message"],
+            },
           },
         },
       }),
@@ -73,6 +78,20 @@ describe("OpenClawSchema talk validation", () => {
     expect(() => OpenClawSchema.parse({ talk: { realtime } })).toThrow();
   });
 
+  it("accepts all profile ids for realtime Talk tools", () => {
+    for (const profile of ["minimal", "coding", "messaging", "full", "voice"]) {
+      expect(() =>
+        OpenClawSchema.parse({
+          talk: {
+            realtime: {
+              tools: { profile },
+            },
+          },
+        }),
+      ).not.toThrow();
+    }
+  });
+
   it("rejects invalid realtime Talk consult routing", () => {
     expect(() =>
       OpenClawSchema.parse({
@@ -83,6 +102,35 @@ describe("OpenClawSchema talk validation", () => {
         },
       }),
     ).toThrow(/consultRouting/i);
+  });
+
+  it("rejects invalid realtime Talk tool profile", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          realtime: {
+            tools: {
+              profile: "admin",
+            },
+          },
+        },
+      }),
+    ).toThrow(/profile/i);
+  });
+
+  it("rejects realtime Talk tools allow and alsoAllow together", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          realtime: {
+            tools: {
+              allow: ["read"],
+              alsoAllow: ["exec"],
+            },
+          },
+        },
+      }),
+    ).toThrow(/allow.*alsoAllow|alsoAllow.*allow/i);
   });
 
   it.each([

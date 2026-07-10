@@ -63,7 +63,9 @@ android {
   namespace = "ai.openclaw.app"
   // AndroidX Core 1.19 and Lifecycle 2.11 require API 37 compilation.
   // targetSdk stays separate so runtime behavior changes remain an explicit migration.
+  // compileSdk 37 also required by the context-aware DnsResolver in GatewayDiscovery.kt.
   compileSdk = 37
+  ndkVersion = "29.0.14206865"
 
   // Release signing is local-only; keep the keystore path and passwords out of the repo.
   signingConfigs {
@@ -195,6 +197,9 @@ ktlint {
 }
 
 dependencies {
+  implementation(project(":audio"))
+  implementation(project(":common"))
+
   val composeBom = platform(libs.androidx.compose.bom)
   implementation(composeBom)
   androidTestImplementation(composeBom)
@@ -239,6 +244,8 @@ dependencies {
   implementation(libs.androidx.camera.view)
   implementation(libs.androidx.camera.video)
   implementation(libs.barcode.scanning)
+  implementation(libs.play.services.wearable)
+  implementation(libs.kotlinx.coroutines.play.services)
 
   // Unicast DNS-SD (Wide-Area Bonjour) for tailnet discovery domains.
   implementation(libs.dnsjava)

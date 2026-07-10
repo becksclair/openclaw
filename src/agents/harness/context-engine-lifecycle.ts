@@ -10,6 +10,7 @@ import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-
 import type {
   AssembleResult,
   ContextEngine,
+  ContextEnginePromptBudget,
   ContextEngineRuntimeContext,
   ContextEngineRuntimeSettings,
 } from "../../context-engine/types.js";
@@ -35,6 +36,7 @@ type HarnessRuntimeSettingsParams = {
   modelFamily?: string | null;
   tokenBudget?: number | null;
   maxOutputTokens?: number | null;
+  contextEngineBudget?: ContextEnginePromptBudget;
   fallbackReason?: string | null;
   degradedReason?: string | null;
   contextEngine?: HarnessContextEngine;
@@ -63,6 +65,7 @@ function buildHarnessContextEngineRuntimeSettings(
           selectedId === "legacy" ? "default" : selectedId ? "configured" : "unknown",
         promptTokenBudget: params.tokenBudget,
         maxOutputTokens: params.maxOutputTokens,
+        contextEngineBudget: params.contextEngineBudget,
         fallbackReason: params.fallbackReason,
         degradedReason: params.degradedReason,
       });
@@ -89,6 +92,7 @@ export async function bootstrapHarnessContextEngine(params: {
   requestedModelId?: string | null;
   modelId?: string | null;
   maxOutputTokens?: number | null;
+  contextEngineBudget?: ContextEnginePromptBudget;
   fallbackReason?: string | null;
   degradedReason?: string | null;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
@@ -136,6 +140,7 @@ export async function assembleHarnessContextEngine(params: {
   sessionKey?: string;
   messages: AgentMessage[];
   tokenBudget?: number;
+  runtimeContext?: ContextEngineRuntimeContext;
   availableTools?: Set<string>;
   citationsMode?: MemoryCitationsMode;
   modelId: string;
@@ -148,6 +153,7 @@ export async function assembleHarnessContextEngine(params: {
   requestedModelId?: string | null;
   modelFamily?: string | null;
   maxOutputTokens?: number | null;
+  contextEngineBudget?: ContextEnginePromptBudget;
   fallbackReason?: string | null;
   degradedReason?: string | null;
 }) {
@@ -165,6 +171,7 @@ export async function assembleHarnessContextEngine(params: {
     ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
     model: params.modelId,
     runtimeSettings,
+    runtimeContext: params.runtimeContext,
     ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
   });
   return ensureAssembleResultShape(result, params.contextEngine.info.id);
@@ -228,6 +235,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
   requestedModelId?: string | null;
   modelId?: string | null;
   maxOutputTokens?: number | null;
+  contextEngineBudget?: ContextEnginePromptBudget;
   fallbackReason?: string | null;
   degradedReason?: string | null;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;

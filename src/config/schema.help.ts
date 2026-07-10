@@ -215,6 +215,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Talk reasoning strategy: agent-consult for Gateway-mediated agent help, direct-tools for local tool calls, or none.",
   "talk.realtime.consultRouting":
     "Gateway relay fallback for final user transcripts when the realtime provider skips openclaw_agent_consult. provider-direct preserves provider replies; force-agent-consult routes through OpenClaw.",
+  "talk.realtime.tools":
+    'Optional direct-tool policy for Gateway-relayed realtime Talk sessions. Use profile "voice" for broad local-user tools inside the already-effective agent/provider/global policy boundary.',
   "talk.consultThinkingLevel":
     "Use this to override the thinking level for the regular agent run behind Talk realtime consults.",
   "talk.consultFastMode":
@@ -337,6 +339,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional ACP session mode default for this agent (persistent or oneshot).",
   "agents.list[].runtime.acp.cwd":
     "Optional default working directory for this agent's ACP sessions.",
+  "agents.list[].runtime.acp.target":
+    "Optional backend target for this agent's ACP sessions, such as a remote host alias.",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
   "agents.defaults.heartbeat.suppressToolErrorWarnings":
@@ -689,6 +693,8 @@ export const FIELD_HELP: Record<string, string> = {
   "bindings[].acp.label":
     "Human-friendly label for ACP status/diagnostics in this bound conversation.",
   "bindings[].acp.cwd": "Working directory override for ACP sessions created from this binding.",
+  "bindings[].acp.target":
+    "Backend target override for ACP sessions created from this binding, such as a remote host alias.",
   "bindings[].acp.backend":
     "ACP backend override for this binding (falls back to agent runtime ACP backend, then global acp.backend).",
   broadcast:

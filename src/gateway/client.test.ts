@@ -2107,3 +2107,68 @@ describe("GatewayClient connect auth payload", () => {
     });
   });
 });
+
+describe("GatewayClient pre-hello send gate", () => {
+  const flush = () =>
+    new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+  it("holds non-connect frames until the connect handshake completes", async () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+    });
+    try {
+      client.start();
+      const ws = getLatestWs();
+      ws.emitOpen();
+      ws.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-1" },
+        }),
+      );
+      const connectFrame = JSON.parse(
+        ws.sent.find((frame) => frame.includes('"method":"connect"')) ?? "{}",
+      ) as { id?: string };
+      expect(connectFrame.id).toBeTruthy();
+      // Connect is the only frame on the wire before hello-ok.
+      expect(ws.sent).toHaveLength(1);
+
+      // Fire a node.event before hello-ok. It must not reach the wire yet, and it
+      // must not trip the server's connect-first invariant (no close).
+      const eventPromise = client.request("node.event", { event: "presence" });
+      await flush();
+      expect(ws.sent).toHaveLength(1);
+      expect(ws.lastClose).toBeNull();
+
+      // Completing the handshake flushes the queued frame after connect.
+      ws.emitMessage(
+        JSON.stringify({
+          type: "res",
+          id: connectFrame.id,
+          ok: true,
+          payload: {
+            type: "hello-ok",
+            auth: { role: "operator", scopes: ["operator.admin"] },
+          },
+        }),
+      );
+      await flush();
+      expect(ws.sent).toHaveLength(2);
+      const eventFrame = JSON.parse(ws.sent[1] ?? "{}") as { id?: string; method?: string };
+      expect(eventFrame.method).toBe("node.event");
+
+      // The gateway acks the flushed frame and the caller's request resolves.
+      ws.emitMessage(
+        JSON.stringify({ type: "res", id: eventFrame.id, ok: true, payload: { ok: true } }),
+      );
+      await expect(eventPromise).resolves.toEqual({ ok: true });
+      expect(ws.lastClose).toBeNull();
+    } finally {
+      client.stop();
+    }
+  });
+});

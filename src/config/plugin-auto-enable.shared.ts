@@ -290,7 +290,9 @@ function collectConfiguredChannelIds(
   env: NodeJS.ProcessEnv,
   discovery?: PluginDiscoveryResult,
 ): string[] {
-  const configuredStateChannelIds = new Set(listBundledChannelIdsWithConfiguredState(discovery));
+  const configuredStateChannelIds = new Set(
+    listBundledChannelIdsWithConfiguredState(discovery, env),
+  );
   return listPotentialConfiguredChannelPresenceSignals(cfg, env, {
     includePersistedAuthState: false,
     discovery,

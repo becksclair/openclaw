@@ -73,6 +73,8 @@ export type AcpSessionRuntimeOptions = {
   thinking?: string;
   /** Working directory override for ACP session turns. */
   cwd?: string;
+  /** Backend target override for runtimes that can select a host/session target at ensure time. */
+  target?: string;
   /** ACP runtime config option: permission profile id. */
   permissionProfile?: string;
   /** ACP runtime config option: per-turn timeout in seconds. */

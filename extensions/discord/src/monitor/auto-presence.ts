@@ -3,6 +3,7 @@ import {
   clearExpiredCooldowns,
   ensureAuthProfileStore,
   isProfileInCooldown,
+  resolveAgentDir,
   resolveProfilesUnavailableReason,
   type AuthProfileFailureReason,
   type AuthProfileStore,
@@ -11,6 +12,8 @@ import type {
   DiscordAccountConfig,
   DiscordAutoPresenceConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import type { Activity, UpdatePresenceData } from "../internal/gateway.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
@@ -43,6 +46,18 @@ type PresenceGateway = {
   isConnected: boolean;
   updatePresence: (payload: UpdatePresenceData) => void;
 };
+
+/**
+ * Load the auth profile store for the agent bound to a Discord account.
+ * A bare ensureAuthProfileStore() would resolve the built-in default agent
+ * dir from an empty config, ignoring the configured default agent and
+ * reading an empty store that reports the runtime as permanently degraded.
+ */
+export function loadDiscordAccountAuthProfileStore(accountId: string): AuthProfileStore {
+  const cfg = getRuntimeConfig();
+  const route = resolveAgentRoute({ cfg, channel: "discord", accountId });
+  return ensureAuthProfileStore(resolveAgentDir(cfg, route.agentId));
+}
 
 function normalizeOptionalText(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -289,7 +304,8 @@ export function createDiscordAutoPresenceController(params: {
     };
   }
 
-  const loadAuthStore = params.loadAuthStore ?? (() => ensureAuthProfileStore());
+  const loadAuthStore =
+    params.loadAuthStore ?? (() => loadDiscordAccountAuthProfileStore(params.accountId));
   const now = params.now ?? (() => Date.now());
   const setIntervalFn = params.setIntervalFn ?? setInterval;
   const clearIntervalFn = params.clearIntervalFn ?? clearInterval;

@@ -15,7 +15,10 @@ import type {
   InstalledPluginInstallRecordInfo,
 } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import {
+  clearPluginMetadataLifecycleCaches,
+  registerPluginMetadataProcessMemoLifecycleClear,
+} from "./plugin-metadata-lifecycle.js";
 import {
   clearLoadPluginMetadataSnapshotMemo,
   loadPluginMetadataSnapshot,
@@ -375,6 +378,22 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[1]?.[0]).not.toHaveProperty(
       "pluginIds",
     );
+  });
+
+  it("runs every registered plugin metadata lifecycle cache clearer", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const unregisterFirst = registerPluginMetadataProcessMemoLifecycleClear(first);
+    const unregisterSecond = registerPluginMetadataProcessMemoLifecycleClear(second);
+    try {
+      clearPluginMetadataLifecycleCaches();
+    } finally {
+      unregisterFirst();
+      unregisterSecond();
+    }
+
+    expect(first).toHaveBeenCalledOnce();
+    expect(second).toHaveBeenCalledOnce();
   });
 
   it("keeps hot persisted snapshots for alternating config callers", () => {

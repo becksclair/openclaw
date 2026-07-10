@@ -16,7 +16,7 @@ import {
 } from "./tool-description-presets.js";
 
 /** Built-in tool profile ids exposed in config and UI. */
-export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
+export type ToolProfileId = "minimal" | "coding" | "messaging" | "full" | "voice";
 
 /** Allow/deny policy generated from a built-in tool profile. */
 type ToolProfilePolicy = {
@@ -373,6 +373,9 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   full: {
     allow: ["*"],
   },
+  voice: {
+    allow: ["*"],
+  },
 };
 
 function buildCoreToolGroupMap() {
@@ -401,6 +404,7 @@ export const PROFILE_OPTIONS = [
   { id: "coding", label: "Coding" },
   { id: "messaging", label: "Messaging" },
   { id: "full", label: "Full" },
+  { id: "voice", label: "Voice" },
 ] as const;
 
 /** Resolves the allow/deny policy for a built-in tool profile. */

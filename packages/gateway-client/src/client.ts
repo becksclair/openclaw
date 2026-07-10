@@ -500,6 +500,18 @@ export class GatewayClient {
   private socketOpened = false;
   private transportValidated = false;
   private helloOkReceived = false;
+  // Id of the in-flight connect handshake request. The connect response flips
+  // helloOkReceived synchronously (before its .then microtask) so callers queued
+  // behind the pre-hello gate resume in the same tick the handshake lands.
+  private connectRequestId: string | null = null;
+  // Non-connect frames queued while the handshake is incomplete. The gateway
+  // rejects the whole connection if any frame precedes req/connect, so these wait
+  // for hello-ok and are rejected on close so they never flush onto a later socket.
+  private handshakeWaiters: Array<{
+    resolve: () => void;
+    reject: (err: Error) => void;
+    timer: NodeJS.Timeout | null;
+  }> = [];
   private suppressedTransientPreHelloCleanCloses = 0;
 
   constructor(opts: GatewayClientOptions) {
@@ -558,6 +570,10 @@ export class GatewayClient {
     this.clearConnectChallengeTimeout();
     this.connectNonce = null;
     this.connectSent = false;
+    this.connectRequestId = null;
+    // Fail any frames still parked behind a prior socket's handshake gate before
+    // reusing this client for a fresh connection.
+    this.settleHandshakeWaiters(new Error("gateway reconnecting"));
     const url = this.opts.url ?? DEFAULT_GATEWAY_CLIENT_URL;
     if (this.opts.tlsFingerprint && !url.startsWith("wss://")) {
       this.notifyConnectError(new Error("gateway tls fingerprint requires wss:// gateway url"));
@@ -636,6 +652,7 @@ export class GatewayClient {
     this.helloOkReceived = false;
     this.connectNonce = null;
     this.connectSent = false;
+    this.connectRequestId = null;
     this.clearConnectChallengeTimeout();
 
     ws.on("open", () => {
@@ -669,6 +686,9 @@ export class GatewayClient {
       }
       this.socketOpened = false;
       this.transportValidated = false;
+      // Reject frames waiting on this socket's handshake so they never flush onto
+      // a reconnected socket; callers treat this like any other closed-connection send.
+      this.settleHandshakeWaiters(new Error(`gateway closed (${code}): ${reasonText}`));
       this.resolvePendingStop(ws);
       if (this.pendingStartupReconnectDelayMs !== null) {
         this.scheduleReconnect();
@@ -778,6 +798,7 @@ export class GatewayClient {
       this.tickTimer = null;
     }
     this.clearConnectChallengeTimeout();
+    this.settleHandshakeWaiters(new Error("gateway client stopped"));
     if (this.pendingStop) {
       this.flushPendingErrors(new Error("gateway client stopped"));
       return this.pendingStop.promise;
@@ -861,6 +882,9 @@ export class GatewayClient {
     void this.request<HelloOk>("connect", assembled.params)
       .then((helloOk) => {
         this.helloOkReceived = true;
+        // Backstop the synchronous flip in handleMessage so gated frames always
+        // release once the handshake succeeds, even if the id path is bypassed.
+        this.settleHandshakeWaiters(null);
         this.pendingDeviceTokenRetry = false;
         this.deviceTokenRetryBudgetUsed = false;
         this.pendingStartupReconnectDelayMs = null;
@@ -1434,6 +1458,14 @@ export class GatewayClient {
       this.pending.delete(parsed.id);
       pending.cleanup?.();
       if (parsed.ok) {
+        // Release the pre-hello gate in the same tick the connect response lands,
+        // ahead of its .then, so callers that send immediately after hello-ok are
+        // not stalled by a microtask hop.
+        if (parsed.id === this.connectRequestId && !this.helloOkReceived) {
+          this.helloOkReceived = true;
+          this.connectRequestId = null;
+          this.settleHandshakeWaiters(null);
+        }
         pending.resolve(parsed.payload);
       } else {
         pending.reject(
@@ -1445,6 +1477,80 @@ export class GatewayClient {
             retryAfterMs: parsed.error?.retryAfterMs,
           }),
         );
+      }
+    }
+  }
+
+  private waitForHandshake(
+    method: string,
+    timeoutMs: number | null,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (this.helloOkReceived) {
+      return Promise.resolve();
+    }
+    if (signal?.aborted) {
+      return Promise.reject(createGatewayRequestAbortError(method));
+    }
+    return new Promise<void>((resolve, reject) => {
+      const entry: {
+        resolve: () => void;
+        reject: (err: Error) => void;
+        timer: NodeJS.Timeout | null;
+      } = { resolve: () => undefined, reject: () => undefined, timer: null };
+      let settled = false;
+      const settle = (err?: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        const idx = this.handshakeWaiters.indexOf(entry);
+        if (idx >= 0) {
+          this.handshakeWaiters.splice(idx, 1);
+        }
+        if (entry.timer) {
+          clearTimeout(entry.timer);
+        }
+        if (abortHandler) {
+          signal?.removeEventListener("abort", abortHandler);
+        }
+        if (err) {
+          reject(err);
+        } else {
+          resolve();
+        }
+      };
+      entry.resolve = () => settle();
+      entry.reject = (err) => settle(err);
+      const abortHandler = () => entry.reject(createGatewayRequestAbortError(method));
+      if (timeoutMs !== null) {
+        entry.timer = setTimeout(() => {
+          entry.reject(new Error(`gateway handshake incomplete for ${method}`));
+        }, timeoutMs);
+        entry.timer.unref?.();
+      }
+      this.handshakeWaiters.push(entry);
+      signal?.addEventListener("abort", abortHandler, { once: true });
+      if (signal?.aborted) {
+        abortHandler();
+      }
+    });
+  }
+
+  private settleHandshakeWaiters(err: Error | null): void {
+    if (this.handshakeWaiters.length === 0) {
+      return;
+    }
+    const waiters = this.handshakeWaiters;
+    this.handshakeWaiters = [];
+    for (const waiter of waiters) {
+      if (waiter.timer) {
+        clearTimeout(waiter.timer);
+      }
+      if (err) {
+        waiter.reject(err);
+      } else {
+        waiter.resolve();
       }
     }
   }
@@ -1597,8 +1703,6 @@ export class GatewayClient {
     if (typeof method !== "string" || method.length === 0) {
       throw new Error("invalid request frame: method must be a non-empty string");
     }
-    const id = randomUUID();
-    const frame: RequestFrame = { type: "req", id, method, params };
     const expectFinal = opts?.expectFinal === true;
     const timeoutMs =
       opts?.timeoutMs === null
@@ -1608,17 +1712,41 @@ export class GatewayClient {
           : expectFinal
             ? null
             : this.requestTimeoutMs;
+    const deadlineMs = timeoutMs === null ? null : Date.now() + timeoutMs;
+    const remainingTimeoutMs = () =>
+      deadlineMs === null ? null : Math.max(0, deadlineMs - Date.now());
+    // Hold non-connect frames until hello-ok. The gateway rejects the whole
+    // connection ("first request must be connect") if any frame precedes the
+    // connect handshake. The connect frame itself must pass through so the
+    // handshake can complete. Bound the wait by the request timeout so a stalled
+    // handshake surfaces as a normal failure instead of pinning the caller.
+    if (method !== "connect" && !this.helloOkReceived) {
+      const handshakeTimeoutMs = remainingTimeoutMs() ?? this.requestTimeoutMs;
+      await this.waitForHandshake(method, handshakeTimeoutMs, opts?.signal);
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        throw new Error("gateway not connected");
+      }
+      if (opts?.signal?.aborted) {
+        throw createGatewayRequestAbortError(method);
+      }
+    }
+    const id = randomUUID();
+    if (method === "connect") {
+      this.connectRequestId = id;
+    }
+    const frame: RequestFrame = { type: "req", id, method, params };
+    const responseTimeoutMs = remainingTimeoutMs();
     const signal = opts?.signal;
     const p = new Promise<T>((resolve, reject) => {
       const timeout =
-        timeoutMs === null
+        responseTimeoutMs === null
           ? null
           : setTimeout(() => {
               const pending = this.pending.get(id);
               this.pending.delete(id);
               pending?.cleanup?.();
               reject(new Error(`gateway request timeout for ${method}`));
-            }, timeoutMs);
+            }, responseTimeoutMs);
       const cleanup = () => {
         if (timeout) {
           clearTimeout(timeout);
@@ -1642,7 +1770,13 @@ export class GatewayClient {
         onAccepted: opts?.onAccepted,
       });
       signal?.addEventListener("abort", abortHandler, { once: true });
+      if (signal?.aborted) {
+        abortHandler();
+      }
     });
+    if (signal?.aborted) {
+      return p;
+    }
     try {
       this.ws.send(JSON.stringify(frame));
     } catch (error) {

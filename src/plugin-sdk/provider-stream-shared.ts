@@ -990,14 +990,16 @@ function sanitizeGoogleThinkingConfigContainer(params: {
 /** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function createGoogleThinkingPayloadWrapper(
   baseStreamFn: StreamFn | undefined,
-  thinkingLevel?: GoogleThinkingInputLevel,
+  thinkingLevel?: ThinkLevel,
 ): StreamFn {
+  const googleThinkingLevel: GoogleThinkingInputLevel | undefined =
+    thinkingLevel === "ultra" ? "max" : thinkingLevel;
   return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, model }) => {
     if (model.api === "google-generative-ai") {
       sanitizeGoogleThinkingPayload({
         payload,
         modelId: model.id,
-        thinkingLevel,
+        thinkingLevel: googleThinkingLevel,
       });
     }
   });

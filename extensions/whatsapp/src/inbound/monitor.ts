@@ -90,6 +90,7 @@ import {
   normalizeWebInboundMessage,
   withDeprecatedWebInboundMessageFlatAliases,
 } from "./message-aliases.js";
+import { createWhatsAppMessageArchive, type WhatsAppArchiveConfig } from "./message-archive.js";
 import {
   addWhatsAppOutboundMentionsToContent,
   mayContainWhatsAppOutboundMention,
@@ -362,6 +363,8 @@ type MonitorWebInboxOptions = {
   recentMessageKeys?: WhatsAppBaileysMessageCache;
   baileysGroupMetaCache?: WhatsAppBaileysGroupMetadataCache;
   onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
+  /** Config-gated raw message archive tap (channels.whatsapp.archive). */
+  archive?: WhatsAppArchiveConfig;
 };
 
 type AttachWebInboxToSocketOptions = Omit<
@@ -381,6 +384,23 @@ export async function attachWebInboxToSocket(
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
   const sock = options.sock;
+  // Raw message archive (config-gated, default off). Created per socket attach;
+  // a creation failure disables archiving for the session and never blocks
+  // inbound dispatch.
+  const messageArchive =
+    options.archive?.enabled && options.archive.dbPath
+      ? createWhatsAppMessageArchive({
+          dbPath: options.archive.dbPath,
+          accountId: options.accountId,
+          logger: inboundLogger,
+        })
+      : null;
+  if (options.archive?.enabled && !options.archive.dbPath) {
+    inboundLogger.warn(
+      { accountId: options.accountId },
+      "channels.whatsapp.archive.enabled is set but archive.dbPath is missing; archiving disabled",
+    );
+  }
   const connectedAtMs = Date.now();
   if (options.socketRef) {
     options.socketRef.current = sock;
@@ -1550,6 +1570,10 @@ export async function attachWebInboxToSocket(
     if (upsert.type !== "notify" && upsert.type !== "append") {
       return;
     }
+    // Enqueue before access control and dispatch so eligible raw messages keep
+    // socket order. Persistence is asynchronous and best-effort: a full queue
+    // or busy database drops archive rows without delaying message dispatch.
+    messageArchive?.store(upsert.messages ?? []);
     for (const msg of upsert.messages ?? []) {
       rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
 
@@ -1805,6 +1829,7 @@ export async function attachWebInboxToSocket(
       } catch (err) {
         logWhatsAppVerbose(options.verbose, `Socket close failed: ${String(err)}`);
       }
+      await messageArchive?.close();
     },
     onClose,
     signalClose: (reason?: WebListenerCloseReason) => {

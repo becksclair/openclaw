@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provider.js";
 import * as protocol from "./index.js";
 import {
+  CHAT_FINAL_AUDIO_BASE64_MAX_LENGTH,
   formatValidationErrors,
   validateChatAbortParams,
+  validateChatFinalAudioGetParams,
+  validateChatFinalAudioGetResult,
   validateChatHistoryParams,
   validateChatMetadataParams,
   validateChatSendParams,
@@ -98,6 +101,7 @@ describe("lazy protocol validators", () => {
     expect(
       validateChatSendParams({
         sessionKey: "global",
+        spawnedBy: "agent:main:parent",
         agentId: "work",
         sessionId: "session-work",
         message: "hello",
@@ -143,6 +147,46 @@ describe("lazy protocol validators", () => {
         message: "/reset examples",
         suppressCommandInterpretation: true,
         idempotencyKey: "chat-run-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("validates final chat audio lookup params and results", () => {
+    expect(
+      validateChatFinalAudioGetParams({
+        sessionKey: "agent:sky:direct:bex",
+        runId: "run-1",
+        waitMs: 500,
+      }),
+    ).toBe(true);
+    expect(
+      validateChatFinalAudioGetParams({
+        sessionKey: "agent:sky:direct:bex",
+        runId: "run-1",
+        waitMs: 30_001,
+      }),
+    ).toBe(false);
+    expect(validateChatFinalAudioGetParams({ sessionKey: "", runId: "run-1" })).toBe(false);
+    expect(
+      validateChatFinalAudioGetResult({
+        found: true,
+        audioBase64: "YWJj",
+        outputFormat: "opus",
+        mimeType: "audio/ogg",
+        fileExtension: ".opus",
+        spokenText: "hi",
+      }),
+    ).toBe(true);
+    expect(
+      validateChatFinalAudioGetResult({
+        found: true,
+        audioBase64: "a".repeat(CHAT_FINAL_AUDIO_BASE64_MAX_LENGTH + 1),
+      }),
+    ).toBe(false);
+    expect(
+      validateChatFinalAudioGetResult({
+        found: false,
+        unavailableReason: "not_found",
       }),
     ).toBe(true);
   });
@@ -479,6 +523,14 @@ describe("validateTalkSession", () => {
       }),
     ).toBe(true);
     expect(
+      validateTalkSessionCreateParams({
+        mode: "transcription",
+        transport: "gateway-relay",
+        brain: "none",
+        transcriptionMode: "buffered",
+      }),
+    ).toBe(true);
+    expect(
       validateTalkSessionJoinResult({
         id: "session-1",
         roomId: "talk_room-1",
@@ -572,6 +624,7 @@ describe("validateTalkClientToolCallParams", () => {
     expect(
       validateTalkClientToolCallParams({
         sessionKey: "agent:main:main",
+        spawnedBy: "agent:main:parent",
         relaySessionId: "relay-1",
         callId: "call-1",
         name: "openclaw_agent_consult",

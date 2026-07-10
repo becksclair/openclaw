@@ -126,6 +126,12 @@ export type TranscribeAudioFileParams = {
   activeModel?: ActiveMediaModel;
   language?: string;
   prompt?: string;
+  timeoutMs?: number;
+};
+
+export type TranscribeAudioBufferParams = Omit<TranscribeAudioFileParams, "filePath"> & {
+  buffer: Buffer;
+  fileName: string;
 };
 
 export type MediaUnderstandingRuntime = {
@@ -148,5 +154,8 @@ export type MediaUnderstandingRuntime = {
   describeVideoFile: (params: DescribeVideoFileParams) => Promise<RunMediaUnderstandingFileResult>;
   transcribeAudioFile: (
     params: TranscribeAudioFileParams,
+  ) => Promise<RunMediaUnderstandingFileResult>;
+  transcribeAudioBuffer: (
+    params: TranscribeAudioBufferParams,
   ) => Promise<RunMediaUnderstandingFileResult>;
 };

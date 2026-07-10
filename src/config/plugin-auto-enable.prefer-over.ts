@@ -41,6 +41,27 @@ function resolveExternalCatalogPaths(env: NodeJS.ProcessEnv): string[] {
   ];
 }
 
+export function resolvePluginAutoEnableExternalCatalogFingerprint(env: NodeJS.ProcessEnv): string {
+  return JSON.stringify(
+    resolveExternalCatalogPaths(env).map((rawPath) => {
+      const resolved = resolveUserPath(rawPath, env);
+      try {
+        const stat = fs.statSync(resolved);
+        return {
+          path: resolved,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+        };
+      } catch {
+        return {
+          path: resolved,
+          missing: true,
+        };
+      }
+    }),
+  );
+}
+
 function parseExternalCatalogChannelEntries(raw: unknown): ExternalCatalogChannelEntry[] {
   const list = (() => {
     if (Array.isArray(raw)) {

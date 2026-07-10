@@ -98,4 +98,18 @@ describe("talk config validation fail-closed behavior", () => {
       /talk\.provider|required/i,
     );
   });
+
+  it("rejects invalid realtime Talk tool profile during config load", async () => {
+    await expectInvalidTalkConfig(
+      {
+        agents: { list: [{ id: "main" }] },
+        talk: {
+          realtime: {
+            tools: { profile: "admin" },
+          },
+        },
+      },
+      /talk|profile/i,
+    );
+  });
 });

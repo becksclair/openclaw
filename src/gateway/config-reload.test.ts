@@ -161,7 +161,12 @@ describe("buildGatewayReloadPlan", () => {
       resolveAccount: () => ({}),
     },
     reload: {
-      configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
+      configPrefixes: [
+        "web",
+        "channels.whatsapp.accounts",
+        "channels.whatsapp.archive",
+        "channels.whatsapp.selfChatMode",
+      ],
       noopPrefixes: ["channels.whatsapp"],
     },
   };
@@ -278,6 +283,14 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
     expect(plan.hotReasons).toContain("channels.whatsapp.selfChatMode");
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
+  it("restarts the WhatsApp channel when archive config changes", () => {
+    const plan = buildGatewayReloadPlan(["channels.whatsapp.archive.dbPath"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
+    expect(plan.hotReasons).toContain("channels.whatsapp.archive.dbPath");
     expect(plan.noopPaths).toStrictEqual([]);
   });
 

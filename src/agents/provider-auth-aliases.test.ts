@@ -3,10 +3,12 @@
  * Verifies plugin metadata aliases, origin priority, trust, and cache behavior.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 
 const pluginRegistryMocks = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
   return {
+    getCurrentPluginMetadataSnapshot: vi.fn(),
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
     loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
@@ -27,6 +29,16 @@ const pluginRegistryMocks = vi.hoisted(() => {
     }),
   };
 });
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: pluginRegistryMocks.getCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot: (snapshot: unknown) => {
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
+  },
+  clearCurrentPluginMetadataSnapshot: () => {
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
+  },
+}));
 
 vi.mock("../plugins/manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex:
@@ -144,6 +156,8 @@ describe("provider auth aliases", () => {
   beforeEach(() => {
     clearCurrentPluginMetadataSnapshot();
     resetProviderAuthAliasMapCacheForTest();
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReset();
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
@@ -269,5 +283,167 @@ describe("provider auth aliases", () => {
       }),
     ).toBe("provider-two");
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("reuses the active workspace current snapshot when workspaceDir is omitted", () => {
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({
+      index: {
+        plugins: [
+          {
+            pluginId: "workspace-provider",
+            origin: "workspace",
+            enabled: true,
+            enabledByDefault: true,
+          },
+        ],
+      },
+      plugins: [
+        {
+          id: "workspace-provider",
+          origin: "workspace",
+          providerAuthAliases: {
+            "workspace-provider-login": "workspace-provider",
+          },
+        },
+      ],
+    });
+
+    expect(
+      resolveProviderIdForAuth("workspace-provider-login", {
+        config: {},
+        includeUntrustedWorkspacePlugins: true,
+      }),
+    ).toBe("workspace-provider");
+    expect(pluginRegistryMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
+      config: {},
+      env: process.env,
+      allowWorkspaceScopedSnapshot: true,
+    });
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("invalidates cached aliases when the active current snapshot changes", () => {
+    const firstSnapshot = {
+      configFingerprint: "workspace-one",
+      policyHash: "policy-one",
+      workspaceDir: "/workspace-one",
+      index: {
+        plugins: [
+          {
+            pluginId: "workspace-provider-one",
+            origin: "workspace",
+            enabled: true,
+            enabledByDefault: true,
+          },
+        ],
+      },
+      plugins: [
+        {
+          id: "workspace-provider-one",
+          origin: "workspace",
+          providerAuthAliases: {
+            "workspace-provider-login": "workspace-provider-one",
+          },
+        },
+      ],
+    };
+    const secondSnapshot = {
+      configFingerprint: "workspace-two",
+      policyHash: "policy-two",
+      workspaceDir: "/workspace-two",
+      index: {
+        plugins: [
+          {
+            pluginId: "workspace-provider-two",
+            origin: "workspace",
+            enabled: true,
+            enabledByDefault: true,
+          },
+        ],
+      },
+      plugins: [
+        {
+          id: "workspace-provider-two",
+          origin: "workspace",
+          providerAuthAliases: {
+            "workspace-provider-login": "workspace-provider-two",
+          },
+        },
+      ],
+    };
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot
+      .mockReturnValueOnce(firstSnapshot)
+      .mockReturnValueOnce(secondSnapshot);
+
+    expect(
+      resolveProviderIdForAuth("workspace-provider-login", {
+        config: {},
+        includeUntrustedWorkspacePlugins: true,
+      }),
+    ).toBe("workspace-provider-one");
+    expect(
+      resolveProviderIdForAuth("workspace-provider-login", {
+        config: {},
+        includeUntrustedWorkspacePlugins: true,
+      }),
+    ).toBe("workspace-provider-two");
+  });
+
+  it("clears cached aliases at plugin metadata lifecycle boundaries", () => {
+    pluginRegistryMocks.loadPluginMetadataSnapshot
+      .mockReturnValueOnce({
+        index: {
+          plugins: [
+            {
+              pluginId: "persisted-provider-one",
+              origin: "global",
+              enabled: true,
+              enabledByDefault: true,
+            },
+          ],
+        },
+        plugins: [
+          {
+            id: "persisted-provider-one",
+            origin: "global",
+            providerAuthAliases: {
+              "persisted-provider-login": "persisted-provider-one",
+            },
+          },
+        ],
+      })
+      .mockReturnValueOnce({
+        index: {
+          plugins: [
+            {
+              pluginId: "persisted-provider-two",
+              origin: "global",
+              enabled: true,
+              enabledByDefault: true,
+            },
+          ],
+        },
+        plugins: [
+          {
+            id: "persisted-provider-two",
+            origin: "global",
+            providerAuthAliases: {
+              "persisted-provider-login": "persisted-provider-two",
+            },
+          },
+        ],
+      });
+
+    expect(
+      resolveProviderIdForAuth("persisted-provider-login", {
+        config: {},
+      }),
+    ).toBe("persisted-provider-one");
+    clearPluginMetadataLifecycleCaches();
+    expect(
+      resolveProviderIdForAuth("persisted-provider-login", {
+        config: {},
+      }),
+    ).toBe("persisted-provider-two");
   });
 });

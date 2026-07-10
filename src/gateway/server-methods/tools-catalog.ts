@@ -16,6 +16,7 @@ import {
   listCoreToolSections,
   PROFILE_OPTIONS,
   resolveCoreToolProfiles,
+  type ToolProfileId,
 } from "../../agents/tool-catalog.js";
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -39,7 +40,7 @@ type ToolCatalogEntry = {
   optional?: boolean;
   risk?: "low" | "medium" | "high";
   tags?: string[];
-  defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
+  defaultProfiles: ToolProfileId[];
 };
 
 type ToolCatalogGroup = {

@@ -25,6 +25,13 @@ export type WhatsAppActionConfig = {
 
 export type WhatsAppReactionLevel = ReactionLevel;
 
+export type WhatsAppArchiveConfig = {
+  /** Enable the raw message archive tap for this channel/account. */
+  enabled?: boolean;
+  /** SQLite file receiving archived messages (wa-fetch messages.db schema). */
+  dbPath?: string;
+};
+
 export type WhatsAppGroupConfig = {
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
@@ -114,6 +121,8 @@ type WhatsAppSharedConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: ChannelHealthMonitorConfig;
+  /** Raw inbound/outbound message archive tap (off by default). */
+  archive?: WhatsAppArchiveConfig;
 };
 
 type WhatsAppConfigCore = {

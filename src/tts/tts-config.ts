@@ -179,6 +179,32 @@ function readTtsPrefsAutoMode(prefsPath: string): TtsAutoMode | undefined {
   return undefined;
 }
 
+/** Resolve the effective Auto-TTS mode based on session, prefs, and config. */
+export function resolveEffectiveTtsAutoMode(params: {
+  cfg: OpenClawConfig;
+  ttsAuto?: string;
+  agentId?: string;
+  channelId?: string;
+  accountId?: string;
+}): TtsAutoMode | undefined {
+  const sessionAuto = normalizeTtsAutoMode(params.ttsAuto);
+  if (sessionAuto) {
+    return sessionAuto;
+  }
+
+  const raw = resolveEffectiveTtsConfig(params.cfg, params);
+  const prefsAuto = readTtsPrefsAutoMode(resolveTtsPrefsPathValue(raw?.prefsPath));
+  if (prefsAuto) {
+    return prefsAuto;
+  }
+
+  const configuredAuto = normalizeTtsAutoMode(raw?.auto);
+  if (configuredAuto) {
+    return configuredAuto;
+  }
+  return raw?.enabled === true ? "always" : undefined;
+}
+
 /** Return whether this payload should attempt TTS based on session, prefs, and config. */
 export function shouldAttemptTtsPayload(params: {
   cfg: OpenClawConfig;
@@ -187,22 +213,8 @@ export function shouldAttemptTtsPayload(params: {
   channelId?: string;
   accountId?: string;
 }): boolean {
-  const sessionAuto = normalizeTtsAutoMode(params.ttsAuto);
-  if (sessionAuto) {
-    return sessionAuto !== "off";
-  }
-
-  const raw = resolveEffectiveTtsConfig(params.cfg, params);
-  const prefsAuto = readTtsPrefsAutoMode(resolveTtsPrefsPathValue(raw?.prefsPath));
-  if (prefsAuto) {
-    return prefsAuto !== "off";
-  }
-
-  const configuredAuto = normalizeTtsAutoMode(raw?.auto);
-  if (configuredAuto) {
-    return configuredAuto !== "off";
-  }
-  return raw?.enabled === true;
+  const autoMode = resolveEffectiveTtsAutoMode(params);
+  return Boolean(autoMode && autoMode !== "off");
 }
 
 /** Return whether TTS directive markup should be stripped from user-visible text. */

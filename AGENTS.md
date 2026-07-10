@@ -125,6 +125,8 @@ Skills own workflows; root owns hard policy and routing.
 - Typecheck: `tsgo` lanes only (`pnpm tsgo*`, `pnpm check:test-types`); never add `tsc --noEmit`, `typecheck`, `check:types`.
 - Formatting: `oxfmt`, not Prettier. Use repo wrappers (`pnpm format:*`, `scripts/run-oxlint.mjs`; full `pnpm lint:*` only when scope requires).
 - Build before push when build output, packaging, lazy/module boundaries, dynamic imports, or published surfaces can change; agent builds default to the selected remote box unless platform-specific proof requires another remote host.
+- Bex fork replay: broad build/test/check proof runs in a clean Docker validation container via `$openclaw-fork-replay`, not Testbox, unless Bex explicitly asks otherwise.
+- Docker lanes: `pnpm test:docker:local:all` is the clean local Docker E2E lane; `pnpm test:docker:all` includes live Docker lanes only when intentionally requested.
 
 ## Validation
 
@@ -136,6 +138,8 @@ Skills own workflows; root owns hard policy and routing.
 - In Codex worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
 - Full suites, changed gates, builds, typechecks, lint fan-out, Docker/package/E2E/live/cross-OS proof, or anything computationally intensive: Crabbox/Testbox.
 - If an allowed local fallback fans out or becomes expensive, stop it and move the work to the pre-warmed remote box.
+- Bex fork replay is the exception to the Testbox default: use the clean Docker validation workflow documented by `$openclaw-fork-replay` for broad proof, without mounting Bex's real `~/.openclaw`, credentials, Gateway state, private plugin install records, or session data unless a proof explicitly requires them.
+- Host-local replay checks are for narrow loops and intentionally local proof only: private plugin runtime wiring, Gateway status, credential-backed live checks, OS/device state, or verifier scripts such as `scripts/verify-codex-devbox-acp.js`.
 - Before handoff/push: prove touched surface. Before landing to `main`: issue proof plus appropriate full/broad proof unless scope is clearly narrow.
 - Pre-land/pre-commit code changes: mandatory fresh `$autoreview` until no accepted/actionable findings remain. Do not land code on CI, ClawSweeper, prior review comments, or your own manual review alone unless user explicitly opts out or scope is truly trivial/docs-only. If findings want refactor, refactor; no ugly fixes.
 - If proof is blocked, say exactly what is missing and why.

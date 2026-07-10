@@ -15,8 +15,9 @@ import {
  */
 export function listBundledChannelIdsWithConfiguredState(
   discovery?: PluginDiscoveryResult,
+  env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  return listBundledChannelIdsForPackageState("configuredState", discovery);
+  return listBundledChannelIdsForPackageState("configuredState", discovery, env);
 }
 
 /**

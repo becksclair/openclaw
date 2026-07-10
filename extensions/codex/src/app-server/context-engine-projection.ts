@@ -80,6 +80,7 @@ export function projectContextEngineAssemblyForCodex(params: {
 /** Resolves rendered context size from a token budget and reserve. */
 export function resolveCodexContextEngineProjectionMaxChars(params: {
   contextTokenBudget?: number;
+  minimumRenderedContextChars?: number;
   reserveTokens?: number;
 }): number {
   const contextTokenBudget =
@@ -94,7 +95,9 @@ export function resolveCodexContextEngineProjectionMaxChars(params: {
       contextTokenBudget,
       reserveTokens: params.reserveTokens,
     }) * APPROX_RENDERED_CHARS_PER_TOKEN;
-  return normalizeRenderedContextMaxChars(scaledChars);
+  return normalizeRenderedContextMaxChars(scaledChars, {
+    minimumChars: params.minimumRenderedContextChars,
+  });
 }
 
 /** Reads Codex projection reserve tokens from compaction config. */
@@ -467,14 +470,23 @@ function hasMessageContent(message: AgentMessage): message is AgentMessage & { c
   return "content" in message;
 }
 
-function normalizeRenderedContextMaxChars(value: unknown): number {
+function normalizeRenderedContextMaxChars(
+  value: unknown,
+  options: { minimumChars?: number } = {},
+): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_RENDERED_CONTEXT_CHARS;
   }
-  return Math.min(
-    MAX_RENDERED_CONTEXT_CHARS,
-    Math.max(DEFAULT_RENDERED_CONTEXT_CHARS, Math.floor(value)),
-  );
+  if (value <= 0) {
+    return 0;
+  }
+  const minimumChars =
+    typeof options.minimumChars === "number" &&
+    Number.isFinite(options.minimumChars) &&
+    options.minimumChars >= 0
+      ? Math.floor(options.minimumChars)
+      : DEFAULT_RENDERED_CONTEXT_CHARS;
+  return Math.min(MAX_RENDERED_CONTEXT_CHARS, Math.max(minimumChars, Math.floor(value)));
 }
 
 function resolveTextPartMaxChars(maxRenderedContextChars: number): number {

@@ -75,4 +75,9 @@ describe("tool-catalog", () => {
     const policy = requireCoreToolProfilePolicy("full");
     expect(policy.allow).toEqual(["*"]);
   });
+
+  it("voice profile starts with broad local-user access", () => {
+    const policy = requireCoreToolProfilePolicy("voice");
+    expect(policy.allow).toEqual(["*"]);
+  });
 });

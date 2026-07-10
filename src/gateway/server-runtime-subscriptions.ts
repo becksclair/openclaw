@@ -58,6 +58,7 @@ export function startGatewayEventSubscriptions(params: {
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
+  clearChatRunState?: (runId: string) => void;
 }) {
   // audit.enabled=false stops ledger writes entirely; reads over existing
   // records keep working. Resolved once at gateway startup like the other
@@ -87,6 +88,7 @@ export function startGatewayEventSubscriptions(params: {
             toolEventRecipients: params.toolEventRecipients,
             sessionEventSubscribers: params.sessionEventSubscribers,
             sessionMessageSubscribers: params.sessionMessageSubscribers,
+            clearChatRunState: params.clearChatRunState,
             updateRunToolErrorSummary: ({ runId, clientRunId, summary }) => {
               for (const candidateRunId of new Set([runId, clientRunId])) {
                 const entry = params.chatAbortControllers.get(candidateRunId);

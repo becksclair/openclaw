@@ -292,6 +292,7 @@ function createLazyGoogleRealtimeVoiceBridge(
     handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
     submitToolResult: (callId, result, options) =>
       requireBridge().submitToolResult(callId, result, options),
+    submitToolResults: (results, options) => requireBridge().submitToolResults?.(results, options),
     acknowledgeMark: () => requireBridge().acknowledgeMark(),
     close: () => {
       closed = true;

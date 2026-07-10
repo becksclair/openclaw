@@ -161,6 +161,40 @@ describe("resolveWhatsAppAuthDir", () => {
     expect(resolved.groupPolicy).toBe("open");
   });
 
+  it("merges partial archive overrides for default and named accounts", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          archive: {
+            enabled: true,
+            dbPath: "/tmp/root-messages.db",
+          },
+          accounts: {
+            default: {
+              archive: {
+                enabled: false,
+              },
+            },
+            work: {
+              archive: {
+                dbPath: "/tmp/work-messages.db",
+              },
+            },
+          },
+        },
+      },
+    } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"];
+
+    expect(resolveWhatsAppAccount({ cfg }).archive).toEqual({
+      enabled: false,
+      dbPath: "/tmp/root-messages.db",
+    });
+    expect(resolveWhatsAppAccount({ cfg, accountId: "work" }).archive).toEqual({
+      enabled: false,
+      dbPath: "/tmp/work-messages.db",
+    });
+  });
+
   it("does not inherit default-account authDir for named accounts", () => {
     const resolved = resolveWhatsAppAccount({
       cfg: {

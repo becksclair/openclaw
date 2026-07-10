@@ -4,10 +4,11 @@ import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.chatSendAckHistorySinceSeconds
 import ai.openclaw.app.gateway.parseChatSendAck
+import ai.openclaw.common.speech.SpeechRecognizerHelper
+import ai.openclaw.common.speech.bestRecognitionText
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -211,7 +212,13 @@ class TalkModeManager internal constructor(
   private var interruptOnSpeech: Boolean = false
   private var mainSessionKey: String = "main"
 
+  private val pendingRunLock = Any()
+
   @Volatile private var pendingRunId: String? = null
+
+  // PTT completion uses the send-time session; visible chat can switch while the
+  // run is in flight.
+  @Volatile private var pendingRunSessionKey: String? = null
   private var pendingFinal: CompletableDeferred<Boolean>? = null
   private val completedRunsLock = Any()
   private val completedRunStates = LinkedHashMap<String, Boolean>()
@@ -220,6 +227,8 @@ class TalkModeManager internal constructor(
   private val startGeneration = AtomicLong(0L)
 
   @Volatile private var realtimeSessionId: String? = null
+
+  @Volatile private var realtimeSessionKey: String? = null
   private var realtimeCaptureJob: Job? = null
   private var realtimeAppendJob: Job? = null
   private val realtimeCapturePauseLock = Any()
@@ -749,8 +758,14 @@ class TalkModeManager internal constructor(
 
     // Only speak events for the active session — prevents TTS from other
     // sessions/channels leaking into voice mode (privacy + correctness).
+    val (pending, pendingSession) = synchronized(pendingRunLock) { pendingRunId to pendingRunSessionKey }
     val eventSession = obj["sessionKey"]?.asStringOrNull()
-    val activeSession = mainSessionKey.ifBlank { "main" }
+    val activeSession =
+      if (pending == runId && pendingSession != null) {
+        pendingSession
+      } else {
+        realtimeSessionKey ?: normalizeSessionKey(mainSessionKey)
+      }
     if (eventSession != null && eventSession != activeSession) return
 
     if (handleRealtimeToolCompletion(runId = runId, state = state, messageEl = obj["message"])) {
@@ -759,7 +774,6 @@ class TalkModeManager internal constructor(
 
     // If this is a response we initiated, handle normally below.
     // Otherwise, if ttsOnAllResponses, finish streaming TTS on terminal events.
-    val pending = pendingRunId
     val knownRun = pending == runId || hasRunCompletion(runId)
     if (!knownRun) {
       if (ttsOnAllResponses && state == "final") {
@@ -770,7 +784,7 @@ class TalkModeManager internal constructor(
       }
       return
     }
-    Log.d(tag, "chat event arrived runId=$runId state=$state pendingRunId=$pendingRunId")
+    Log.d(tag, "chat event arrived runId=$runId state=$state pendingRunId=$pending")
     val terminal =
       when (state) {
         "final" -> true
@@ -791,10 +805,13 @@ class TalkModeManager internal constructor(
     }
     cacheRunCompletion(runId, terminal)
 
-    if (runId != pendingRunId) return
+    if (!synchronized(pendingRunLock) { pendingRunId == runId }) return
     pendingFinal?.complete(terminal)
     pendingFinal = null
-    pendingRunId = null
+    synchronized(pendingRunLock) {
+      pendingRunId = null
+      pendingRunSessionKey = null
+    }
   }
 
   internal suspend fun runE2eRealtimeTurn(
@@ -882,7 +899,10 @@ class TalkModeManager internal constructor(
     _statusText.value = "Off"
     stopRealtimeRelay()
     stopSpeaking()
-    pendingRunId = null
+    synchronized(pendingRunLock) {
+      pendingRunId = null
+      pendingRunSessionKey = null
+    }
     pendingFinal?.cancel()
     pendingFinal = null
     synchronized(completedRunsLock) {
@@ -941,9 +961,10 @@ class TalkModeManager internal constructor(
     }
 
     _statusText.value = "Connecting…"
+    val targetSessionKey = normalizeSessionKey(mainSessionKey)
     val params =
       buildJsonObject {
-        put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
+        put("sessionKey", JsonPrimitive(targetSessionKey))
         put("mode", JsonPrimitive("realtime"))
         put("transport", JsonPrimitive("gateway-relay"))
         put("brain", JsonPrimitive("agent-consult"))
@@ -965,6 +986,8 @@ class TalkModeManager internal constructor(
         // Session publication and capture installation are one transition. PTT
         // therefore either blocks startup or detaches every installed capture job.
         realtimeSessionId = sessionId
+        // Track the relay session key so wear routing targets the active talk session.
+        realtimeSessionKey = targetSessionKey
         val pause = realtimeCapturePause
         if (pause != null) {
           realtimeCapturePause = pause.copy(sessionId = sessionId)
@@ -1339,6 +1362,7 @@ class TalkModeManager internal constructor(
         val currentSessionId = realtimeSessionId
         val currentCaptureJobs = realtimeCaptureJob to realtimeAppendJob
         realtimeSessionId = null
+        realtimeSessionKey = null
         realtimeCaptureJob = null
         realtimeAppendJob = null
         realtimeCapturePause = null
@@ -1469,13 +1493,20 @@ class TalkModeManager internal constructor(
     forced: Boolean = false,
   ) {
     val relaySessionId = realtimeSessionId ?: return
+    // Route the tool call to the active relay session key so wear targets stay in sync.
+    val relaySessionKey = realtimeSessionKey ?: normalizeSessionKey(mainSessionKey)
     synchronized(realtimeToolLock) {
       pendingRealtimeToolCalls.add(callId)
     }
     gatewayWorkScope.launch {
       try {
         if (name == REALTIME_AGENT_CONTROL_TOOL) {
-          submitRealtimeAgentControl(callId = callId, relaySessionId = relaySessionId, args = args)
+          submitRealtimeAgentControl(
+            callId = callId,
+            relaySessionId = relaySessionId,
+            sessionKey = relaySessionKey,
+            args = args,
+          )
           return@launch
         }
         if (forced) {
@@ -1483,7 +1514,7 @@ class TalkModeManager internal constructor(
         }
         val params =
           buildJsonObject {
-            put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
+            put("sessionKey", JsonPrimitive(relaySessionKey))
             put("callId", JsonPrimitive(callId))
             put("name", JsonPrimitive(name))
             put("relaySessionId", JsonPrimitive(relaySessionId))
@@ -1658,6 +1689,7 @@ class TalkModeManager internal constructor(
   private suspend fun submitRealtimeAgentControl(
     callId: String,
     relaySessionId: String,
+    sessionKey: String,
     args: JsonElement?,
   ) {
     val argsObject = args.asObjectOrNull()
@@ -1675,7 +1707,7 @@ class TalkModeManager internal constructor(
     val params =
       buildJsonObject {
         put("sessionId", JsonPrimitive(relaySessionId))
-        put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
+        put("sessionKey", JsonPrimitive(sessionKey))
         put("text", JsonPrimitive(text.ifEmpty { "status" }))
         if (!mode.isNullOrEmpty()) put("mode", JsonPrimitive(mode))
       }
@@ -1914,11 +1946,7 @@ class TalkModeManager internal constructor(
   private fun startListeningInternal(markListening: Boolean) {
     val r = recognizer ?: return
     val intent =
-      Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-        putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
+      SpeechRecognizerHelper.createRecognizerIntent(context.packageName).apply {
         // Use cloud recognition — it handles natural speech and pauses better
         // than on-device which cuts off aggressively after short silences.
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500)
@@ -2043,8 +2071,9 @@ class TalkModeManager internal constructor(
 
     try {
       val startedAt = System.currentTimeMillis().toDouble() / 1000.0
-      Log.d(tag, "chat.send start sessionKey=${mainSessionKey.ifBlank { "main" }} chars=${prompt.length}")
-      val ack = sendChat(prompt, session)
+      val targetSessionKey = normalizeSessionKey(mainSessionKey)
+      Log.d(tag, "chat.send start sessionKey=$targetSessionKey chars=${prompt.length}")
+      val ack = sendChat(prompt, session, targetSessionKey)
       val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
       Log.d(tag, "chat.send ok runId=$runId status=${ack.status}")
       if (ack.isTerminalFailure) {
@@ -2060,9 +2089,10 @@ class TalkModeManager internal constructor(
       val assistant =
         consumeRunText(runId)
           ?: waitForAssistantText(
-            session,
-            chatSendAckHistorySinceSeconds(ack, startedAt),
-            if (ok) 12_000 else 25_000,
+            session = session,
+            sinceSeconds = chatSendAckHistorySinceSeconds(ack, startedAt),
+            timeoutMs = if (ok) 12_000 else 25_000,
+            sessionKey = targetSessionKey,
           )
       if (assistant.isNullOrBlank()) {
         _statusText.value = "No reply"
@@ -2145,15 +2175,60 @@ class TalkModeManager internal constructor(
     return lines.joinToString("\n")
   }
 
+  private suspend fun runRealtimeConsult(argsJson: String?): String {
+    val message = buildRealtimeConsultPrompt(argsJson)
+    val startedAt = System.currentTimeMillis().toDouble() / 1000.0
+    val targetSessionKey = normalizeSessionKey(mainSessionKey)
+    val ack = sendChat(message, session, targetSessionKey)
+    val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
+    val ok = if (ack.isTerminalSuccess) true else waitForChatFinal(runId)
+    return consumeRunText(runId)
+      ?: waitForAssistantText(session, startedAt, if (ok) 12_000 else 25_000, targetSessionKey)
+      ?: "OpenClaw finished with no text."
+  }
+
+  internal suspend fun runRealtimeConsultForWear(argsJson: String?): String = runRealtimeConsult(argsJson)
+
+  private fun buildRealtimeConsultPrompt(argsJson: String?): String {
+    val args =
+      runCatching { argsJson?.let { json.parseToJsonElement(it).asObjectOrNull() } }
+        .getOrNull()
+    val question =
+      args
+        ?.get("question")
+        .asStringOrNull()
+        ?.trim()
+        .orEmpty()
+    if (question.isEmpty()) throw IllegalArgumentException("openclaw_agent_consult requires a question")
+    val context =
+      args
+        ?.get("context")
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    val responseStyle =
+      args
+        ?.get("responseStyle")
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    return listOfNotNull(
+      question,
+      context?.let { "Context:\n$it" },
+      responseStyle?.let { "Spoken style:\n$it" },
+    ).joinToString("\n\n")
+  }
+
   private suspend fun sendChat(
     message: String,
     session: GatewaySession,
+    targetSessionKey: String = normalizeSessionKey(mainSessionKey),
   ): ChatSendAck {
     val runId = UUID.randomUUID().toString()
-    armPendingRun(runId)
+    armPendingRun(runId, targetSessionKey)
     val params =
       buildJsonObject {
-        put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
+        put("sessionKey", JsonPrimitive(targetSessionKey))
         put("message", JsonPrimitive(message))
         put("thinking", JsonPrimitive("low"))
         put("timeoutMs", JsonPrimitive(30_000))
@@ -2164,7 +2239,10 @@ class TalkModeManager internal constructor(
       val parsed = parseChatSendAck(json, res)
       val actualRunId = parsed.runId ?: runId
       if (actualRunId != runId) {
-        pendingRunId = actualRunId
+        synchronized(pendingRunLock) {
+          pendingRunId = actualRunId
+          pendingRunSessionKey = targetSessionKey
+        }
       }
       if (parsed.isTerminal) {
         clearPendingRun(actualRunId)
@@ -2179,7 +2257,7 @@ class TalkModeManager internal constructor(
   internal suspend fun waitForChatFinal(runId: String): Boolean {
     consumeRunCompletion(runId)?.let { return it }
     val deferred =
-      if (pendingRunId == runId) {
+      if (synchronized(pendingRunLock) { pendingRunId == runId }) {
         pendingFinal ?: armPendingRun(runId)
       } else {
         armPendingRun(runId)
@@ -2194,25 +2272,39 @@ class TalkModeManager internal constructor(
         false
       }
 
-    if (!result && pendingRunId == runId) {
+    if (!result && synchronized(pendingRunLock) { pendingRunId == runId }) {
       clearPendingRun(runId)
     }
     return result
   }
 
-  private fun armPendingRun(runId: String): CompletableDeferred<Boolean> {
+  private fun armPendingRun(
+    runId: String,
+    sessionKey: String = normalizeSessionKey(mainSessionKey),
+  ): CompletableDeferred<Boolean> {
     pendingFinal?.cancel()
     val deferred = CompletableDeferred<Boolean>()
-    pendingRunId = runId
+    synchronized(pendingRunLock) {
+      pendingRunId = runId
+      pendingRunSessionKey = sessionKey
+    }
     pendingFinal = deferred
     return deferred
   }
 
   private fun clearPendingRun(runId: String) {
-    if (pendingRunId == runId) {
+    if (synchronized(pendingRunLock) { pendingRunId == runId }) {
       pendingFinal = null
-      pendingRunId = null
+      synchronized(pendingRunLock) {
+        pendingRunId = null
+        pendingRunSessionKey = null
+      }
     }
+  }
+
+  private fun normalizeSessionKey(sessionKey: String?): String {
+    val trimmed = sessionKey?.trim().orEmpty()
+    return trimmed.ifEmpty { "main" }
   }
 
   private fun cacheRunCompletion(
@@ -2252,10 +2344,11 @@ class TalkModeManager internal constructor(
     session: GatewaySession,
     sinceSeconds: Double?,
     timeoutMs: Long,
+    sessionKey: String = normalizeSessionKey(mainSessionKey),
   ): String? {
     val deadline = SystemClock.elapsedRealtime() + timeoutMs
     while (SystemClock.elapsedRealtime() < deadline) {
-      val text = fetchLatestAssistantText(session, sinceSeconds)
+      val text = fetchLatestAssistantText(session, sinceSeconds, sessionKey)
       if (!text.isNullOrBlank()) return text
       delay(300)
     }
@@ -2265,8 +2358,9 @@ class TalkModeManager internal constructor(
   private suspend fun fetchLatestAssistantText(
     session: GatewaySession,
     sinceSeconds: Double? = null,
+    sessionKey: String = normalizeSessionKey(mainSessionKey),
   ): String? {
-    val key = mainSessionKey.ifBlank { "main" }
+    val key = sessionKey
     val res = requestGateway("chat.history", "{\"sessionKey\":\"$key\"}")
     val root = json.parseToJsonElement(res).asObjectOrNull() ?: return null
     val messages = root["messages"] as? JsonArray ?: return null
@@ -2792,35 +2886,19 @@ class TalkModeManager internal constructor(
       override fun onError(error: Int) {
         if (stopRequested) return
         _isListening.value = false
-        if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-          _statusText.value = "Microphone permission required"
-          return
-        }
-
-        _statusText.value =
-          when (error) {
-            SpeechRecognizer.ERROR_AUDIO -> "Audio error"
-            SpeechRecognizer.ERROR_CLIENT -> "Client error"
-            SpeechRecognizer.ERROR_NETWORK -> "Network error"
-            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
-            SpeechRecognizer.ERROR_NO_MATCH -> "Listening"
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy"
-            SpeechRecognizer.ERROR_SERVER -> "Server error"
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Listening"
-            else -> "Speech error ($error)"
-          }
+        _statusText.value = SpeechRecognizerHelper.errorMessage(error)
+        // Permission errors are not transient; retrying would loop forever.
+        if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) return
         scheduleRestart(delayMs = 600)
       }
 
       override fun onResults(results: Bundle?) {
-        val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-        list.firstOrNull()?.let { handleTranscript(it, isFinal = true) }
+        results.bestRecognitionText().takeIf { it.isNotEmpty() }?.let { handleTranscript(it, isFinal = true) }
         scheduleRestart()
       }
 
       override fun onPartialResults(partialResults: Bundle?) {
-        val list = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-        list.firstOrNull()?.let { handleTranscript(it, isFinal = false) }
+        partialResults.bestRecognitionText().takeIf { it.isNotEmpty() }?.let { handleTranscript(it, isFinal = false) }
       }
 
       override fun onEvent(

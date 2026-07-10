@@ -696,7 +696,7 @@ function normalizeModelRunThinking(value: unknown): ThinkLevel | undefined {
   const normalized = normalizeThinkLevel(value);
   if (!normalized) {
     throw new Error(
-      "Invalid thinking level. Use one of: off, minimal, low, medium, high, adaptive, xhigh, max.",
+      "Invalid thinking level. Use one of: off, minimal, low, medium, high, adaptive, xhigh, max, ultra.",
     );
   }
   return normalized;

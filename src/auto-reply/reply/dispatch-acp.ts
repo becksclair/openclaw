@@ -31,6 +31,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+import { buildTtsPrepareHook } from "../../tts/tts-prepare-hook.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -48,6 +49,7 @@ import {
 import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import { markGeneratedTtsLocalMediaTrusted } from "./tts-trusted-media.js";
 
 const dispatchAcpManagerRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-manager.runtime.js"),
@@ -316,6 +318,15 @@ async function finalizeAcpTurnOutput(params: {
     ttsStatus != null && !(ttsStatus.autoMode === "inbound" && !params.inboundAudio);
 
   let finalMediaDelivered = false;
+  // NOTE: TTS synthesis stays inline (awaited) on the ACP path, unlike the main
+  // dispatch path which detaches it off the reply operation's lane. The ACP path
+  // has no ReplyOperation and no runAfterReplyOperationClear seam to start a
+  // detached task after the lane frees, and `delivery.deliver` mutates
+  // turn-local coordinator state (routedCounts/deliveredFinalReply) that is
+  // snapshotted synchronously at turn end (finishAcpDispatchAttempt ->
+  // applyRoutedCounts). A detached send here would deliver after that snapshot
+  // and could drop audio or corrupt the reported outcome. Deferred as a
+  // documented follow-up; see attach-swift-adleman.md ACP-direct caveat.
   if (ttsMode === "final" && hasAccumulatedBlockText && canAttemptFinalTts) {
     try {
       const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
@@ -328,17 +339,24 @@ async function finalizeAcpTurnOutput(params: {
         ttsAuto: params.sessionTtsAuto,
         agentId: params.agentId,
         accountId: params.ttsAccountId,
+        prepareHook: buildTtsPrepareHook({
+          agentId: params.agentId,
+          channelId: params.ttsChannel,
+          accountId: params.ttsAccountId,
+        }),
       });
       if (ttsSyntheticReply.mediaUrl) {
         const delivered = await params.delivery.deliver(
           "final",
           markReplyPayloadAsTtsSupplement(
-            {
-              mediaUrl: ttsSyntheticReply.mediaUrl,
-              audioAsVoice: ttsSyntheticReply.audioAsVoice,
-              spokenText: accumulatedBlockTtsText,
-              trustedLocalMedia: true,
-            },
+            markGeneratedTtsLocalMediaTrusted({
+              input: { text: accumulatedBlockTtsText },
+              output: {
+                mediaUrl: ttsSyntheticReply.mediaUrl,
+                audioAsVoice: ttsSyntheticReply.audioAsVoice,
+                spokenText: accumulatedBlockTtsText,
+              },
+            }),
             accumulatedBlockTtsText,
             { visibleTextAlreadyDelivered: true },
           ),

@@ -394,7 +394,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.contextEngine = contextEngine;
-    params.contextTokenBudget = 321;
+    params.contextTokenBudget = 1_024;
     params.requestedModelId = "gpt-5.4-codex-primary";
     params.fallbackReason = "provider_unavailable";
     params.degradedReason = "context_overflow";
@@ -432,7 +432,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     >[0];
     expect(assembleParams.sessionId).toBe("session-1");
     expect(assembleParams.sessionKey).toBe("agent:main:session-1");
-    expect(assembleParams.tokenBudget).toBe(321);
+    expect(assembleParams.tokenBudget).toBe(1_024);
     expect(assembleParams.citationsMode).toBe("on");
     expect(assembleParams.model).toBe("gpt-5.4-codex");
     expect(assembleParams.runtimeSettings).toMatchObject({
@@ -446,6 +446,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         degradedReason: "context_overflow",
       },
     });
+    expect(assembleParams.runtimeSettings?.limits.contextEngineBudget).toMatchObject({
+      schemaVersion: 1,
+      promptTokenBudget: 1_024,
+      source: "host_estimate",
+    });
+    expect(
+      assembleParams.runtimeSettings?.limits.contextEngineBudget?.nonEnginePromptTokens,
+    ).toBeGreaterThan(0);
+    expect(assembleParams.runtimeContext?.contextEngineBudget).toEqual(
+      assembleParams.runtimeSettings?.limits.contextEngineBudget,
+    );
     expect(assembleParams.prompt).toBe("hello");
     expect(assembleParams.messages.map((message) => message.role)).toEqual(["assistant"]);
     expect(assembleParams.availableTools).toEqual(new Set());
@@ -459,6 +470,47 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.completeTurn();
     await run;
     expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("subtracts before_prompt_build prompt additions from active context-engine budgets", async () => {
+    const beforePromptBuild = vi.fn(async () => ({
+      appendContext: `hook-owned prompt floor ${"h".repeat(120_000)}`,
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: beforePromptBuild,
+        },
+      ]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const contextEngine = createContextEngine();
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 20_000;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const assembleParams = requireFirstCallArg(contextEngine["assemble"], "assemble") as Parameters<
+      ContextEngine["assemble"]
+    >[0];
+    const budget = assembleParams.runtimeSettings?.limits.contextEngineBudget;
+    expect(budget).toMatchObject({
+      schemaVersion: 1,
+      promptTokenBudget: 20_000,
+      enginePromptTokenBudget: 0,
+      source: "host_estimate",
+    });
+    expect(budget?.nonEnginePromptTokens).toBeGreaterThan(20_000);
+    expect(assembleParams.runtimeContext?.contextEngineBudget).toEqual(budget);
+    expect(beforePromptBuild).toHaveBeenCalledOnce();
+
+    await harness.completeTurn();
+    await run;
   });
 
   it("keeps context-engine history bound to the run session when sandbox key differs", async () => {
@@ -559,7 +611,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     const inputText = getRequestInputText(harness);
-    expect(inputText.length).toBe(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
+    expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
     expect(inputText).toContain("recent anchor");
     expect(inputText).toContain("current inbound context survives");
     expect(inputText).toContain("current prompt survives");
@@ -767,6 +819,78 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     await secondHarness.completeTurn();
     await secondRun;
+  });
+
+  it("reprojects thread-bootstrap context when base prompt rotation starts a fresh thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(agentDir, "agent-base.md"), "custom sky base\n", "utf8");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("bootstrap context after base rotation", Date.now()) as never,
+    );
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+      baseInstructionsSource: "agent-file",
+      baseInstructionsFingerprint: "sha256:old",
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint:
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+        },
+      },
+    });
+    const contextEngine = createContextEngine({
+      assemble: vi.fn(async ({ messages, prompt }) => ({
+        messages: [...messages, userMessage(prompt ?? "", 10)],
+        estimatedTokens: 42,
+        systemPromptAddition: "context-engine system",
+        contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
+      })),
+    });
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-new");
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+    params.contextEngine = contextEngine;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/start",
+      "turn/start",
+    ]);
+    expect(requireRequestParams(harness, "thread/start").baseInstructions).toBe(
+      "custom sky base\n",
+    );
+    expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
+    expectRequestInputTextContains(harness, "bootstrap context after base rotation");
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-new");
+    expect(savedBinding?.baseInstructionsSource).toBe("agent-file");
+    expect(savedBinding?.baseInstructionsFingerprint).not.toBe("sha256:old");
+    expect(savedBinding?.contextEngine?.projection).toEqual({
+      schemaVersion: 1,
+      mode: "thread_bootstrap",
+      epoch: "epoch-1",
+      fingerprint: undefined,
+    });
+
+    await harness.completeTurn("completed", "thread-new");
+    await run;
   });
 
   it("resumes a matching thread-bootstrap binding even when the bootstrap turn exceeded the opt-in native byte guard", async () => {
@@ -1418,7 +1542,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         schemaVersion: 1,
         engineId: "lossless-claw",
         policyFingerprint:
-          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"contextEngineProjectionTokenBudget":399653,"projectionMaxChars":1000000}',
         projection: {
           schemaVersion: 1,
           mode: "thread_bootstrap",
@@ -1520,7 +1644,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         schemaVersion: 1,
         engineId: "lossless-claw",
         policyFingerprint:
-          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"contextEngineProjectionTokenBudget":399653,"projectionMaxChars":1000000}',
         projection: {
           schemaVersion: 1,
           mode: "thread_bootstrap",
@@ -1592,7 +1716,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         schemaVersion: 1,
         engineId: "lossless-claw",
         policyFingerprint:
-          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"contextEngineProjectionTokenBudget":399653,"projectionMaxChars":1000000}',
         projection: {
           schemaVersion: 1,
           mode: "thread_bootstrap",
@@ -1750,7 +1874,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         schemaVersion: 1,
         engineId: "lossless-claw",
         policyFingerprint:
-          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"contextEngineProjectionTokenBudget":399653,"projectionMaxChars":1000000}',
         projection: {
           schemaVersion: 1,
           mode: "thread_bootstrap",

@@ -8,6 +8,8 @@ import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayTlsParams
+import ai.openclaw.app.gateway.OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE
+import ai.openclaw.app.gateway.OPENCLAW_PAIRING_OPERATOR_SCOPES
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import android.os.Build
@@ -220,6 +222,19 @@ class ConnectionManager(
     GatewayConnectOptions(
       role = "operator",
       scopes = scopes,
+      caps = emptyList(),
+      commands = emptyList(),
+      permissions = emptyMap(),
+      client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),
+      userAgent = buildUserAgent(),
+    )
+
+  /** Connect options for the isolated pairing-management operator session. */
+  fun buildPairingOperatorConnectOptions(): GatewayConnectOptions =
+    GatewayConnectOptions(
+      role = "operator",
+      authRole = OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE,
+      scopes = OPENCLAW_PAIRING_OPERATOR_SCOPES,
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),

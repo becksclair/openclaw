@@ -274,7 +274,8 @@ function canReuseCurrentManifestRegistry(params: LoadPluginRegistryManifestParam
     params.pluginIndexFilePath === undefined &&
     params.installRecords === undefined &&
     params.candidates === undefined &&
-    params.diagnostics === undefined
+    params.diagnostics === undefined &&
+    params.now === undefined
   );
 }
 
@@ -291,7 +292,7 @@ function loadCurrentManifestRegistryForPluginRegistry(
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
   });
-  if (!current || current.registryDiagnostics.length > 0) {
+  if (!current) {
     return undefined;
   }
   const pluginIdSet = params.pluginIds === undefined ? undefined : new Set(params.pluginIds);

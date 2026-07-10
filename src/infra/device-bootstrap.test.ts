@@ -316,7 +316,13 @@ describe("device bootstrap tokens", () => {
 
   it("rejects bootstrap verification when scopes exceed the issued profile", async () => {
     const baseDir = await createTempDir();
-    const issued = await issueDeviceBootstrapToken({ baseDir });
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: {
+        roles: ["operator"],
+        scopes: ["operator.read"],
+      },
+    });
 
     await expect(
       verifyBootstrapToken(baseDir, issued.token, {
@@ -439,7 +445,6 @@ describe("device bootstrap tokens", () => {
     expect(content).toContain("bootstrap_token_scopes_stripped");
     expect(content).toContain("node.exec");
     expect(content).toContain("operator.admin");
-    expect(content).toContain("operator.read");
   });
 
   it("bounds redeemed bootstrap profiles to handoff scopes", async () => {
@@ -448,7 +453,14 @@ describe("device bootstrap tokens", () => {
       baseDir,
       profile: {
         roles: ["operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
       },
     });
 

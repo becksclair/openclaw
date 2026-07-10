@@ -19,9 +19,15 @@ data class DeviceIdentity(
 /** Owns device identity generation, persistence, and auth payload signatures. */
 class DeviceIdentityStore(
   context: Context,
+  namespace: String = "default",
 ) {
   private val json = Json { ignoreUnknownKeys = true }
-  private val identityFile = File(context.filesDir, "openclaw/identity/device.json")
+  private val identityFile =
+    if (namespace == DEFAULT_NAMESPACE) {
+      File(context.filesDir, "openclaw/identity/device.json")
+    } else {
+      File(context.filesDir, "openclaw/identity/${normalizeNamespace(namespace)}/device.json")
+    }
 
   @Volatile private var cachedIdentity: DeviceIdentity? = null
 
@@ -206,6 +212,17 @@ class DeviceIdentityStore(
     )
 
   companion object {
+    private const val DEFAULT_NAMESPACE = "default"
     private val HEX = "0123456789abcdef".toCharArray()
+
+    private fun normalizeNamespace(namespace: String): String {
+      val normalized =
+        namespace
+          .trim()
+          .lowercase()
+          .replace(Regex("[^a-z0-9._-]+"), "-")
+          .trim('-', '.', '_')
+      return normalized.ifEmpty { DEFAULT_NAMESPACE }
+    }
   }
 }

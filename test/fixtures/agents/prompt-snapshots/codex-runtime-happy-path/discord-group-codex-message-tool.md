@@ -225,20 +225,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 53471,
-    "roughTokens": 13368
+    "chars": 53708,
+    "roughTokens": 13427
   },
   "openClawDeveloperInstructions": {
-    "chars": 3245,
-    "roughTokens": 812
+    "chars": 3684,
+    "roughTokens": 921
   },
   "totalTextOnly": {
-    "chars": 27770,
-    "roughTokens": 6943
+    "chars": 28209,
+    "roughTokens": 7053
   },
   "totalWithDynamicToolsJson": {
-    "chars": 81243,
-    "roughTokens": 20311
+    "chars": 81919,
+    "roughTokens": 20480
   },
   "userInputText": {
     "chars": 1442,
@@ -423,9 +423,15 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ### Developer: OpenClaw Runtime Instructions
 
 ````text
-You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
+OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
 Deferred searchable OpenClaw dynamic tools available: cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+
+## Messaging
+- Reply in current session -> use `message(action=send)` for visible source-channel output; normal final text stays private.
+- Cross-session messaging -> use `sessions_send(sessionKey, message)`
+- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to NO_REPLY).
+- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
@@ -658,6 +664,10 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
         },
         "mimeType": {
           "type": "string"
+        },
+        "progress": {
+          "description": "Mark this send as a mid-turn progress update. It does not count as the final source reply, so the turn continues; send the final answer without it.",
+          "type": "boolean"
         },
         "quoteText": {
           "description": "Telegram reply quote text.",

@@ -1744,7 +1744,10 @@ export class AgentSession {
    */
   setThinkingLevel(level: ThinkingLevel): void {
     const availableLevels = this.getAvailableThinkingLevels();
-    const effectiveLevel = availableLevels.includes(level) ? level : this.clampThinkingLevel(level);
+    const runtimeLevel: Exclude<ThinkingLevel, "ultra"> = level === "ultra" ? "max" : level;
+    const effectiveLevel = availableLevels.includes(runtimeLevel)
+      ? runtimeLevel
+      : this.clampThinkingLevel(runtimeLevel);
 
     // Only persist if actually changing
     const previousLevel = this.agent.state.thinkingLevel;
@@ -1812,8 +1815,11 @@ export class AgentSession {
     return this.thinkingLevel;
   }
 
-  private clampThinkingLevel(level: ThinkingLevel): ThinkingLevel {
-    return this.model ? (clampThinkingLevel(this.model, level) as ThinkingLevel) : "off";
+  private clampThinkingLevel(level: ThinkingLevel): Exclude<ThinkingLevel, "ultra"> {
+    const runtimeLevel: Exclude<ThinkingLevel, "ultra"> = level === "ultra" ? "max" : level;
+    return this.model
+      ? (clampThinkingLevel(this.model, runtimeLevel) as Exclude<ThinkingLevel, "ultra">)
+      : "off";
   }
 
   // =========================================================================

@@ -16,6 +16,7 @@ import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
+import ai.openclaw.app.ui.resolveGatewayConnectConfig
 import ai.openclaw.app.voice.VoiceConversationEntry
 import android.Manifest
 import android.app.Application
@@ -69,6 +70,8 @@ class MainViewModel(
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
   private val _startOnboardingAtGatewaySetup = MutableStateFlow(false)
   val startOnboardingAtGatewaySetup: StateFlow<Boolean> = _startOnboardingAtGatewaySetup
+  private val _pendingGatewaySetupCode = MutableStateFlow<String?>(null)
+  val pendingGatewaySetupCode: StateFlow<String?> = _pendingGatewaySetupCode
   private val _chatDraft = MutableStateFlow<ChatDraft?>(null)
   val chatDraft: StateFlow<ChatDraft?> = _chatDraft
   private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
@@ -134,6 +137,8 @@ class MainViewModel(
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
     prefs.notificationForwardingMaxEventsPerMinute
   val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
+  val sessionTargetMode: StateFlow<SessionTargetMode> = prefs.sessionTargetMode
+  val wearTargetSessionKey: StateFlow<String?> = prefs.wearTargetSessionKey
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
   val gatewayControlPage: StateFlow<NodeRuntime.GatewayControlPage?> =
@@ -429,6 +434,55 @@ class MainViewModel(
     _startOnboardingAtGatewaySetup.value = false
   }
 
+  /** Opens the native gateway setup flow with an optional setup code supplied by an app action. */
+  fun openGatewaySetup(setupCode: String?) {
+    viewModelScope.launch(Dispatchers.Default) {
+      runtimeRef.value?.disconnect()
+      prefs.setOnboardingCompleted(false)
+      _pendingGatewaySetupCode.value = setupCode
+      _startOnboardingAtGatewaySetup.value = true
+      val config =
+        setupCode?.let {
+          resolveGatewayConnectConfig(
+            useSetupCode = true,
+            setupCode = it,
+            manualHostInput = "",
+            manualPortInput = "",
+            manualTlsInput = false,
+            bootstrapTokenInput = "",
+            tokenInput = "",
+            passwordInput = "",
+          )
+        } ?: return@launch
+      val setupEndpoint = GatewayEndpoint.manual(host = config.host, port = config.port)
+      if (!resetGatewaySetupAuth(setupEndpoint.stableId)) return@launch
+      prefs.setManualEnabled(true)
+      prefs.setManualHost(config.host)
+      prefs.setManualPort(config.port)
+      prefs.setManualTls(config.tls)
+      prefs.saveGatewayCredentials(
+        stableId = setupEndpoint.stableId,
+        token = config.token,
+        bootstrapToken = config.bootstrapToken,
+        password = config.password,
+      )
+      ensureRuntime()
+        .connect(
+          setupEndpoint,
+          NodeRuntime.GatewayConnectAuth(
+            token = config.token.ifEmpty { null },
+            bootstrapToken = config.bootstrapToken.ifEmpty { null },
+            password = config.password.ifEmpty { null },
+          ),
+        )
+    }
+  }
+
+  /** Acknowledges the one-shot setup code after onboarding copies it into local form state. */
+  fun clearPendingGatewaySetupCode() {
+    _pendingGatewaySetupCode.value = null
+  }
+
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     prefs.setCanvasDebugStatusEnabled(value)
   }
@@ -468,6 +522,14 @@ class MainViewModel(
     ensureRuntime().setNotificationForwardingSessionKey(value)
   }
 
+  fun setSessionTargetMode(value: SessionTargetMode) {
+    ensureRuntime().setSessionTargetMode(value)
+  }
+
+  fun setWearTargetSessionKey(value: String?) {
+    ensureRuntime().setWearTargetSessionKey(value)
+  }
+
   fun setVoiceScreenActive(active: Boolean) {
     ensureRuntime().setVoiceScreenActive(active)
   }
@@ -482,6 +544,11 @@ class MainViewModel(
     }
     _pendingAssistantAutoSend.value = null
     _chatDraft.value = request.prompt?.let { ChatDraft(text = it, placement = ChatDraftPlacement.Replace) }
+  }
+
+  fun onAssistantInvocation() {
+    _requestedHomeDestination.value = HomeDestination.Voice
+    ensureRuntime().setMicEnabled(true)
   }
 
   fun clearRequestedHomeDestination() {
@@ -700,6 +767,10 @@ class MainViewModel(
 
   fun refreshNodesDevices() {
     ensureRuntime().refreshNodesDevices()
+  }
+
+  fun refreshPairingManagement() {
+    ensureRuntime().refreshPairingManagement()
   }
 
   fun refreshExecApprovals() {

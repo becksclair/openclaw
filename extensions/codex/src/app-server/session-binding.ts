@@ -162,6 +162,11 @@ const threadBindingSchema = z.object({
     .catch(undefined),
   networkProxyProfileName: optionalStringSchema,
   networkProxyConfigFingerprint: optionalStringSchema,
+  baseInstructionsSource: z
+    .enum(["agent-file", "runtime-profile", "external-thread"])
+    .optional()
+    .catch(undefined),
+  baseInstructionsFingerprint: optionalStringSchema,
   dynamicToolsFingerprint: optionalStringSchema,
   dynamicToolsContainDeferred: optionalBooleanSchema,
   webSearchThreadConfigFingerprint: optionalStringSchema,

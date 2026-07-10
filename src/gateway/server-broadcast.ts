@@ -38,6 +38,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "talk.event": [READ_SCOPE],
   "talk.mode": [WRITE_SCOPE],
   task: [READ_SCOPE],
+  "talk.realtime.relay": [WRITE_SCOPE],
   "update.available": [],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],
@@ -59,6 +60,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
 // scope would otherwise reject non-operator roles. Nodes act on these updates
 // (e.g. reconfiguring wake-word triggers).
 const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed", "voicewake.routing.changed"]);
+const TARGETED_ONLY_EVENTS = new Set<string>(["talk.realtime.relay"]);
 
 function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string {
   // Serialize one field through JSON.stringify so embedded values keep JSON
@@ -152,6 +154,9 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       return frameBase;
     };
     for (const c of params.clients) {
+      if (!targetConnIds && TARGETED_ONLY_EVENTS.has(event)) {
+        continue;
+      }
       if (targetConnIds && !targetConnIds.has(c.connId)) {
         continue;
       }

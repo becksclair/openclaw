@@ -116,8 +116,11 @@ import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
+  buildNotificationEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
+  isIgnorableNotificationSystemEvent,
+  isNotificationSystemEvent,
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
@@ -926,6 +929,7 @@ function normalizeHeartbeatToolNotification(
 type HeartbeatWakePayloadFlags = {
   isExecEventWake: boolean;
   isCronWake: boolean;
+  isNotificationEventWake: boolean;
   isWakePayload: boolean;
 };
 
@@ -1009,6 +1013,9 @@ function inferHeartbeatWakeSourceFromReason(reason?: string): HeartbeatWakeSourc
   if (trimmed.startsWith("cron:")) {
     return "cron";
   }
+  if (trimmed === "notifications-event") {
+    return "notifications-event";
+  }
   if (trimmed === "wake" || trimmed.startsWith("hook:")) {
     return "hook";
   }
@@ -1024,10 +1031,13 @@ function resolveHeartbeatWakePayloadFlags(params: {
 }): HeartbeatWakePayloadFlags {
   const source = params.source ?? inferHeartbeatWakeSourceFromReason(params.reason);
   const reason = (params.reason ?? "").trim();
+  const isNotificationEventWake = source === "notifications-event";
   return {
     isExecEventWake: source === "exec-event",
     isCronWake: source === "cron",
-    isWakePayload: source === "hook" || source === "acp-spawn" || reason === "wake",
+    isNotificationEventWake,
+    isWakePayload:
+      source === "hook" || source === "acp-spawn" || isNotificationEventWake || reason === "wake",
   };
 }
 
@@ -1072,6 +1082,9 @@ async function resolveHeartbeatPreflight(params: {
   const shouldInspectWakePendingEvents = (() => {
     if (!wakeFlags.isWakePayload) {
       return false;
+    }
+    if (wakeFlags.isNotificationEventWake) {
+      return true;
     }
     if (params.heartbeat?.isolatedSession !== true) {
       return true;
@@ -1151,9 +1164,36 @@ type HeartbeatPromptResolution = {
   hasExecCompletion: boolean;
   hasRelayableExecCompletion: boolean;
   hasCronEvents: boolean;
+  hasNotificationEvents: boolean;
+  hasIgnorableNotificationEvents: boolean;
   hasDueCommitments: boolean;
   usesHeartbeatResponseTool: boolean;
 };
+
+// Notifications tagged by the gateway as authored by one of our own agents
+// (e.g. Sky's own channel message echoed to the phone) carry a
+// `notification:self:` context key and are routed through the ignorable path so
+// they never wake the model.
+function isSelfAuthoredNotificationEntry(event: SystemEvent): boolean {
+  return event.contextKey?.startsWith("notification:self:") === true;
+}
+
+function isNotificationSystemEventEntry(event: SystemEvent): boolean {
+  return (
+    event.contextKey?.startsWith("notification:") === true &&
+    !isSelfAuthoredNotificationEntry(event) &&
+    isNotificationSystemEvent(event.text) &&
+    !isIgnorableNotificationSystemEvent(event.text)
+  );
+}
+
+function isIgnorableNotificationSystemEventEntry(event: SystemEvent): boolean {
+  return (
+    event.contextKey?.startsWith("notification:") === true &&
+    isNotificationSystemEvent(event.text) &&
+    (isSelfAuthoredNotificationEntry(event) || isIgnorableNotificationSystemEvent(event.text))
+  );
+}
 
 function resolveDueHeartbeatTasks(
   preflight: Pick<HeartbeatPreflight, "session" | "tasks">,
@@ -1247,22 +1287,54 @@ function resolveHeartbeatRunPrompt(params: {
   runScope: HeartbeatRunScope;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
-  const cronEvents = pendingEventEntries
-    .filter(
-      (event) =>
-        (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
-        isCronSystemEvent(event.text),
-    )
-    .map((event) => event.text);
-  const execEvents = params.preflight.shouldInspectPendingEvents
-    ? pendingEventEntries
-        .filter((event) => isExecCompletionEvent(event.text))
-        .map((event) => event.text)
-    : [];
+  const cronEvents = params.preflight.isNotificationEventWake
+    ? []
+    : pendingEventEntries
+        .filter(
+          (event) =>
+            (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
+            isCronSystemEvent(event.text),
+        )
+        .map((event) => event.text);
+  const notificationEvents =
+    params.preflight.isNotificationEventWake && params.preflight.shouldInspectPendingEvents
+      ? pendingEventEntries.filter(isNotificationSystemEventEntry).map((event) => event.text)
+      : [];
+  const ignorableNotificationEvents =
+    params.preflight.isNotificationEventWake && params.preflight.shouldInspectPendingEvents
+      ? pendingEventEntries
+          .filter(isIgnorableNotificationSystemEventEntry)
+          .map((event) => event.text)
+      : [];
+  const execEvents =
+    params.preflight.shouldInspectPendingEvents && !params.preflight.isNotificationEventWake
+      ? pendingEventEntries
+          .filter((event) => isExecCompletionEvent(event.text))
+          .map((event) => event.text)
+      : [];
   const hasExecCompletion = execEvents.length > 0;
   const hasRelayableExecCompletion =
     params.canRelayToUser && execEvents.some((event) => isRelayableExecCompletionEvent(event));
   const hasCronEvents = cronEvents.length > 0;
+  const hasNotificationEvents = notificationEvents.length > 0;
+  const hasIgnorableNotificationEvents = ignorableNotificationEvents.length > 0;
+  if (
+    params.preflight.isNotificationEventWake &&
+    params.preflight.shouldInspectPendingEvents &&
+    !hasNotificationEvents
+  ) {
+    return {
+      prompt: null,
+      hasExecCompletion: false,
+      hasRelayableExecCompletion: false,
+      hasCronEvents: false,
+      hasNotificationEvents: false,
+      hasIgnorableNotificationEvents,
+      hasDueCommitments: false,
+      usesHeartbeatResponseTool: false,
+    };
+  }
+
   const commitmentPrompt = buildCommitmentHeartbeatPrompt({
     commitments: params.preflight.dueCommitments,
     useHeartbeatResponseTool: false,
@@ -1275,6 +1347,8 @@ function resolveHeartbeatRunPrompt(params: {
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
+        hasNotificationEvents: false,
+        hasIgnorableNotificationEvents: false,
         hasDueCommitments,
         usesHeartbeatResponseTool: false,
       };
@@ -1284,6 +1358,8 @@ function resolveHeartbeatRunPrompt(params: {
       hasExecCompletion: false,
       hasRelayableExecCompletion: false,
       hasCronEvents: false,
+      hasNotificationEvents: false,
+      hasIgnorableNotificationEvents: false,
       hasDueCommitments: false,
       usesHeartbeatResponseTool: false,
     };
@@ -1308,6 +1384,8 @@ ${completionInstruction}`;
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
+        hasNotificationEvents: false,
+        hasIgnorableNotificationEvents: false,
         hasDueCommitments: false,
         usesHeartbeatResponseTool: params.useHeartbeatResponseTool,
       };
@@ -1318,6 +1396,8 @@ ${completionInstruction}`;
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
+        hasNotificationEvents: false,
+        hasIgnorableNotificationEvents: false,
         hasDueCommitments,
         usesHeartbeatResponseTool: false,
       };
@@ -1327,11 +1407,12 @@ ${completionInstruction}`;
       hasExecCompletion: false,
       hasRelayableExecCompletion: false,
       hasCronEvents: false,
+      hasNotificationEvents: false,
+      hasIgnorableNotificationEvents: false,
       hasDueCommitments: false,
       usesHeartbeatResponseTool: false,
     };
   }
-
   const baseUsesHeartbeatResponseTool = params.useHeartbeatResponseTool && !commitmentPrompt;
   const basePrompt = hasExecCompletion
     ? buildExecEventPrompt(execEvents, {
@@ -1343,9 +1424,13 @@ ${completionInstruction}`;
           deliverToUser: params.canRelayToUser,
           useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
         })
-      : baseUsesHeartbeatResponseTool
-        ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
-        : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
+      : hasNotificationEvents
+        ? buildNotificationEventPrompt(notificationEvents, {
+            useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
+          })
+        : baseUsesHeartbeatResponseTool
+          ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
+          : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
   const basePromptWithHint = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
   const basePromptWithDirectives = appendHeartbeatFileDirectives(
     basePromptWithHint,
@@ -1360,6 +1445,8 @@ ${completionInstruction}`;
     hasExecCompletion,
     hasRelayableExecCompletion,
     hasCronEvents,
+    hasNotificationEvents,
+    hasIgnorableNotificationEvents,
     hasDueCommitments,
     usesHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
   };
@@ -1369,6 +1456,8 @@ function selectSystemEventsConsumedByHeartbeat(params: {
   preflight: HeartbeatPreflight;
   hasExecCompletion: boolean;
   hasCronEvents: boolean;
+  hasNotificationEvents: boolean;
+  hasIgnorableNotificationEvents: boolean;
 }): SystemEvent[] {
   const { preflight } = params;
   if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
@@ -1383,6 +1472,15 @@ function selectSystemEventsConsumedByHeartbeat(params: {
         (preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
         isCronSystemEvent(event.text),
     );
+  }
+  if (params.hasNotificationEvents) {
+    return preflight.pendingEventEntries.filter(
+      (event) =>
+        isNotificationSystemEventEntry(event) || isIgnorableNotificationSystemEventEntry(event),
+    );
+  }
+  if (preflight.isNotificationEventWake && params.hasIgnorableNotificationEvents) {
+    return preflight.pendingEventEntries.filter(isIgnorableNotificationSystemEventEntry);
   }
   return preflight.pendingEventEntries;
 }
@@ -1663,17 +1761,21 @@ export async function runHeartbeatOnce(opts: {
     useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
     runScope,
   });
-
   // If no tasks are due, skip heartbeat entirely
   if (heartbeatRunPrompt.prompt === null) {
     // Wake-triggered events should stay queued when the run short-circuits:
     // no reply turn ran, so there is nothing that actually consumed that wake payload.
     const shouldConsumeInspectedEvents =
-      !preflight.isWakePayload && preflight.shouldInspectPendingEvents;
+      (!preflight.isWakePayload ||
+        (preflight.isNotificationEventWake &&
+          heartbeatRunPrompt.hasIgnorableNotificationEvents)) &&
+      preflight.shouldInspectPendingEvents;
     const inspectedSystemEventsToConsume = selectSystemEventsConsumedByHeartbeat({
       preflight,
       hasExecCompletion: heartbeatRunPrompt.hasExecCompletion,
       hasCronEvents: heartbeatRunPrompt.hasCronEvents,
+      hasNotificationEvents: heartbeatRunPrompt.hasNotificationEvents,
+      hasIgnorableNotificationEvents: heartbeatRunPrompt.hasIgnorableNotificationEvents,
     });
     if (shouldConsumeInspectedEvents && inspectedSystemEventsToConsume.length > 0) {
       consumeSelectedSystemEventEntries(sessionKey, inspectedSystemEventsToConsume);
@@ -1790,6 +1892,8 @@ export async function runHeartbeatOnce(opts: {
     hasExecCompletion,
     hasRelayableExecCompletion,
     hasCronEvents,
+    hasNotificationEvents,
+    hasIgnorableNotificationEvents,
     hasDueCommitments,
     usesHeartbeatResponseTool,
   } = heartbeatRunPrompt;
@@ -1804,6 +1908,8 @@ export async function runHeartbeatOnce(opts: {
     preflight,
     hasExecCompletion,
     hasCronEvents,
+    hasNotificationEvents,
+    hasIgnorableNotificationEvents,
   });
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
@@ -1880,7 +1986,13 @@ export async function runHeartbeatOnce(opts: {
     OriginatingTo: !suppressOriginatingContext ? delivery.to : undefined,
     AccountId: delivery.accountId,
     MessageThreadId: delivery.threadId,
-    Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
+    Provider: hasExecCompletion
+      ? "exec-event"
+      : hasCronEvents
+        ? "cron-event"
+        : hasNotificationEvents
+          ? "notifications-event"
+          : "heartbeat",
     SessionKey: runSessionKey,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {

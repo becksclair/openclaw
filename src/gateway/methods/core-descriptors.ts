@@ -235,6 +235,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "terminal.input", scope: "operator.admin" },
   { name: "terminal.resize", scope: "operator.admin" },
   { name: "terminal.close", scope: "operator.admin" },
+  { name: "chat.finalAudio.get", scope: "operator.read", advertise: false },
   { name: "assistant.media.get", scope: "operator.read", advertise: false },
   { name: "sessions.get", scope: "operator.read", advertise: false },
   { name: "sessions.resolve", scope: "operator.read", advertise: false },

@@ -38,6 +38,7 @@ function createMockContext(overrides?: {
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
       pendingToolTrustedLocalMedia: false,
+      pendingToolSpokenText: undefined,
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
@@ -678,6 +679,31 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
     expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
+  });
+
+  it("queues trusted TTS media spoken text without voice-note metadata", async () => {
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult: vi.fn() });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.wav",
+            spokenText: "spoken reply",
+            trustedLocalMedia: true,
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.wav"]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+    expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
+    expect(ctx.state.pendingToolSpokenText).toBe("spoken reply");
   });
 
   it("queues trusted TTS local media when the exact built-in name is absent", async () => {

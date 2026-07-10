@@ -45,6 +45,7 @@ const {
   loadWebMedia,
   maybePersistResolvedTelegramTarget,
   probeVideoDimensions,
+  transcodeAudioBufferToOpus,
 } = getTelegramSendTestMocks();
 const telegramSendModule = await importTelegramSendModule();
 const { resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env");
@@ -1900,9 +1901,10 @@ describe("sendMessageTelegram", () => {
     });
 
     expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
-      caption: undefined,
+      caption: "A".repeat(1024),
+      parse_mode: "HTML",
     });
-    expect(sendMessage).toHaveBeenCalledWith(chatId, longText, {
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "A".repeat(76), {
       parse_mode: "HTML",
     });
     expect(res.messageId).toBe("71");
@@ -1941,19 +1943,23 @@ describe("sendMessageTelegram", () => {
       replyToMode: "first",
     });
 
+    // Fork caption seam (findCaptionBoundary): an oversized caption stays attached to the
+    // media up to the 1024 boundary and only the overflow becomes follow-up text. The first-mode
+    // reply-to is still used once on the media and not reused on the follow-up send.
     expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
-      caption: undefined,
+      caption: "A".repeat(1024),
+      parse_mode: "HTML",
       reply_to_message_id: 500,
       allow_sending_without_reply: true,
     });
-    expect(sendMessage).toHaveBeenCalledWith(chatId, longText, {
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "A".repeat(76), {
       parse_mode: "HTML",
     });
   });
 
   it("chunks long default markdown media follow-up text", async () => {
     const chatId = "123";
-    const longText = `**${"A".repeat(5000)}**`;
+    const longText = `**${"A".repeat(9000)}**`;
 
     const sendPhoto = vi.fn().mockResolvedValue({
       message_id: 72,
@@ -1981,10 +1987,14 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
-      caption: undefined,
-    });
-    expect(sendMessage).toHaveBeenCalledTimes(2);
+    const photoCall = firstMockCall(sendPhoto, "send photo call");
+    expect(photoCall[0]).toBe(chatId);
+    const photoParams = requireRecord(photoCall[2], "send photo params");
+    expect(requireString(photoParams.caption, "send photo caption").length).toBeLessThanOrEqual(
+      1024,
+    );
+    expect(photoParams.parse_mode).toBe("HTML");
+    expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
     expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === "HTML")).toBe(true);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toContain("A");
     expect(res.messageId).toBe("74");
@@ -2734,6 +2744,7 @@ describe("sendMessageTelegram", () => {
       replyToMessageId?: number;
       expectedMethod: "sendAudio" | "sendVoice";
       expectedOptions: Record<string, unknown>;
+      expectedTranscode?: boolean;
     }> = [
       {
         name: "default audio send",
@@ -2765,15 +2776,16 @@ describe("sendMessageTelegram", () => {
         },
       },
       {
-        name: "asVoice fallback for non-voice media",
+        name: "asVoice transcodes wav voice media",
         chatId: "123",
         text: "caption",
         mediaUrl: "https://example.com/clip.wav",
         contentType: "audio/wav",
         fileName: "clip.wav",
         asVoice: true,
-        expectedMethod: "sendAudio" as const,
+        expectedMethod: "sendVoice" as const,
         expectedOptions: { caption: "caption", parse_mode: "HTML" },
+        expectedTranscode: true,
       },
       {
         name: "asVoice accepts mp3",
@@ -2817,6 +2829,7 @@ describe("sendMessageTelegram", () => {
         contentType: testCase.contentType,
         fileName: testCase.fileName,
       });
+      transcodeAudioBufferToOpus.mockClear();
 
       await sendMessageTelegram(testCase.chatId, testCase.text, {
         cfg: TELEGRAM_TEST_CFG,
@@ -2841,6 +2854,16 @@ describe("sendMessageTelegram", () => {
         testCase.expectedOptions,
       );
       expect(notCalled, testCase.name).not.toHaveBeenCalled();
+      if ("expectedTranscode" in testCase && testCase.expectedTranscode) {
+        expect(transcodeAudioBufferToOpus).toHaveBeenCalledWith({
+          audioBuffer: Buffer.from("audio"),
+          inputFileName: "clip.wav",
+          outputFileName: "voice.ogg",
+          tempPrefix: "telegram-voice-",
+        });
+      } else {
+        expect(transcodeAudioBufferToOpus, testCase.name).not.toHaveBeenCalled();
+      }
     }
   });
 

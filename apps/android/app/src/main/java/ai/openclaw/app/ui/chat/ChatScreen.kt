@@ -106,6 +106,8 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
+internal const val CHAT_SCREEN_BUBBLE_WIDTH_FRACTION = 0.85f
+
 /** Full chat surface that wires MainViewModel state to messages, attachments, voice, and composer actions. */
 @Composable
 fun ChatScreen(
@@ -259,11 +261,16 @@ fun ChatScreen(
     modifier =
       Modifier
         .fillMaxSize()
-        .padding(horizontal = 16.dp, vertical = 10.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
+        .padding(horizontal = 10.dp, vertical = 6.dp),
+    verticalArrangement = Arrangement.spacedBy(5.dp),
   ) {
     ChatHeader(
-      sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
+      sessionTitle =
+        currentSessionTitle(
+          sessionKey = sessionKey,
+          sessions = sessions,
+          mainSessionKey = mainSessionKey,
+        ),
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
       newChatEnabled = newChatEnabled,
@@ -918,7 +925,8 @@ private fun ChatBubble(
       enabled = !live,
       listenActive = messageSpeech != null,
       onToggleListen = toggleListen,
-      modifier = Modifier.fillMaxWidth(if (isUser) 0.84f else 0.94f),
+      // Fork uses one bubble width for both roles; ChatScreenLayoutTest asserts 0.85f.
+      modifier = Modifier.fillMaxWidth(CHAT_SCREEN_BUBBLE_WIDTH_FRACTION),
     ) {
       Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -1618,7 +1626,10 @@ private fun AttachmentChip(
 private fun currentSessionTitle(
   sessionKey: String,
   sessions: List<ChatSessionEntry>,
+  mainSessionKey: String,
 ): String {
+  val mainKey = mainSessionKey.trim().ifEmpty { "main" }
+  if (sessionKey == mainKey || sessionKey == "main") return "Main session"
   val entry = sessions.firstOrNull { it.key == sessionKey }
   val name = entry?.displayName?.takeIf { it.isNotBlank() } ?: return "New chat"
   return friendlySessionName(name)

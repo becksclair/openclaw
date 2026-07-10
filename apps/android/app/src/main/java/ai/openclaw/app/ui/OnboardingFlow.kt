@@ -290,6 +290,7 @@ fun OnboardingFlow(
     val savedManualTls by viewModel.manualTls.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
     val startAtGatewaySetup by viewModel.startOnboardingAtGatewaySetup.collectAsState()
+    val pendingGatewaySetupCode by viewModel.pendingGatewaySetupCode.collectAsState()
     val ready =
       canFinishOnboarding(
         isConnected = isConnected,
@@ -371,6 +372,27 @@ fun OnboardingFlow(
         step = OnboardingStep.Gateway
         viewModel.clearGatewaySetupStartRequest()
       }
+    }
+
+    LaunchedEffect(pendingGatewaySetupCode) {
+      val pending = pendingGatewaySetupCode ?: return@LaunchedEffect
+      setupCode = pending
+      val endpoint = decodeGatewaySetupCode(pending)?.url?.let(::parseGatewayEndpointResult)?.config
+      endpoint?.let {
+        manualHost = it.host
+        manualPort = it.port.toString()
+        manualTls = it.tls
+      }
+      setupError = null
+      if (endpoint == null) {
+        step = OnboardingStep.Gateway
+      } else {
+        attemptedGatewayName = null
+        attemptedConnect = true
+        connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
+        step = OnboardingStep.Recovery
+      }
+      viewModel.clearPendingGatewaySetupCode()
     }
 
     LaunchedEffect(step) {

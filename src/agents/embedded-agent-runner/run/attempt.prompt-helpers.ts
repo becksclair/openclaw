@@ -4,6 +4,7 @@ import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/inte
  */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
+  ContextEnginePromptBudget,
   ContextEnginePromptCacheInfo,
   ContextEngineRuntimeContext,
 } from "../../../context-engine/types.js";
@@ -18,6 +19,7 @@ import type {
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { truncateUtf16Safe } from "../../../utils.js";
 import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
@@ -30,7 +32,6 @@ import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../vid
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
-import { truncateUtf16Safe } from "../../../utils.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -95,6 +96,13 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
   if (runId) {
     promptBuildDrainCache.delete(runId);
   }
+}
+
+export function shouldResolvePromptBuildHookResult(params: {
+  isRawModelRun: boolean;
+  suppressPluginHooks?: boolean;
+}): boolean {
+  return !params.isRawModelRun && params.suppressPluginHooks !== true;
 }
 
 /**
@@ -593,6 +601,7 @@ export function buildAfterTurnRuntimeContext(params: {
   contextEnginePluginId?: string;
   tokenBudget?: number;
   currentTokenCount?: number;
+  contextEngineBudget?: ContextEnginePromptBudget;
   promptCache?: ContextEnginePromptCacheInfo;
 }): ContextEngineRuntimeContext {
   return {
@@ -645,6 +654,7 @@ export function buildAfterTurnRuntimeContext(params: {
     params.currentTokenCount > 0
       ? { currentTokenCount: Math.floor(params.currentTokenCount) }
       : {}),
+    ...(params.contextEngineBudget ? { contextEngineBudget: params.contextEngineBudget } : {}),
     ...(params.promptCache ? { promptCache: params.promptCache } : {}),
   };
 }

@@ -2,7 +2,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { formatToolAggregate } from "./tool-meta.js";
+import { formatToolAggregate, isCommandToolName } from "./tool-meta.js";
 
 // Use path.resolve so inputs match the resolved HOME on every platform.
 const home = path.resolve("/Users/test");
@@ -16,9 +16,7 @@ describe("tool meta formatting", () => {
     withHome(() => {
       expect(formatToolAggregate("fs", [`${home}/a.txt`])).toContain("~/a.txt");
       expect(formatToolAggregate("fs", [`${home}/a.txt:12`])).toContain("~/a.txt:12");
-      expect(formatToolAggregate("exec", [`cd ${home}/dir && ls`])).toContain(
-        "cd ~/dir && ls",
-      );
+      expect(formatToolAggregate("exec", [`cd ${home}/dir && ls`])).toContain("cd ~/dir && ls");
       expect(formatToolAggregate("fs", [""])).toBe("🧩 Fs");
     });
   });
@@ -48,6 +46,14 @@ describe("tool meta formatting", () => {
   it("uses a longer inline code delimiter when meta contains backticks", () => {
     const out = formatToolAggregate("fs", ["name `with` ticks"], { markdown: true });
     expect(out).toBe("🧩 Fs: ``name `with` ticks``");
+  });
+
+  it("classifies command-execution tool names case-insensitively", () => {
+    expect(isCommandToolName("exec")).toBe(true);
+    expect(isCommandToolName("Bash")).toBe(true);
+    expect(isCommandToolName("shell")).toBe(true);
+    expect(isCommandToolName("read")).toBe(false);
+    expect(isCommandToolName(undefined)).toBe(false);
   });
 
   it("keeps exec flags outside markdown and moves them to the front", () => {

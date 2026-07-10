@@ -20,6 +20,7 @@ export type {
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
+  RealtimeVoiceToolResult,
   RealtimeVoiceToolResultOptions,
 } from "../talk/provider-types.js";
 export {

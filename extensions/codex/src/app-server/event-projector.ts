@@ -7,6 +7,7 @@ import {
   formatToolAggregate,
   formatToolProgressOutput,
   inferToolMetaFromArgs,
+  isCommandToolName,
   normalizeUsage,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessAfterToolCallHook,
@@ -66,6 +67,8 @@ export type CodexAppServerToolTelemetry = {
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
+  toolTrustedLocalMedia?: boolean;
+  toolSpokenText?: string;
   successfulCronAdds?: number;
 };
 
@@ -839,6 +842,8 @@ export class CodexAppServerEventProjector {
       heartbeatToolResponse: toolTelemetry.heartbeatToolResponse,
       toolMediaUrls: this.buildToolMediaUrls(toolTelemetry),
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
+      toolTrustedLocalMedia: toolTelemetry.toolTrustedLocalMedia,
+      toolSpokenText: toolTelemetry.toolSpokenText,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       cloudCodeAssistFormatError: false,
       attemptUsage: this.tokenUsage,
@@ -1909,7 +1914,10 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.toolResultSummaryItemIds.add(itemId);
-    const meta = itemMeta(item, this.toolProgressDetailMode());
+    // commandText "status" promises label-only command lines; drop the raw
+    // command meta so channel-progress summaries do not leak it.
+    const labelOnly = this.params.toolResultCommandText === "status" && isCommandToolName(toolName);
+    const meta = labelOnly ? undefined : itemMeta(item, this.toolProgressDetailMode());
     this.emitToolResultMessage({
       itemId,
       text: formatToolSummary(toolName, meta),
@@ -2170,9 +2178,15 @@ export class CodexAppServerEventProjector {
     }
     this.transcriptToolProgressCallIds.add(params.id);
     const args = normalizeToolTranscriptArguments(params.arguments);
-    const meta = inferToolMetaFromArgs(params.name, args, {
-      detailMode: this.toolProgressDetailMode(),
-    });
+    // commandText "status" promises label-only command lines; drop the raw
+    // command meta so channel-progress summaries do not leak it.
+    const labelOnly =
+      this.params.toolResultCommandText === "status" && isCommandToolName(params.name);
+    const meta = labelOnly
+      ? undefined
+      : inferToolMetaFromArgs(params.name, args, {
+          detailMode: this.toolProgressDetailMode(),
+        });
     if (
       !this.params.onToolResult ||
       !this.shouldEmitToolResult() ||
@@ -2537,7 +2551,6 @@ function readNonNegativeInteger(record: JsonObject, key: string): number | undef
   const value = readNumber(record, key);
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
-
 
 function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
   const error = record.error;

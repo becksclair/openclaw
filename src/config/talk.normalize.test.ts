@@ -54,6 +54,11 @@ describe("talk normalization", () => {
         reasoningEffort: " low ",
         brain: "agent-consult",
         consultRouting: "force-agent-consult",
+        tools: {
+          profile: "voice",
+          alsoAllow: [" bundle-mcp "],
+          deny: [" message "],
+        },
       },
       interruptOnSpeech: true,
     });
@@ -84,6 +89,11 @@ describe("talk normalization", () => {
         reasoningEffort: "low",
         brain: "agent-consult",
         consultRouting: "force-agent-consult",
+        tools: {
+          profile: "voice",
+          alsoAllow: ["bundle-mcp"],
+          deny: ["message"],
+        },
       },
       interruptOnSpeech: true,
     });

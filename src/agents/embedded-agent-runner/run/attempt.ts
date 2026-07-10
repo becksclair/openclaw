@@ -6,7 +6,7 @@ import os from "node:os";
 import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
@@ -98,6 +98,7 @@ import {
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
+import { readAgentBasePrompt } from "../../agent-base-prompt.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import {
   getOrCreateSessionMcpRuntime,
@@ -416,6 +417,7 @@ import {
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   resolvePromptSubmissionSkipReason,
+  shouldResolvePromptBuildHookResult,
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
@@ -556,6 +558,7 @@ export {
   resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  shouldResolvePromptBuildHookResult,
   shouldWarnOnOrphanedUserRepair,
 } from "./attempt.prompt-helpers.js";
 export {
@@ -707,7 +710,7 @@ class EmbeddedAttemptPromptErrorWithCleanupTakeoverError extends Error {
 }
 
 function hasVisiblePendingToolMediaReply(
-  reply: { mediaUrls?: string[]; audioAsVoice?: boolean } | null | undefined,
+  reply: { mediaUrls?: string[]; audioAsVoice?: boolean; spokenText?: string } | null | undefined,
 ): boolean {
   return Boolean(
     reply &&
@@ -1108,53 +1111,63 @@ export async function runEmbeddedAttempt(
     }
   };
   try {
+    const skillsDisabled = params.disableSkills === true;
+    const skillRuntimeInputs = resolveSandboxSkillRuntimeInputs({
+      sandbox,
+      effectiveWorkspace,
+      skillsSnapshot: skillsDisabled ? undefined : params.skillsSnapshot,
+    });
     const {
       skillsEligibility,
       skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
       skillsSnapshot: skillsSnapshotForRun,
       skillsWorkspaceDir: effectiveSkillsWorkspace,
       workspaceOnly: loadSkillsWorkspaceOnly,
-    } = resolveSandboxSkillRuntimeInputs({
-      sandbox,
-      effectiveWorkspace,
-      skillsSnapshot: params.skillsSnapshot,
-    });
-    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-      workspaceDir: effectiveSkillsWorkspace,
-      config: params.config,
-      agentId: sessionAgentId,
-      eligibility: skillsEligibility,
-      skillsSnapshot: skillsSnapshotForRun,
-      workspaceOnly: loadSkillsWorkspaceOnly,
-    });
-    restoreSkillEnv = skillsSnapshotForRun
-      ? applySkillEnvOverridesFromSnapshot({
-          snapshot: skillsSnapshotForRun,
+    } = skillRuntimeInputs;
+    const { shouldLoadSkillEntries, skillEntries } = skillsDisabled
+      ? { shouldLoadSkillEntries: false, skillEntries: undefined }
+      : resolveEmbeddedRunSkillEntries({
+          workspaceDir: effectiveSkillsWorkspace,
           config: params.config,
-        })
-      : applySkillEnvOverrides({
-          skills: skillEntries ?? [],
-          config: params.config,
+          agentId: sessionAgentId,
+          eligibility: skillsEligibility,
+          skillsSnapshot: skillsSnapshotForRun,
+          workspaceOnly: loadSkillsWorkspaceOnly,
         });
-    const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
-      skillsWorkspaceDir: effectiveSkillsWorkspace,
-      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
-    });
+    restoreSkillEnv = skillsDisabled
+      ? undefined
+      : skillsSnapshotForRun
+        ? applySkillEnvOverridesFromSnapshot({
+            snapshot: skillsSnapshotForRun,
+            config: params.config,
+          })
+        : applySkillEnvOverrides({
+            skills: skillEntries ?? [],
+            config: params.config,
+          });
+    const promptSkillEntries = skillsDisabled
+      ? undefined
+      : mapSandboxSkillEntriesForPrompt({
+          entries: shouldLoadSkillEntries ? skillEntries : undefined,
+          skillsWorkspaceDir: effectiveSkillsWorkspace,
+          skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+        });
     const skillUsagePaths = mapSandboxSkillUsagePaths({
       paths: sandbox?.skillUsagePaths,
       skillsWorkspaceDir: effectiveSkillsWorkspace,
       skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
     });
 
-    const skillsPrompt = resolveSkillsPromptForRun({
-      skillsSnapshot: skillsSnapshotForRun,
-      entries: promptSkillEntries,
-      config: params.config,
-      workspaceDir: effectiveSkillsPromptWorkspace,
-      agentId: sessionAgentId,
-      eligibility: skillsEligibility,
-    });
+    const skillsPrompt = skillsDisabled
+      ? undefined
+      : resolveSkillsPromptForRun({
+          skillsSnapshot: skillsSnapshotForRun,
+          entries: promptSkillEntries,
+          config: params.config,
+          workspaceDir: effectiveSkillsPromptWorkspace,
+          agentId: sessionAgentId,
+          eligibility: skillsEligibility,
+        });
     prepStages.mark("skills");
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -1226,6 +1239,7 @@ export async function runEmbeddedAttempt(
       params.toolsAllow,
       {
         forceMessageTool: forceDirectMessageTool,
+        forceHeartbeatTool: params.forceHeartbeatTool,
       },
     );
     const toolsEnabled = supportsModelTools(params.model);
@@ -1234,6 +1248,7 @@ export async function runEmbeddedAttempt(
       isRawModelRun,
       toolsEnabled,
       toolsAllow: toolsAllowWithForcedRuntimeTools,
+      forceHeartbeatTool: params.forceHeartbeatTool,
     });
     const codeModeConfig = resolveCodeModeConfig(params.config, sessionAgentId);
     const toolSearchRuntimeConfig = forceDirectMessageTool
@@ -2022,6 +2037,12 @@ export async function runEmbeddedAttempt(
     // When toolsAllow is set, use minimal prompt and strip skills catalog
     const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
     const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
+    const agentBasePrompt =
+      !isRawModelRun && effectivePromptMode === "full" && promptSurface === "openclaw_main"
+        ? await readAgentBasePrompt({ agentDir })
+        : { source: "none" as const };
+    const activeAgentBasePrompt =
+      agentBasePrompt.source === "agent-file" ? agentBasePrompt.text : undefined;
     const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
@@ -2046,7 +2067,7 @@ export async function runEmbeddedAttempt(
       params.bootstrapContextRunKind === "commitment-only" ? undefined : params.trigger;
     const promptContributionContext = {
       config: params.config,
-      agentDir: params.agentDir,
+      agentDir,
       workspaceDir: effectiveWorkspace,
       provider: params.provider,
       modelId: params.modelId,
@@ -2057,14 +2078,16 @@ export async function runEmbeddedAttempt(
       trigger: promptContributionTrigger,
     };
     const promptContribution =
-      params.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??
-      resolveProviderSystemPromptContribution({
-        provider: params.provider,
-        config: params.config,
-        workspaceDir: effectiveWorkspace,
-        runtimeHandle: getProviderRuntimeHandle(),
-        context: promptContributionContext,
-      });
+      activeAgentBasePrompt !== undefined
+        ? undefined
+        : (params.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??
+          resolveProviderSystemPromptContribution({
+            provider: params.provider,
+            config: params.config,
+            workspaceDir: effectiveWorkspace,
+            runtimeHandle: getProviderRuntimeHandle(),
+            context: promptContributionContext,
+          }));
 
     const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
       bootstrapPromptWarning.lines,
@@ -2089,6 +2112,7 @@ export async function runEmbeddedAttempt(
         skillsPrompt: effectiveSkillsPrompt,
         docsPath: openClawReferences.docsPath ?? undefined,
         sourcePath: openClawReferences.sourcePath ?? undefined,
+        disableTts: params.disableTts,
         workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
         reactionGuidance,
         promptMode: effectivePromptMode,
@@ -2117,6 +2141,7 @@ export async function runEmbeddedAttempt(
         bootstrapTruncationNotice,
         includeMemorySection: !activeContextEngine || activeContextEngine.info.id === "legacy",
         promptContribution,
+        agentBasePrompt: activeAgentBasePrompt,
       },
       providerTransform: {
         provider: params.provider,
@@ -2161,7 +2186,7 @@ export async function runEmbeddedAttempt(
       systemPrompt: appendPrompt,
       bootstrapFiles: hookAdjustedBootstrapFiles,
       injectedFiles: contextFiles,
-      skillsPrompt,
+      skillsPrompt: skillsPrompt ?? "",
       tools: effectiveTools,
     });
     let systemPromptText = attemptSystemPrompt.systemPrompt;
@@ -2395,8 +2420,9 @@ export async function runEmbeddedAttempt(
       applyAgentAutoCompactionGuard(autoCompactionGuardArgs);
       prepStages.mark("session-resource-loader");
 
-      // Get hook runner early so it's available when creating tools
-      const hookRunner = getGlobalHookRunner();
+      // Get hook runner early so it's available when creating tools.
+      // Private helper runs suppress lifecycle observers such as memory capture.
+      const hookRunner = params.suppressPluginHooks === true ? null : getGlobalHookRunner();
 
       const { customTools } = splitSdkTools({
         tools: effectiveTools,
@@ -3715,11 +3741,12 @@ export async function runEmbeddedAttempt(
           lifecycleGeneration: params.lifecycleGeneration,
           messageChannel: runtimeChannel,
           initialReplayState: params.initialReplayState,
-          hookRunner: getGlobalHookRunner() ?? undefined,
+          hookRunner: hookRunner ?? undefined,
           verboseLevel: params.verboseLevel,
           reasoningMode: params.reasoningLevel ?? "off",
           thinkingLevel: params.thinkLevel,
           toolResultFormat: params.toolResultFormat,
+          toolResultCommandText: params.toolResultCommandText,
           shouldEmitToolResult: params.shouldEmitToolResult,
           shouldEmitToolOutput: params.shouldEmitToolOutput,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -4104,6 +4131,12 @@ export async function runEmbeddedAttempt(
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
         let effectivePrompt = params.prompt;
+        const hookFastMode: FastMode | undefined =
+          params.fastModeAuto === true
+            ? "auto"
+            : typeof params.fastMode === "boolean"
+              ? params.fastMode
+              : undefined;
         const hookCtx = {
           runId: params.runId,
           trace: freezeDiagnosticTraceContext(diagnosticTrace),
@@ -4114,6 +4147,13 @@ export async function runEmbeddedAttempt(
           modelProviderId: params.model.provider,
           modelId: params.model.id,
           trigger: params.trigger,
+          ...(hookFastMode !== undefined ? { fastMode: hookFastMode } : {}),
+          ...(params.fastModeStartedAtMs !== undefined
+            ? { fastModeStartedAtMs: params.fastModeStartedAtMs }
+            : {}),
+          ...(params.fastModeAutoOnSeconds !== undefined
+            ? { fastModeAutoOnSeconds: params.fastModeAutoOnSeconds }
+            : {}),
           ...buildAgentHookContextChannelFields(params),
           ...buildAgentHookContextIdentityFields({
             trigger: params.trigger,
@@ -4124,7 +4164,10 @@ export async function runEmbeddedAttempt(
         };
         const promptBuildMessages =
           pruneProcessedHistoryImages(activeSession.messages) ?? activeSession.messages;
-        const hookResult = isRawModelRun
+        const hookResult = !shouldResolvePromptBuildHookResult({
+          isRawModelRun,
+          suppressPluginHooks: params.suppressPluginHooks,
+        })
           ? undefined
           : await resolvePromptBuildHookResult({
               config: params.config ?? getRuntimeConfig(),
@@ -5534,7 +5577,7 @@ export async function runEmbeddedAttempt(
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
-        if (!beforeAgentFinalizeRevisionReason) {
+        if (!beforeAgentFinalizeRevisionReason && params.suppressPluginHooks !== true) {
           runAgentEndSideEffects({
             event: {
               messages: messagesSnapshot,
@@ -5966,6 +6009,7 @@ export async function runEmbeddedAttempt(
         toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
         toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
         hasToolMediaBlockReply: hasToolMediaBlockReplyNow,
+        toolSpokenText: pendingToolMediaReply?.spokenText,
         successfulCronAdds: getSuccessfulCronAdds(),
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),

@@ -8,6 +8,8 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildCodexContextEnginePromptBudget,
+  buildCodexPromptSurfaceProfile,
   buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
   readContextEngineThreadBootstrapProjection,
@@ -113,6 +115,160 @@ describe("Codex app-server attempt context", () => {
     expect(report.tools.schemaChars).toBe(message?.schemaChars);
   });
 
+  it("builds content-free prompt surface profiles for profiler diagnostics", () => {
+    const sensitiveText = "secret-never-log";
+    const tools = [
+      {
+        type: "function",
+        name: "message",
+        description: `Send ${sensitiveText}.`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            text: { type: "string" },
+          },
+        },
+      },
+    ] as CodexDynamicToolSpec[];
+    const report = buildCodexSystemPromptReport({
+      attempt: {
+        sessionId: "session-1",
+        provider: "codex",
+        modelId: "gpt-5.4-codex",
+      } as EmbeddedRunAttemptParams,
+      sessionKey: "agent:main:session-1",
+      workspaceDir: path.join("tmp", "workspace"),
+      developerInstructions: `developer ${sensitiveText}`,
+      workspaceBootstrapContext: {
+        bootstrapFiles: [
+          {
+            name: "AGENTS.md",
+            path: path.join("tmp", "workspace", "AGENTS.md"),
+            content: `project ${sensitiveText}`,
+            missing: false,
+          },
+        ],
+        contextFiles: [],
+        promptContextFiles: [
+          {
+            path: path.join("tmp", "workspace", "AGENTS.md"),
+            content: `project ${sensitiveText}`,
+          },
+        ],
+        developerInstructionFiles: [],
+        heartbeatReferenceFiles: [],
+      },
+      skillsPrompt: `<skill><name>memory-recall</name><content>${sensitiveText}</content></skill>`,
+      tools,
+    });
+
+    const profile = buildCodexPromptSurfaceProfile({
+      systemPromptReport: report,
+      turnPrompt: `turn ${sensitiveText}`,
+      rawPrompt: `raw ${sensitiveText}`,
+      developerInstructions: `developer ${sensitiveText}`,
+      threadDeveloperInstructions: `thread ${sensitiveText}`,
+      turnCollaborationInstructions: `collaboration ${sensitiveText}`,
+      baseInstructions: `base ${sensitiveText}`,
+      openClawPromptContext: `frame ${sensitiveText}`,
+      contextEngine: {
+        active: true,
+        projectionMode: "per_turn",
+        prePromptMessageCount: 3,
+        promptContextChars: 27,
+      },
+    });
+
+    expect(profile.source).toBe("codex-app-server");
+    expect(profile.totals.promptChars).toBe(`turn ${sensitiveText}`.length);
+    expect(profile.contextEngine).toEqual({
+      active: true,
+      projectionMode: "per_turn",
+      prePromptMessageCount: 3,
+      promptContextChars: 27,
+    });
+    expect(profile.buckets.map((entry) => entry.name)).toContain("tools.definitions");
+    expect(profile.topWorkspaceFiles[0]).toMatchObject({ name: "AGENTS.md" });
+    expect(profile.topSkills[0]).toMatchObject({ name: "memory-recall" });
+    expect(profile.topTools[0]).toMatchObject({ name: "message" });
+    expect(JSON.stringify(profile)).not.toContain(sensitiveText);
+  });
+
+  it("builds context-engine budget accounting from host-owned Codex prompt surfaces", () => {
+    const buildReport = (skillsPrompt: string) =>
+      buildCodexSystemPromptReport({
+        attempt: {
+          sessionId: "session-1",
+          provider: "codex",
+          modelId: "gpt-5.4-codex",
+        } as EmbeddedRunAttemptParams,
+        sessionKey: "agent:main:session-1",
+        workspaceDir: path.join("tmp", "workspace"),
+        developerInstructions: "developer instructions".repeat(20),
+        workspaceBootstrapContext: {
+          bootstrapFiles: [],
+          contextFiles: [],
+        },
+        skillsPrompt,
+        tools: [
+          {
+            type: "function",
+            name: "message",
+            description: "Send a message.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                text: { type: "string" },
+              },
+            },
+          },
+        ] as CodexDynamicToolSpec[],
+      });
+    const report = buildReport("");
+    const reportWithSkills = buildReport("<skill>large skill prompt</skill>".repeat(2_000));
+
+    const budget = buildCodexContextEnginePromptBudget({
+      promptTokenBudget: 1_000,
+      systemPromptReport: report,
+      turnPrompt: "current user request",
+      developerInstructions: "developer instructions".repeat(20),
+      baseInstructions: "base instructions".repeat(30),
+      openClawPromptContext: "workspace frame".repeat(10),
+    });
+
+    expect(budget.schemaVersion).toBe(1);
+    expect(budget.source).toBe("host_estimate");
+    expect(budget.promptTokenBudget).toBe(1_000);
+    expect(budget.nonEnginePromptTokens).toBeGreaterThan(0);
+    expect(budget.enginePromptTokenBudget).toBe(
+      Math.max(0, budget.promptTokenBudget! - budget.nonEnginePromptTokens!),
+    );
+
+    const attributedSkillsBudget = buildCodexContextEnginePromptBudget({
+      promptTokenBudget: 1_000,
+      systemPromptReport: reportWithSkills,
+      turnPrompt: "current user request",
+      developerInstructions: "developer instructions".repeat(20),
+      baseInstructions: "base instructions".repeat(30),
+      openClawPromptContext: "workspace frame".repeat(10),
+    });
+    expect(attributedSkillsBudget.nonEnginePromptTokens).toBe(budget.nonEnginePromptTokens);
+
+    const renderedSkillsBudget = buildCodexContextEnginePromptBudget({
+      promptTokenBudget: 1_000,
+      systemPromptReport: reportWithSkills,
+      turnPrompt: "current user request",
+      developerInstructions:
+        "developer instructions".repeat(20) + "<skill>large skill prompt</skill>".repeat(2_000),
+      baseInstructions: "base instructions".repeat(30),
+      openClawPromptContext: "workspace frame".repeat(10),
+    });
+    expect(renderedSkillsBudget.nonEnginePromptTokens).toBeGreaterThan(
+      budget.nonEnginePromptTokens!,
+    );
+    expect(renderedSkillsBudget.enginePromptTokenBudget).toBe(0);
+  });
+
   it("keeps MEMORY.md injected when sandbox effective workspace differs", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memory-workspace-"));
     const sandboxWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memory-sandbox-"));
@@ -141,6 +297,39 @@ describe("Codex app-server attempt context", () => {
     expect(context.memoryReferenceFiles).toEqual([]);
     expect(context.promptContext).toContain(memorySummary);
     expect(context.memoryToolRouted).toBe(false);
+  });
+
+  it("skips workspace bootstrap context for the memory recall prompt profile", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memory-profile-"));
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Do visible workspace things.");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Visible workspace memory.");
+
+    const context = await buildCodexWorkspaceBootstrapContext({
+      params: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1:active-memory:recall",
+        promptProfile: "memory_recall",
+      } as EmbeddedRunAttemptParams,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sessionKey: "agent:main:session-1:active-memory:recall",
+      sessionAgentId: "main",
+      memoryToolNames: ["memory_search", "memory_get"],
+    });
+
+    expect(context.bootstrapFiles).toEqual([]);
+    expect(context.contextFiles).toEqual([]);
+    expect(context.promptContextFiles).toEqual([]);
+    expect(context.developerInstructionFiles).toEqual([]);
+    expect(context.turnScopedDeveloperInstructionFiles).toEqual([]);
+    expect(context.heartbeatReferenceFiles).toEqual([]);
+    expect(context.memoryReferenceFiles).toEqual([]);
+    expect(context.memoryToolRoutedBootstrapFiles).toEqual([]);
+    expect(context.memoryToolNames).toEqual([]);
+    expect(context.memoryToolRouted).toBe(false);
+    expect(context.promptContext).toBeUndefined();
+    expect(context.developerInstructions).toBeUndefined();
+    expect(context.memoryCollaborationInstructions).toBeUndefined();
   });
 
   it("remaps Codex bootstrap files under dot-prefixed workspace directories", () => {

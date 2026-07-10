@@ -316,6 +316,7 @@ export async function monitorWebChannel(
               mediaMaxMb: account.mediaMaxMb,
               selfChatMode: account.selfChatMode,
               sendReadReceipts: account.sendReadReceipts,
+              archive: account.archive,
               socketTiming,
               debounceMs: inboundDebounceMs,
               appendReplyWindow: connectionLocal.openedAfterRecentInbound

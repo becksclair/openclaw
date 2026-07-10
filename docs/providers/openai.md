@@ -644,14 +644,16 @@ receive it.
 The native Codex app-server harness does not receive the persona/tool-
 discipline behavior contract or the friendly interaction-style overlay through
 developer instructions; native Codex keeps Codex-owned base, model, and
-project-doc behavior, and OpenClaw disables Codex's built-in personality for
-native threads so agent workspace personality files stay authoritative.
-OpenClaw contributes only runtime context to native Codex threads: channel
-delivery, OpenClaw dynamic tools, ACP delegation, workspace context, and
+project-doc behavior by default, and OpenClaw disables Codex's built-in
+personality for native threads so agent workspace personality files stay
+authoritative. OpenClaw contributes runtime context to native Codex threads:
+channel delivery, OpenClaw dynamic tools, ACP delegation, workspace context, and
 OpenClaw skills. The heartbeat-guidance text from this same contribution is the
 one exception: native Codex heartbeat turns do get it, injected as dedicated
 collaboration instructions rather than through the shared prompt-contribution
 hook.
+
+Agents can opt into a user-owned stable base prefix by copying the generated `<stateDir>/agent-base.md` template into `<agentDir>/agent-base.md`. That generated template includes the default OpenClaw base behavior plus the static GPT-5/OpenAI/Codex behavior overlay. Once copied, the agent-owned file is complete: embedded OpenClaw full/main runs use it as the stable prompt prefix, native Codex app-server sends it as `thread/start.baseInstructions`, and OpenClaw does not append the GPT-5 overlay again at runtime.
 
 The GPT-5 contribution adds a tagged behavior contract for persona
 persistence, execution safety, tool discipline, output shape, completion

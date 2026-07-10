@@ -10,4 +10,7 @@
 
     <!-- Target SDK follows the current release train; bump only after platform compatibility testing. -->
     <issue id="OldTargetApi" severity="ignore" />
+
+    <!-- android_wear_capabilities is consumed by the Wearable Data Layer framework, not referenced in app code. -->
+    <issue id="UnusedResources" severity="ignore" />
 </lint>

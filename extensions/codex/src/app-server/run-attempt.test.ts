@@ -7,6 +7,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/config-runtime";
+import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
@@ -76,6 +80,7 @@ import {
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import {
+  createCodexTestBindingStore,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   testCodexAppServerBindingStore,
@@ -1249,6 +1254,294 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("omits OpenClaw skill instructions when skills are disabled", async () => {
+    const sessionFile = path.join(tempDir, "session-disabled-skills.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-disabled-skills");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableSkills = true;
+    params.skillsSnapshot = {
+      prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+      skills: [],
+    };
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      collaborationMode?: {
+        settings?: {
+          developer_instructions?: string | null;
+        };
+      };
+    };
+    const collaborationInstructions =
+      turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
+    expect(collaborationInstructions).not.toContain("## OpenClaw Skills");
+    expect(collaborationInstructions).not.toContain("<available_skills>");
+    expect(result.systemPromptReport?.skills).toMatchObject({ promptChars: 0, entries: [] });
+  });
+
+  it("passes agent-scoped agent base prompt only on thread/start", async () => {
+    const sessionFile = path.join(tempDir, "session-agent-base.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-agent-base");
+    const agentDir = path.join(tempDir, "agents", "sky", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(agentDir, "agent-base.md"), "custom sky base\n", "utf8");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const threadStartParams = threadStart?.params as {
+      baseInstructions?: string;
+      developerInstructions?: string;
+    };
+    expect(threadStartParams.baseInstructions).toBe("custom sky base\n");
+    expect(threadStartParams.developerInstructions).toContain("OpenClaw has dynamic tools");
+    expect(threadStartParams.developerInstructions).toContain("## Runtime");
+    expect(threadStartParams.developerInstructions).toContain("Runtime: model=gpt-5.4-codex");
+    expect(threadStartParams.developerInstructions).toContain("channel=codex_app_server");
+    expect(threadStartParams.developerInstructions).toContain(
+      "Current model identity: gpt-5.4-codex.",
+    );
+    expect(threadStartParams.baseInstructions).not.toContain("## Runtime");
+    expect(threadStartParams.baseInstructions).not.toContain("## Voice (TTS)");
+    expect(threadStartParams.baseInstructions).not.toContain("Current model identity:");
+    expect(threadStartParams.developerInstructions).not.toContain("custom sky base");
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    expect(turnStart?.params).not.toHaveProperty("baseInstructions");
+  });
+
+  it("keeps memory recall task input stable while swapping to the compact app-server profile", async () => {
+    const recallPrompt = [
+      "Internal Active Memory recall task.",
+      "Query: what wings should i order?",
+      "Good examples:",
+      "- lemon pepper wings from the prior dinner thread",
+      "Return NONE when no relevant memory exists.",
+    ].join("\n");
+    const agentDir = path.join(tempDir, "agents", "sky", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(agentDir, "agent-base.md"), "custom sky base\n", "utf8");
+
+    const runWithProfile = async (profile?: EmbeddedRunAttemptParams["promptProfile"]) => {
+      const sessionFile = path.join(
+        tempDir,
+        profile ? `session-${profile}.jsonl` : "session-default-profile.jsonl",
+      );
+      const workspaceDir = path.join(
+        tempDir,
+        profile ? `workspace-${profile}` : "workspace-default-profile",
+      );
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      params.agentDir = agentDir;
+      params.prompt = recallPrompt;
+      if (profile) {
+        params.promptProfile = profile;
+      }
+
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+
+      const threadStart = harness.requests.find((request) => request.method === "thread/start");
+      const turnStart = harness.requests.find((request) => request.method === "turn/start");
+      const turnStartParams = turnStart?.params as {
+        collaborationMode?: {
+          settings?: {
+            developer_instructions?: string | null;
+          };
+        };
+        input?: Array<{ text?: string; type?: string }>;
+      };
+      const inputText = turnStartParams.input?.find((item) => item.type === "text")?.text ?? "";
+      return {
+        binding: await readCodexAppServerBinding(sessionFile),
+        inputText,
+        threadStartParams: threadStart?.params as {
+          baseInstructions?: string;
+          developerInstructions?: string;
+          ephemeral?: boolean;
+        },
+        turnCollaborationInstructions:
+          turnStartParams.collaborationMode?.settings?.developer_instructions ?? "",
+      };
+    };
+
+    const defaultRun = await runWithProfile();
+    const profiledRun = await runWithProfile("memory_recall");
+
+    expect(defaultRun.inputText).toBe(recallPrompt);
+    expect(profiledRun.inputText).toBe(defaultRun.inputText);
+    expect(defaultRun.threadStartParams.baseInstructions).toBe("custom sky base\n");
+    expect(profiledRun.threadStartParams.baseInstructions).toContain(
+      "internal OpenClaw memory recall worker",
+    );
+    expect(profiledRun.threadStartParams.baseInstructions).not.toContain("custom sky base");
+    expect(profiledRun.threadStartParams.baseInstructions?.length).toBeLessThan(500);
+    expect(profiledRun.threadStartParams.developerInstructions).toContain(
+      "Internal OpenClaw memory recall profile",
+    );
+    expect(profiledRun.threadStartParams.developerInstructions).not.toContain(
+      "OpenClaw has dynamic tools",
+    );
+    expect(profiledRun.threadStartParams.developerInstructions).not.toContain("## Runtime");
+    expect(profiledRun.threadStartParams.developerInstructions).not.toContain(
+      "Current model identity:",
+    );
+    expect(profiledRun.threadStartParams.developerInstructions?.length).toBeLessThan(500);
+    expect(profiledRun.turnCollaborationInstructions).toContain("Internal memory recall turn");
+    expect(profiledRun.turnCollaborationInstructions).not.toContain(
+      "# Collaboration Mode: Default",
+    );
+    expect(profiledRun.turnCollaborationInstructions.length).toBeLessThan(180);
+    expect(profiledRun.threadStartParams.ephemeral).toBe(true);
+    expect(profiledRun.binding).toEqual(defaultRun.binding);
+    expect(profiledRun.binding?.baseInstructionsSource).toBe("agent-file");
+  });
+
+  it("keeps memory recall bindings attempt-local and unsubscribes the ephemeral thread", async () => {
+    const sessionFile = path.join(tempDir, "session-memory-recall-private.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-memory-recall-private");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.promptProfile = "memory_recall";
+    const durableBindingStore = createCodexTestBindingStore();
+    const durableStoreSpies = [
+      vi.spyOn(durableBindingStore, "read"),
+      vi.spyOn(durableBindingStore, "mutate"),
+      vi.spyOn(durableBindingStore, "prepareSessionGenerationReclaim"),
+      vi.spyOn(durableBindingStore, "adoptSessionGeneration"),
+      vi.spyOn(durableBindingStore, "retireSessionGeneration"),
+      vi.spyOn(durableBindingStore, "withLease"),
+    ];
+
+    const run = runCodexAppServerAttempt(params, { bindingStore: durableBindingStore });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(
+      harness.requests.find((request) => request.method === "thread/start")?.params,
+    ).toMatchObject({ ephemeral: true });
+    expect(harness.requests).toContainEqual({
+      method: "thread/unsubscribe",
+      params: { threadId: "thread-1" },
+    });
+    for (const spy of durableStoreSpies) {
+      expect(spy).not.toHaveBeenCalled();
+    }
+  });
+
+  it("omits configured TTS developer guidance when the run disables TTS", () => {
+    const config: NonNullable<EmbeddedRunAttemptParams["config"]> = {
+      messages: {
+        tts: {
+          auto: "always",
+          prefsPath: path.join(tempDir, "tts-prefs.json"),
+        },
+      },
+    };
+    const visibleParams = createParams(
+      path.join(tempDir, "session-visible-tts.jsonl"),
+      path.join(tempDir, "workspace-visible-tts"),
+    );
+    visibleParams.config = config;
+    const hiddenParams = createParams(
+      path.join(tempDir, "session-hidden-tts.jsonl"),
+      path.join(tempDir, "workspace-hidden-tts"),
+    );
+    hiddenParams.config = config;
+    hiddenParams.disableTts = true;
+
+    try {
+      setRuntimeConfigSnapshot(config, config);
+      const visibleInstructions = testing.buildCodexAppServerRuntimeDeveloperInstructions({
+        attempt: visibleParams,
+        sessionAgentId: "main",
+      });
+      expect(visibleInstructions).toContain("## Voice (TTS)");
+      expect(visibleInstructions).toContain("Voice (TTS) is enabled.");
+
+      const hiddenInstructions = testing.buildCodexAppServerRuntimeDeveloperInstructions({
+        attempt: hiddenParams,
+        sessionAgentId: "main",
+      });
+      expect(hiddenInstructions).not.toContain("## Voice (TTS)");
+      expect(hiddenInstructions).not.toContain("Voice (TTS) is enabled.");
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it("uses app-server-base.md as a Codex-only compatibility fallback", async () => {
+    const sessionFile = path.join(tempDir, "session-agent-base-fallback.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-agent-base-fallback");
+    const agentDir = path.join(tempDir, "agents", "sky", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(agentDir, "app-server-base.md"), "legacy sky base\n", "utf8");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    expect(threadStart?.params).toMatchObject({ baseInstructions: "legacy sky base\n" });
+  });
+
+  it("counts app-server base instructions in projected turn tokens", () => {
+    const projectedWithoutBase = testing.estimateCodexAppServerProjectedTurnTokens({
+      prompt: "p".repeat(4),
+      developerInstructions: "d".repeat(4),
+    });
+    const projectedWithBase = testing.estimateCodexAppServerProjectedTurnTokens({
+      prompt: "p".repeat(4),
+      baseInstructions: "b".repeat(8),
+      developerInstructions: "d".repeat(4),
+    });
+
+    expect(projectedWithoutBase).toBe(2);
+    expect(projectedWithBase).toBe(4);
+  });
+
+  it("omits baseInstructions when only global base prompt templates exist", async () => {
+    const sessionFile = path.join(tempDir, "session-global-template.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-global-template");
+    const agentDir = path.join(tempDir, "agents", "sky", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(tempDir, "agent-base.md"), "global agent template\n", "utf8");
+    await fs.writeFile(path.join(tempDir, "app-server-base.md"), "global template\n", "utf8");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    expect(threadStart?.params).not.toHaveProperty("baseInstructions");
+  });
+
   it("emits TUI-compatible tool events for Codex dynamic tool calls", async () => {
     const sessionFile = path.join(tempDir, "session-tool-events.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-tool-events");
@@ -1748,6 +2041,145 @@ describe("runCodexAppServerAttempt", () => {
       "thread/resume",
       "thread/resume",
     ]);
+  });
+
+  it("uses only available dynamic tools for suppressed hidden thread startup", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests((options) => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("memory_search"),
+      ...(options?.enableHeartbeatTool === true
+        ? [createRuntimeDynamicTool("heartbeat_respond")]
+        : []),
+    ]);
+    const sessionFile = path.join(tempDir, "session-hidden-tools.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-hidden-tools");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.disableMessageTool = true;
+    params.suppressPluginHooks = true;
+    params.toolsAllow = ["memory_search"];
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const startParams = threadStart?.params as { dynamicTools?: CodexDynamicToolSpec[] };
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(specNames(startParams.dynamicTools ?? [])).toEqual(["memory_search"]);
+  });
+
+  it("omits MCP servers and Codex plugin apps for suppressed hidden thread startup", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("memory_search"),
+    ]);
+    const sessionFile = path.join(tempDir, "session-hidden-minimal.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-hidden-minimal");
+    const forbiddenMethods: string[] = [];
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "app/list") {
+        forbiddenMethods.push(method);
+        return { data: [], nextCursor: null };
+      }
+      if (method === "plugin/list") {
+        forbiddenMethods.push(method);
+        return { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] };
+      }
+      if (method === "plugin/read") {
+        forbiddenMethods.push(method);
+        return {
+          plugin: {
+            marketplaceName: "openai-curated",
+            marketplacePath: "/marketplaces/openai-curated",
+            summary: {
+              id: "google-calendar",
+              name: "google-calendar",
+              source: { type: "remote" },
+              installed: true,
+              enabled: false,
+              installPolicy: "AVAILABLE",
+              authPolicy: "ON_USE",
+              availability: "AVAILABLE",
+              interface: null,
+            },
+            description: null,
+            skills: [],
+            apps: [],
+            mcpServers: [],
+          },
+        };
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.disableMessageTool = true;
+    params.disableMcpServers = true;
+    params.disableCodexPlugins = true;
+    params.suppressPluginHooks = true;
+    params.toolsAllow = ["memory_search"];
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.config = {
+      mcp: {
+        servers: {
+          notes: {
+            transport: "stdio",
+            command: "node",
+            args: ["/opt/notes-mcp/dist/index.js"],
+          },
+        },
+      },
+    } as never;
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        computerUse: { enabled: true },
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: "openai-curated",
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+    });
+    await Promise.race([
+      harness.waitForMethod("turn/start", 5_000),
+      run.then(() => {
+        throw new Error("hidden helper run completed before turn/start");
+      }),
+    ]);
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const startParams = threadStart?.params as
+      | {
+          config?: {
+            apps?: Record<string, unknown>;
+            mcp_servers?: Record<string, unknown>;
+          };
+          dynamicTools?: CodexDynamicToolSpec[];
+        }
+      | undefined;
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(specNames(startParams?.dynamicTools ?? [])).toEqual(["memory_search"]);
+    expect(startParams?.config?.mcp_servers).toBeUndefined();
+    expect(startParams?.config?.apps).toEqual({
+      _default: {
+        destructive_enabled: false,
+        enabled: false,
+        open_world_enabled: false,
+      },
+    });
+    expect(forbiddenMethods).toEqual([]);
+    expect(harness.requests.map((request) => request.method)).not.toContain("app/list");
+    expect(harness.requests.map((request) => request.method)).not.toContain("plugin/list");
+    expect(harness.requests.map((request) => request.method)).not.toContain("plugin/read");
   });
 
   it("keeps message in the registered schema when disabled for an internal turn", async () => {
@@ -3463,6 +3895,50 @@ describe("runCodexAppServerAttempt", () => {
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
       text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
     });
+  });
+
+  it("logs a content-free prompt surface profile when the Codex profiler is enabled", async () => {
+    const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
+    const sessionFile = path.join(tempDir, "session-profile.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-profile");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.config = {
+      diagnostics: {
+        flags: ["codex.profiler"],
+      },
+    } as EmbeddedRunAttemptParams["config"];
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const profileCall = info.mock.calls.find(
+      ([message]) => message === "codex app-server prompt surface profile",
+    );
+    expect(profileCall).toBeTruthy();
+    const profile = profileCall?.[1] as Record<string, unknown> | undefined;
+    expect(profile).toMatchObject({
+      runId: "run-1",
+      sessionId: "session-1",
+      source: "codex-app-server",
+      charsPerToken: 4,
+      provider: "codex",
+      model: "gpt-5.4-codex",
+    });
+    expect(profile?.totals).toMatchObject({
+      promptChars: "hello".length,
+    });
+    expect(profile?.buckets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "turn.prompt.final",
+          chars: "hello".length,
+        }),
+      ]),
+    );
+    expect(JSON.stringify(profile)).not.toContain("hello");
   });
 
   it("promotes implicit Codex yolo approval policy when OpenClaw tool policy exists", async () => {
