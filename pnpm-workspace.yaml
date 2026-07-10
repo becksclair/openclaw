@@ -8,6 +8,7 @@ packages:
 minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
+  - "@agentclientprotocol/codex-acp@1.1.2"
   - "@openclaw/crabline@0.1.9"
   - "@openclaw/fs-safe@0.4.1"
   - "@openclaw/proxyline@0.3.3"

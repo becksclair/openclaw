@@ -37,6 +37,7 @@ const bundledPluginEntries = [
 
 const bundledPluginIgnoredRuntimeDependencies = [
   "@agentclientprotocol/claude-agent-acp",
+  "@agentclientprotocol/codex-acp",
   "@a2ui/lit",
   "@azure/identity",
   "@clawdbot/lobster",
@@ -48,13 +49,13 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "@openai/codex",
   "@pierre/theme",
   "@tloncorp/tlon-skill",
-  "@zed-industries/codex-acp",
   "jiti",
   "json5",
   "lit",
   "linkedom",
   "openclaw",
   "clawpdf",
+  "smol-toml",
 ] as const;
 
 const rootBundledPluginRuntimeDependencies = [

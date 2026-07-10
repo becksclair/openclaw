@@ -21,10 +21,12 @@ import {
   OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
 } from "./process-lease.js";
 
-const CODEX_ACP_PACKAGE = "@zed-industries/codex-acp";
+const CODEX_ACP_PACKAGE = "@agentclientprotocol/codex-acp";
+const LEGACY_CODEX_ACP_PACKAGE = "@zed-industries/codex-acp";
 const CODEX_ACP_BIN = "codex-acp";
 const CLAUDE_ACP_PACKAGE = "@agentclientprotocol/claude-agent-acp";
 const CLAUDE_ACP_BIN = "claude-agent-acp";
+const TOML_PACKAGE = "smol-toml";
 const RUN_CONFIGURED_COMMAND_SENTINEL = "--openclaw-run-configured";
 const requireFromHere = createRequire(import.meta.url);
 
@@ -104,6 +106,10 @@ async function resolveInstalledCodexAcpBinPath(): Promise<string | undefined> {
 
 async function resolveInstalledClaudeAcpBinPath(): Promise<string | undefined> {
   return await resolveInstalledAcpPackageBinPath(CLAUDE_ACP_PACKAGE, CLAUDE_ACP_BIN);
+}
+
+function resolveInstalledTomlModulePath(): string {
+  return requireFromHere.resolve(TOML_PACKAGE);
 }
 
 type DiagnosticRedactionRuleSpec = {
@@ -229,6 +235,7 @@ function buildAdapterWrapperScript(params: {
   binName: string;
   installedBinPath?: string;
   envSetup: string;
+  prepareDefaultArgs?: string;
   stderrLogFileNamePrefix?: string;
 }): string {
   return `#!/usr/bin/env node
@@ -419,12 +426,13 @@ if (installedBinPath) {
   defaultCommand = process.platform === "win32" ? "npx.cmd" : "npx";
   defaultArgs = ["--yes", "--package", "${params.packageSpec}", "--", "${params.binName}"];
 }
-const command =
-  configuredArgs[0] === "${RUN_CONFIGURED_COMMAND_SENTINEL}" ? configuredArgs[1] : defaultCommand;
+const runsConfiguredCommand = configuredArgs[0] === "${RUN_CONFIGURED_COMMAND_SENTINEL}";
+const preparedDefaultArgs = runsConfiguredCommand
+  ? configuredArgs
+  : ${params.prepareDefaultArgs ?? "configuredArgs"};
+const command = runsConfiguredCommand ? configuredArgs[1] : defaultCommand;
 const args =
-  configuredArgs[0] === "${RUN_CONFIGURED_COMMAND_SENTINEL}"
-    ? configuredArgs.slice(2)
-    : [...defaultArgs, ...configuredArgs];
+  runsConfiguredCommand ? configuredArgs.slice(2) : [...defaultArgs, ...preparedDefaultArgs];
 
 if (!command) {
   console.error("[openclaw] missing configured ${params.displayName} ACP command");
@@ -530,14 +538,20 @@ child.on("close", () => {
 `;
 }
 
-function buildCodexAcpWrapperScript(installedBinPath?: string): string {
+function buildCodexAcpWrapperScript(installedBinPath: string | undefined, tomlModulePath: string) {
   return buildAdapterWrapperScript({
     displayName: "Codex",
     packageSpec: `${CODEX_ACP_PACKAGE}@${CODEX_ACP_PACKAGE_VERSION}`,
     binName: CODEX_ACP_BIN,
     installedBinPath,
     stderrLogFileNamePrefix: "codex-acp-wrapper.stderr",
-    envSetup: `const codexHome = fileURLToPath(new URL("./codex-home/", import.meta.url));
+    prepareDefaultArgs: "prepareCodexAcpArgs(configuredArgs)",
+    envSetup: `const tomlModule = await import(${JSON.stringify(tomlModulePath)});
+const parseToml = tomlModule.parse ?? tomlModule.default?.parse;
+if (typeof parseToml !== "function") {
+  throw new Error("OpenClaw could not load its TOML parser");
+}
+const codexHome = fileURLToPath(new URL("./codex-home/", import.meta.url));
 const codexAuthPath = fileURLToPath(new URL("./codex-home/auth.json", import.meta.url));
 const codexApiKey = (process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || "").trim();
 let shouldWriteCodexApiKeyAuth = false;
@@ -570,7 +584,46 @@ if (shouldWriteCodexApiKeyAuth) {
 const env = {
   ...process.env,
   CODEX_HOME: codexHome,
-};`,
+};
+
+function parseCodexConfigValue(value) {
+  try {
+    return parseToml("value = " + value).value;
+  } catch {
+    return value.trim().replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, "$1$2");
+  }
+}
+
+function prepareCodexAcpArgs(args) {
+  // The bundled adapter owns the pinned Codex runtime; custom commands bypass this path.
+  delete env.CODEX_PATH;
+  const passthrough = [];
+  const overrides = {};
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const config = arg === "-c" ? args[index + 1] : undefined;
+    const separator = config?.indexOf("=") ?? -1;
+    if (separator <= 0) {
+      passthrough.push(arg);
+      continue;
+    }
+    const key = config.slice(0, separator);
+    overrides[key] = parseCodexConfigValue(config.slice(separator + 1));
+    index += 1;
+  }
+  if (Object.keys(overrides).length > 0) {
+    let existing = {};
+    if (env.CODEX_CONFIG) {
+      const parsed = JSON.parse(env.CODEX_CONFIG);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("CODEX_CONFIG must be a JSON object");
+      }
+      existing = parsed;
+    }
+    env.CODEX_CONFIG = JSON.stringify({ ...existing, ...overrides });
+  }
+  return passthrough;
+}`,
   });
 }
 
@@ -629,10 +682,14 @@ async function makeGeneratedWrapperExecutableIfPossible(wrapperPath: string): Pr
   }
 }
 
-async function writeCodexAcpWrapper(baseDir: string, installedBinPath?: string): Promise<string> {
+async function writeCodexAcpWrapper(
+  baseDir: string,
+  installedBinPath: string | undefined,
+  tomlModulePath: string,
+): Promise<string> {
   await fs.mkdir(baseDir, { recursive: true });
   const wrapperPath = path.join(baseDir, "codex-acp-wrapper.mjs");
-  await fs.writeFile(wrapperPath, buildCodexAcpWrapperScript(installedBinPath), {
+  await fs.writeFile(wrapperPath, buildCodexAcpWrapperScript(installedBinPath, tomlModulePath), {
     encoding: "utf8",
   });
   await makeGeneratedWrapperExecutableIfPossible(wrapperPath);
@@ -708,11 +765,17 @@ function extractConfiguredAdapterArgs(params: {
 }
 
 function buildCodexAcpWrapperCommand(wrapperPath: string, configuredCommand?: string): string {
-  const configuredAdapterArgs = extractConfiguredAdapterArgs({
-    configuredCommand,
-    packageName: CODEX_ACP_PACKAGE,
-    binName: CODEX_ACP_BIN,
-  });
+  const configuredAdapterArgs =
+    extractConfiguredAdapterArgs({
+      configuredCommand,
+      packageName: CODEX_ACP_PACKAGE,
+      binName: CODEX_ACP_BIN,
+    }) ??
+    extractConfiguredAdapterArgs({
+      configuredCommand,
+      packageName: LEGACY_CODEX_ACP_PACKAGE,
+      binName: CODEX_ACP_BIN,
+    });
   if (configuredAdapterArgs) {
     return buildWrapperCommand(wrapperPath, configuredAdapterArgs);
   }
@@ -754,7 +817,11 @@ export async function prepareAcpxCodexAuthConfig(params: {
   const installedClaudeBinPath = await (
     params.resolveInstalledClaudeAcpBinPath ?? resolveInstalledClaudeAcpBinPath
   )();
-  const wrapperPath = await writeCodexAcpWrapper(codexBaseDir, installedCodexBinPath);
+  const wrapperPath = await writeCodexAcpWrapper(
+    codexBaseDir,
+    installedCodexBinPath,
+    resolveInstalledTomlModulePath(),
+  );
   const claudeWrapperPath = await writeClaudeAcpWrapper(codexBaseDir, installedClaudeBinPath);
   const configuredCodexCommand = params.pluginConfig.agents.codex;
   const configuredClaudeCommand = params.pluginConfig.agents.claude;

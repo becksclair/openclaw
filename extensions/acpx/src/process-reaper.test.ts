@@ -15,12 +15,15 @@ const CODEX_WRAPPER_COMMAND = `node ${WRAPPER_ROOT}/codex-acp-wrapper.mjs`;
 const CODEX_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-1 ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-1`;
 const CLAUDE_WRAPPER_COMMAND = `node ${WRAPPER_ROOT}/claude-agent-acp-wrapper.mjs`;
 const PLUGIN_DEPS_CODEX_COMMAND =
-  "node /tmp/openclaw/plugin-runtime-deps/node_modules/@zed-industries/codex-acp/bin/codex-acp.js";
+  "node /tmp/openclaw/plugin-runtime-deps/node_modules/@agentclientprotocol/codex-acp/dist/index.js";
 const LOCAL_NODE_MODULES_CODEX_COMMAND = `node ${path.resolve(
-  "node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
+  "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
 )}`;
 const LOCAL_NODE_MODULES_CODEX_PLATFORM_COMMAND = path.resolve(
   "node_modules/@zed-industries/codex-acp-linux-x64/bin/codex-acp",
+);
+const SHARED_NODE_MODULES_CODEX_COMMAND = path.resolve(
+  "node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex",
 );
 
 function cleanupDeps(processes: AcpxProcessInfo[]) {
@@ -90,9 +93,9 @@ describe("process reaper", () => {
 
   it("recognizes OpenClaw plugin-runtime-deps ACP adapter children", () => {
     expect(isOpenClawOwnedAcpxProcessCommand({ command: PLUGIN_DEPS_CODEX_COMMAND })).toBe(true);
-    expect(isOpenClawOwnedAcpxProcessCommand({ command: "npx @zed-industries/codex-acp" })).toBe(
-      false,
-    );
+    expect(
+      isOpenClawOwnedAcpxProcessCommand({ command: "npx @agentclientprotocol/codex-acp" }),
+    ).toBe(false);
   });
 
   it("recognizes plugin-local ACP adapter package paths without trusting arbitrary installs", () => {
@@ -101,9 +104,13 @@ describe("process reaper", () => {
     );
     expect(
       isOpenClawOwnedAcpxProcessCommand({
-        command: "node /tmp/other-project/node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
+        command:
+          "node /tmp/other-project/node_modules/@agentclientprotocol/codex-acp/dist/index.js",
       }),
     ).toBe(false);
+    expect(isOpenClawOwnedAcpxProcessCommand({ command: SHARED_NODE_MODULES_CODEX_COMMAND })).toBe(
+      false,
+    );
   });
 
   it("kills an owned recorded process tree children first", async () => {

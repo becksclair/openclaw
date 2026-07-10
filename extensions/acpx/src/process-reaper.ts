@@ -18,6 +18,8 @@ const GENERATED_WRAPPER_BASENAMES = new Set([
 ]);
 const OPENCLAW_PLUGIN_DEPS_MARKER = "/plugin-runtime-deps/";
 const OWNED_ACP_PACKAGE_NAMES = [
+  "@agentclientprotocol/codex-acp",
+  // Retain retired adapter paths so upgrades can reap orphaned pre-migration processes.
   "@zed-industries/codex-acp",
   "@zed-industries/codex-acp-darwin-arm64",
   "@zed-industries/codex-acp-darwin-x64",

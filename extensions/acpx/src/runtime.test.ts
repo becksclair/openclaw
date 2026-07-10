@@ -20,11 +20,11 @@ type TestSessionStore = {
 
 const DOCUMENTED_OPENCLAW_BRIDGE_COMMAND =
   "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 openclaw acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main";
-const CODEX_ACP_COMMAND = "npx @zed-industries/codex-acp@0.13.0";
+const CODEX_ACP_COMMAND = "npx @agentclientprotocol/codex-acp@1.1.2";
 const CODEX_ACP_WRAPPER_COMMAND = `node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"`;
 const CODEX_ACP_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-close ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
 const LOCAL_NODE_MODULES_CODEX_COMMAND = `node "${path.resolve(
-  "node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
+  "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
 )}"`;
 
 function makeRuntime(
@@ -295,7 +295,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(defaultProbe).not.toHaveBeenCalled();
   });
 
-  it("normalizes OpenClaw Codex model ids for ACP startup", async () => {
+  it("routes a bare OpenClaw Codex model through startup config", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
@@ -323,8 +323,6 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       sessionKey: "agent:codex:acp:test",
       agent: "codex",
       mode: "persistent",
-      model: "gpt-5.4",
-      sessionOptions: { model: "gpt-5.4" },
     });
   });
 
@@ -915,12 +913,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         reasoningEffort: "medium",
       }),
     ).toBe(
-      "npx @zed-industries/codex-acp@0.13.0 -c model=gpt-5.4 -c model_reasoning_effort=medium",
+      "npx @agentclientprotocol/codex-acp@1.1.2 -c model=gpt-5.4 -c model_reasoning_effort=medium",
     );
     expect(testing.isCodexAcpCommand("openclaw acp")).toBe(false);
   });
 
-  it("passes gpt-5.5 Codex ACP startup through instead of blocking it", async () => {
+  it("lets Codex config choose the default effort for a bare startup model", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
@@ -948,12 +946,10 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       sessionKey: "agent:codex:acp:test",
       agent: "codex",
       mode: "persistent",
-      model: "gpt-5.5",
-      sessionOptions: { model: "gpt-5.5" },
     });
   });
 
-  it("maps explicit Codex ACP thinking to startup reasoning effort", async () => {
+  it("routes explicit Codex reasoning effort through startup config", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
@@ -982,10 +978,41 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       sessionKey: "agent:codex:acp:test",
       agent: "codex",
       mode: "persistent",
-      model: "gpt-5.4/xhigh",
       thinking: "x-high",
-      sessionOptions: { model: "gpt-5.4/xhigh" },
     });
+  });
+
+  it("preserves GPT-5.6 ultra as an adapter reasoning effort", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "codex",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "openai/gpt-5.6-sol",
+      thinking: "ultra",
+    });
+
+    expect(readFirstEnsureSessionInput(ensure)).toMatchObject({
+      agent: "codex",
+      thinking: "ultra",
+    });
+    expect(readFirstEnsureSessionInput(ensure)).not.toHaveProperty("model");
+    expect(readFirstEnsureSessionInput(ensure)).not.toHaveProperty("sessionOptions.model");
   });
 
   it("normalizes Codex ACP model config controls to adapter ids", async () => {
@@ -1198,7 +1225,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       ),
     ).toBe(true);
     expect(testing.isClaudeAcpCommand("openclaw acp")).toBe(false);
-    expect(testing.isClaudeAcpCommand("npx @zed-industries/codex-acp")).toBe(false);
+    expect(testing.isClaudeAcpCommand("npx @agentclientprotocol/codex-acp")).toBe(false);
   });
 
   it("keeps stale persistent loads hidden until a fresh record is saved", async () => {
@@ -1333,7 +1360,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
               pid: 901,
               ppid: 900,
               command:
-                "node /tmp/openclaw/plugin-runtime-deps/node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
+                "node /tmp/openclaw/plugin-runtime-deps/node_modules/@agentclientprotocol/codex-acp/dist/index.js",
             },
           ]),
           killProcess: vi.fn((pid, signal) => {

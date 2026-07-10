@@ -336,7 +336,7 @@ const OPENCLAW_BRIDGE_SUBCOMMAND = "acp";
 const CODEX_ACP_AGENT_ID = "codex";
 const CODEX_ACP_OPENCLAW_PREFIX = "openai/";
 const CLAUDE_ACP_OPENCLAW_PREFIX = "anthropic/";
-const CODEX_ACP_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
+const CODEX_ACP_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max", "ultra"]);
 const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
   ["off", undefined],
   ["minimal", "low"],
@@ -349,6 +349,8 @@ const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
   ["extra_high", "xhigh"],
   ["extra high", "xhigh"],
   ["xhigh", "xhigh"],
+  ["max", "max"],
+  ["ultra", "ultra"],
 ]);
 
 type CodexAcpModelOverride = {
@@ -463,10 +465,12 @@ function isOpenClawBridgeCommand(command: string | undefined): boolean {
 }
 
 function isCodexAcpCommand(command: string | undefined): boolean {
-  return isAcpCommand(command, {
-    packageName: "@zed-industries/codex-acp",
-    executableName: "codex-acp",
-  });
+  return ["@agentclientprotocol/codex-acp", "@zed-industries/codex-acp"].some((packageName) =>
+    isAcpCommand(command, {
+      packageName,
+      executableName: "codex-acp",
+    }),
+  );
 }
 
 function isClaudeAcpCommand(command: string | undefined): boolean {
@@ -507,7 +511,7 @@ function assertSupportedRuntimeSessionMode(
 function failUnsupportedCodexAcpThinking(rawThinking: string): never {
   throw new AcpRuntimeError(
     "ACP_INVALID_RUNTIME_OPTION",
-    `Codex ACP thinking level "${rawThinking}" is not supported. Use off, minimal, low, medium, high, or xhigh.`,
+    `Codex ACP thinking level "${rawThinking}" is not supported. Use off, minimal, low, medium, high, xhigh, max, or ultra.`,
   );
 }
 
@@ -560,15 +564,6 @@ function normalizeCodexAcpModelOverride(
     model,
     ...(reasoningEffort ? { reasoningEffort } : {}),
   };
-}
-
-function codexAcpSessionModelId(override: CodexAcpModelOverride): string {
-  if (!override.model) {
-    return "";
-  }
-  return override.reasoningEffort
-    ? `${override.model}/${override.reasoningEffort}`
-    : override.model;
 }
 
 function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string | undefined {
@@ -1112,12 +1107,7 @@ export class AcpxRuntime implements AcpRuntime {
       });
     }
 
-    const normalizedInput = {
-      ...ensureInput,
-      ...(codexAcpSessionModelId(codexModelOverride)
-        ? { model: codexAcpSessionModelId(codexModelOverride) }
-        : {}),
-    };
+    const { model: _configuredModel, ...ensureInputWithoutModel } = ensureInput;
     return await this.runWithLaunchLease({
       sessionKey: input.sessionKey,
       command: stableLaunchCommand,
@@ -1127,7 +1117,7 @@ export class AcpxRuntime implements AcpRuntime {
           this.withCodexWrapperDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
-            run: () => delegate.ensureSession(withAcpxSessionOptions(normalizedInput)),
+            run: () => delegate.ensureSession(withAcpxSessionOptions(ensureInputWithoutModel)),
           }),
         ),
     });
@@ -1405,7 +1395,6 @@ export {
 export const testing = {
   appendCodexAcpConfigOverrides,
   assertSupportedRuntimeSessionMode,
-  codexAcpSessionModelId,
   isClaudeAcpCommand,
   isCodexAcpCommand,
   normalizeClaudeAcpModelOverride,

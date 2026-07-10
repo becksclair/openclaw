@@ -72,7 +72,7 @@ function resolveAcpAgentCommand(): { command: string; args?: string[] } {
     args: [
       ...(codexHome ? [`CODEX_HOME=${codexHome}`] : []),
       process.execPath,
-      path.join(process.cwd(), "node_modules/@zed-industries/codex-acp/bin/codex-acp.js"),
+      path.join(process.cwd(), "node_modules/@agentclientprotocol/codex-acp/dist/index.js"),
     ],
   };
 }
