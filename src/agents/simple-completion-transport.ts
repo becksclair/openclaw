@@ -97,6 +97,31 @@ function applyProviderSimpleCompletionWrapper(model: Model, cfg?: OpenClawConfig
   return { ...model, api };
 }
 
+function registerTransportAwareSimpleModel(params: {
+  model: Model;
+  streamFn: StreamFn;
+  fallbackApi: Api;
+  cfg?: OpenClawConfig;
+}): Model {
+  const transportApi = params.model.api;
+  const transportStreamFn: StreamFn = (runtimeModel, context, options) =>
+    params.streamFn({ ...runtimeModel, api: transportApi }, context, options);
+  const wrapped = wrapProviderSimpleCompletionStreamFn({
+    provider: params.model.provider,
+    config: params.cfg,
+    context: {
+      config: params.cfg,
+      provider: params.model.provider,
+      modelId: params.model.id,
+      model: params.model,
+      streamFn: transportStreamFn,
+    },
+  });
+  const api = wrapped ? resolveProviderSimpleCompletionApi(params.model) : params.fallbackApi;
+  ensureCustomApiRegistered(api, wrapped ?? params.streamFn);
+  return api === params.model.api ? params.model : { ...params.model, api };
+}
+
 function prepareCodexSimpleTransportModel<TApi extends Api>(
   model: Model<TApi>,
   cfg?: OpenClawConfig,
@@ -117,11 +142,12 @@ function prepareCodexSimpleTransportModel<TApi extends Api>(
     return undefined;
   }
 
-  ensureCustomApiRegistered(api, streamFn);
-  return {
-    ...transportModel,
-    api,
-  };
+  return registerTransportAwareSimpleModel({
+    model: transportModel,
+    streamFn,
+    fallbackApi: api,
+    cfg,
+  });
 }
 
 export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
@@ -143,8 +169,12 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   if (transportAwareModel !== model) {
     const streamFn = buildTransportAwareSimpleStreamFn(model, { cfg });
     if (streamFn) {
-      ensureCustomApiRegistered(transportAwareModel.api, streamFn);
-      return applyProviderSimpleCompletionWrapper(transportAwareModel, cfg);
+      return registerTransportAwareSimpleModel({
+        model: transportAwareModel,
+        streamFn,
+        fallbackApi: transportAwareModel.api,
+        cfg,
+      });
     }
   }
 

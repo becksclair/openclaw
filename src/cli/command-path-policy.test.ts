@@ -204,6 +204,13 @@ describe("command-path-policy", () => {
       bypassConfigGuard: true,
       loadPlugins: "never",
     });
+    expectResolvedPolicy(["hooks", "relay"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    });
     expectResolvedPolicy(["config", "validate"], {
       bypassConfigGuard: true,
       loadPlugins: "never",

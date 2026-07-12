@@ -311,6 +311,8 @@ export interface AssistantMessage {
   usage: Usage;
   stopReason: StopReason;
   errorMessage?: string;
+  /** HTTP status captured at the provider boundary when a request fails. */
+  errorStatusCode?: number;
   errorCode?: string;
   errorType?: string;
   errorBody?: string;

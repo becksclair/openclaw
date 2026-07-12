@@ -74,5 +74,11 @@ describe("runEmbeddedAgent Codex server_error fallback handoff", () => {
     await expect(promise).rejects.toThrow(
       "LLM error server_error: An error occurred while processing your request.",
     );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: "openclaw",
+        agentHarnessRuntimeOverride: "openclaw",
+      }),
+    );
   });
 });

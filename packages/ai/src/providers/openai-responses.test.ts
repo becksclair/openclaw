@@ -2,13 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
 
-const openAiMockState = vi.hoisted(() => ({ configs: [] as unknown[] }));
+const openAiMockState = vi.hoisted(() => ({
+  configs: [] as unknown[],
+  error: undefined as Error | undefined,
+}));
 
 vi.mock("openai", () => ({
   default: class MockOpenAI {
     responses = {
       create: vi.fn(() => {
-        throw new Error("stop after constructor");
+        throw openAiMockState.error ?? new Error("stop after constructor");
       }),
     };
 
@@ -43,6 +46,7 @@ function model(overrides: Partial<Model<"openai-responses">> = {}) {
 describe("OpenAI Responses provider", () => {
   afterEach(() => {
     openAiMockState.configs = [];
+    openAiMockState.error = undefined;
     configureAiTransportHost({});
   });
 
@@ -57,6 +61,19 @@ describe("OpenAI Responses provider", () => {
     expect(result.stopReason).toBe("error");
     expect(openAiMockState.configs).toHaveLength(1);
     expect((openAiMockState.configs[0] as { fetch?: unknown }).fetch).toBe(hostFetch);
+  });
+
+  it("preserves the provider HTTP status on failed responses", async () => {
+    openAiMockState.error = Object.assign(new Error("model unavailable"), { status: 404 });
+
+    const result = await streamOpenAIResponses(model(), context, {
+      apiKey: "sentinel-key",
+    }).result();
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorStatusCode: 404,
+    });
   });
 
   it("keeps Cloudflare composed upstream auth opaque in SDK headers", async () => {

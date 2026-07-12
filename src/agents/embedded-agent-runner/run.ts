@@ -2129,7 +2129,11 @@ async function runEmbeddedAgentInternal(
           if (!startupStagesEmitted) {
             startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
             startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
-            notifyExecutionPhase("attempt_dispatch", { provider, model: modelId });
+            notifyExecutionPhase("attempt_dispatch", {
+              provider,
+              model: modelId,
+              ...(typeof attemptFastMode === "boolean" ? { fastMode: attemptFastMode } : {}),
+            });
             emitStartupStageSummary(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
             startupStagesEmitted = true;
           }

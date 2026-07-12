@@ -1552,7 +1552,7 @@ describe("active-memory plugin", () => {
     expect(params.suppressPluginHooks).toBe(true);
   });
 
-  it("uses fresh Codex recall sessions while keeping the Codex client warm", async () => {
+  it("uses fresh direct OpenClaw recall sessions for OpenAI models", async () => {
     api.pluginConfig = {
       agents: ["main"],
       model: "openai/gpt-5.4-mini",
@@ -1582,8 +1582,9 @@ describe("active-memory plugin", () => {
     expect(secondParams.sessionId).not.toBe(firstParams.sessionId);
     expect(secondParams.sessionFile).not.toBe(firstParams.sessionFile);
     expect(secondParams.runId).not.toBe(firstParams.runId);
-    expect(secondParams.agentHarnessId).toBe("codex");
-    expect(secondParams.cleanupBundleMcpOnRunEnd).toBe(false);
+    expect(secondParams.agentHarnessId).toBeUndefined();
+    expect(secondParams.agentHarnessRuntimeOverride).toBe("openclaw");
+    expect(secondParams.cleanupBundleMcpOnRunEnd).toBe(true);
     expect(secondParams.sessionFile).toMatch(
       new RegExp(
         `${escapeRegExp(path.sep)}openclaw-active-memory-recall-[^${escapeRegExp(
@@ -1593,7 +1594,7 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("uses one-shot hidden recall sessions for non-Codex harness models", async () => {
+  it("uses one-shot direct OpenClaw recall sessions for other providers", async () => {
     const sessionKey = "agent:main:main";
     await hooks.before_prompt_build(
       { prompt: "what wings should i order tonight?", messages: [] },
@@ -1619,6 +1620,7 @@ describe("active-memory plugin", () => {
     expect(secondParams.sessionId).not.toBe(firstParams.sessionId);
     expect(secondParams.sessionFile).not.toBe(firstParams.sessionFile);
     expect(secondParams.agentHarnessId).toBeUndefined();
+    expect(secondParams.agentHarnessRuntimeOverride).toBe("openclaw");
     expect(secondParams.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
@@ -1746,6 +1748,9 @@ describe("active-memory plugin", () => {
     expect(runParams.prompt).toContain(
       "Use the bounded search query with the configured memory tools.",
     );
+    expect(runParams.prompt).toContain("Make one batched search call first.");
+    expect(runParams.prompt).toContain("Use memory_get at most once");
+    expect(runParams.prompt).toContain("Use deep historical expansion only when");
     expect(runParams.prompt).toContain("Configured memory tools: memory_search, memory_get.");
     expect(runParams.prompt).toContain(
       "If the available memory tools find nothing useful, reply with NONE.",
@@ -1832,7 +1837,7 @@ describe("active-memory plugin", () => {
     expect(runParams.prompt).toContain("Configured memory tools: search_notes, recall_context.");
   });
 
-  it("keeps Honcho tools out of the hidden recall tool surface", async () => {
+  it("preserves explicitly configured Honcho retrieval tools on the direct recall surface", async () => {
     api.pluginConfig = {
       agents: ["main"],
       toolsAllow: [
@@ -1865,6 +1870,9 @@ describe("active-memory plugin", () => {
     const expectedHiddenTools = [
       "memory_search",
       "memory_get",
+      "honcho_context",
+      "honcho_search_conclusions",
+      "honcho_search_messages",
       "lcm_grep",
       "lcm_describe",
       "lcm_expand_query",
@@ -1872,9 +1880,9 @@ describe("active-memory plugin", () => {
     expect(runParams.toolsAllow).toEqual([...expectedHiddenTools]);
     expect(activeMemoryConfigFrom(embeddedRunConfig()).toolsAllow).toEqual(expectedHiddenTools);
     expect(runParams.prompt).toContain(
-      "Configured memory tools: memory_search, memory_get, lcm_grep, lcm_describe, lcm_expand_query.",
+      `Configured memory tools: ${expectedHiddenTools.join(", ")}.`,
     );
-    expect(runParams.prompt).not.toContain("honcho");
+    expect(runParams.prompt).toContain("honcho_context");
   });
 
   it("uses memory_recall by default when the memory slot selects LanceDB", async () => {
@@ -2099,7 +2107,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().thinkLevel).toBe("off");
-    expect(lastEmbeddedRunParams().reasoningLevel).toBe("off");
+    expect(lastEmbeddedRunParams().reasoningLevel).toBeUndefined();
 
     api.pluginConfig = {
       agents: ["main"],
@@ -2121,7 +2129,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().thinkLevel).toBe("medium");
-    expect(lastEmbeddedRunParams().reasoningLevel).toBe("off");
+    expect(lastEmbeddedRunParams().reasoningLevel).toBeUndefined();
   });
 
   it("allows appending extra prompt instructions without replacing the base prompt", async () => {

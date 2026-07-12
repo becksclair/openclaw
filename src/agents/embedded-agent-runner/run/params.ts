@@ -246,6 +246,7 @@ export type RunEmbeddedAgentParams = {
     toolCallId?: string;
     itemId?: string;
     firstModelCallStarted?: boolean;
+    fastMode?: boolean;
   }) => void;
   onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
   onRunProgress?: (info: {

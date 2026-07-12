@@ -65,6 +65,16 @@ import { transformMessages } from "./transform-messages.js";
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 
+function readHttpErrorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const status = (error as { status?: unknown; statusCode?: unknown }).status;
+  const statusCode =
+    typeof status === "number" ? status : (error as { statusCode?: unknown }).statusCode;
+  return typeof statusCode === "number" && Number.isInteger(statusCode) ? statusCode : undefined;
+}
+
 function sanitizeToolResultText(text: string, fallback: string): string {
   const sanitized = sanitizeSurrogates(text);
   return sanitized.trim().length > 0 ? sanitized : fallback;
@@ -639,6 +649,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     cleanStreamingScratchBuffers(output);
     output.stopReason = options?.signal?.aborted ? "aborted" : "error";
     output.errorMessage = params.formatError(error);
+    output.errorStatusCode = readHttpErrorStatus(error);
     stream.push({ type: "error", reason: output.stopReason, error: output });
     stream.end();
   } finally {

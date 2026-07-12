@@ -286,6 +286,16 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["exec-approvals"], policy: { networkProxy: "bypass" } },
   { commandPath: ["exec-policy"], policy: { networkProxy: "bypass" } },
   { commandPath: ["hooks"], policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["hooks", "relay"],
+    exact: true,
+    policy: {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      ensureCliPath: false,
+    },
+  },
   { commandPath: ["logs"], policy: { networkProxy: "bypass" } },
   { commandPath: ["mcp"], policy: { networkProxy: "bypass" } },
   {

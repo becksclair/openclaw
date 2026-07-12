@@ -283,9 +283,11 @@ export function buildCodexNativeHookRelayConfig(params: {
   events?: readonly NativeHookRelayEvent[];
   hookTimeoutSec?: number;
   clearOmittedEvents?: boolean;
+  locallyHandledToolNames?: Iterable<string>;
 }): JsonObject {
   const events = params.events?.length ? params.events : CODEX_NATIVE_HOOK_RELAY_EVENTS;
   const selectedEvents = new Set<NativeHookRelayEvent>(events);
+  const toolMatcher = buildCodexToolMatcherExcludingExactNames(params.locallyHandledToolNames);
   const config: JsonObject = {
     "features.hooks": true,
   };
@@ -316,6 +318,9 @@ export function buildCodexNativeHookRelayConfig(params: {
     });
     config[`hooks.${codexEvent}`] = [
       {
+        ...((event === "pre_tool_use" || event === "post_tool_use") && toolMatcher
+          ? { matcher: toolMatcher }
+          : {}),
         hooks: [
           {
             type: "command",
@@ -331,6 +336,9 @@ export function buildCodexNativeHookRelayConfig(params: {
       enabled: true,
       trusted_hash: codexCommandHookTrustedHash({
         event,
+        ...((event === "pre_tool_use" || event === "post_tool_use") && toolMatcher
+          ? { matcher: toolMatcher }
+          : {}),
         command,
         timeout,
         statusMessage: "OpenClaw native hook relay",
@@ -362,6 +370,61 @@ function normalizeHookTimeoutSec(value: number | undefined): number {
     : CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC;
 }
 
+type ToolNameMatcherTrieNode = {
+  terminal: boolean;
+  children: Map<string, ToolNameMatcherTrieNode>;
+};
+
+function buildCodexToolMatcherExcludingExactNames(
+  toolNames: Iterable<string> | undefined,
+): string | undefined {
+  const excludedNames = [...new Set(toolNames ?? [])]
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .toSorted();
+  if (excludedNames.length === 0) {
+    return undefined;
+  }
+  const root: ToolNameMatcherTrieNode = { terminal: false, children: new Map() };
+  for (const name of excludedNames) {
+    let node = root;
+    for (const char of name) {
+      let child = node.children.get(char);
+      if (!child) {
+        child = { terminal: false, children: new Map() };
+        node.children.set(char, child);
+      }
+      node = child;
+    }
+    node.terminal = true;
+  }
+  return `^(?:${renderToolNameMatcherTrie(root)})$`;
+}
+
+function renderToolNameMatcherTrie(node: ToolNameMatcherTrieNode): string {
+  const children = [...node.children.entries()].toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  const alternatives = node.terminal ? [] : [""];
+  alternatives.push(
+    children.length === 0
+      ? "[\\s\\S]+"
+      : `[^${children.map(([char]) => escapeRegexCharacterClass(char)).join("")}][\\s\\S]*`,
+  );
+  for (const [char, child] of children) {
+    alternatives.push(`${escapeRegexLiteral(char)}(?:${renderToolNameMatcherTrie(child)})`);
+  }
+  return alternatives.join("|");
+}
+
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function escapeRegexCharacterClass(value: string): string {
+  return value.replace(/[\\\]^\-]/gu, "\\$&");
+}
+
 export function resolveCodexNativeHookRelayCommandTimeoutMs(
   hookTimeoutSec: number | undefined,
 ): number {
@@ -376,6 +439,7 @@ export function resolveCodexNativeHookRelayCommandTimeoutMs(
 
 function codexCommandHookTrustedHash(params: {
   event: NativeHookRelayEvent;
+  matcher?: string;
   command: string;
   timeout: number;
   statusMessage: string;
@@ -385,6 +449,7 @@ function codexCommandHookTrustedHash(params: {
   // trust identity even though both forms match all tools.
   const identity = {
     event_name: CODEX_HOOK_KEY_LABEL_BY_NATIVE_EVENT[params.event],
+    ...(params.matcher ? { matcher: params.matcher } : {}),
     hooks: [
       {
         async: false,

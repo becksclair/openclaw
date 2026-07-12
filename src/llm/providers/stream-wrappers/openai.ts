@@ -611,13 +611,24 @@ export function createOpenAIFastModeWrapper(
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
+        const applyFastMode = (nextPayload: unknown) => {
+          if (!nextPayload || typeof nextPayload !== "object") {
+            return;
+          }
           applyOpenAIFastModePayloadOverrides({
-            payloadObj: payload as Record<string, unknown>,
+            payloadObj: nextPayload as Record<string, unknown>,
             model,
           });
+        };
+        const nextPayload = originalOnPayload?.(payload, model);
+        if (nextPayload instanceof Promise) {
+          return nextPayload.then((resolvedPayload) => {
+            applyFastMode(resolvedPayload ?? payload);
+            return resolvedPayload;
+          });
         }
-        return originalOnPayload?.(payload, model);
+        applyFastMode(nextPayload ?? payload);
+        return nextPayload;
       },
     });
   };

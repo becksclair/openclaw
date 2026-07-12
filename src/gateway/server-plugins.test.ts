@@ -1077,6 +1077,45 @@ describe("loadGatewayPlugins", () => {
     expect(params.deliver).toBe(false);
   });
 
+  test("allows trusted plugin overrides from a non-admin request scope", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins, {
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["openai/gpt-5.6-terra"],
+            },
+          },
+        },
+      },
+    });
+    const scope = {
+      context: createTestContext("request-scope-trusted-plugin-override"),
+      client: {
+        connect: {
+          scopes: ["operator.write"],
+        },
+      } as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("lossless-claw", () =>
+        runtime.run({
+          sessionKey: "s-trusted-plugin-override",
+          message: "use the configured override",
+          model: "openai/gpt-5.6-terra",
+          deliver: false,
+        }),
+      ),
+    );
+
+    expect(getRequiredLastDispatchedParams().model).toBe("openai/gpt-5.6-terra");
+    expect(getLastDispatchedClientInternal().allowModelOverride).toBe(true);
+  });
+
   test("forwards caller-supplied idempotencyKey on subagent run", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);

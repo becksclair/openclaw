@@ -52,6 +52,26 @@ describe("createOpenAIFastModeWrapper", () => {
     expect(payloads[0]?.service_tier).toBe("priority");
     expect(payloads[1]).not.toHaveProperty("service_tier");
   });
+
+  it("patches a payload replacement returned by a later request shaper", () => {
+    let sentPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload = { model: model.id };
+      sentPayload = (options?.onPayload?.(payload, model) ?? payload) as Record<string, unknown>;
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createOpenAIFastModeWrapper(baseStreamFn, true);
+
+    void wrapped(
+      openaiModel,
+      { messages: [] },
+      {
+        onPayload: () => ({ model: openaiModel.id, store: false }),
+      },
+    );
+
+    expect(sentPayload?.service_tier).toBe("priority");
+  });
 });
 
 describe("createOpenAICompletionsToolsCompatWrapper", () => {

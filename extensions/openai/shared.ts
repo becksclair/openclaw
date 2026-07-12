@@ -11,6 +11,10 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { createOpenAINativeWebSearchWrapper } from "./native-web-search.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
+  applyOpenAIResponsesLiteTurnState,
+  createOpenAIResponsesLiteWrapper,
+} from "./responses-lite.js";
+import {
   resolveOpenAITransportTurnState,
   resolveOpenAIWebSocketSessionPolicy,
 } from "./transport-policy.js";
@@ -66,13 +70,18 @@ type OpenAIResponsesProviderHooks = Pick<
   | "buildReplayPolicy"
   | "prepareExtraParams"
   | "wrapStreamFn"
+  | "wrapSimpleCompletionStreamFn"
   | "resolveTransportTurnState"
   | "resolveWebSocketSessionPolicy"
 >;
 
 const resolveOpenAIResponsesTransportTurnState: NonNullable<
   OpenAIResponsesProviderHooks["resolveTransportTurnState"]
-> = (ctx) => resolveOpenAITransportTurnState(ctx);
+> = (ctx) =>
+  applyOpenAIResponsesLiteTurnState({
+    model: ctx.model ?? { provider: ctx.provider, id: ctx.modelId },
+    state: resolveOpenAITransportTurnState(ctx),
+  });
 
 const resolveOpenAIResponsesWebSocketSessionPolicy: NonNullable<
   OpenAIResponsesProviderHooks["resolveWebSocketSessionPolicy"]
@@ -82,11 +91,17 @@ const wrapOpenAIResponsesStreamFn = OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn;
 const wrapOpenAIResponsesProviderStreamFn: NonNullable<
   OpenAIResponsesProviderHooks["wrapStreamFn"]
 > = (ctx) =>
-  createOpenAINativeWebSearchWrapper(wrapOpenAIResponsesStreamFn?.(ctx) ?? ctx.streamFn, {
-    config: ctx.config,
-    agentId: ctx.agentId,
-    nativeWebSearchAllowedByToolPolicy: ctx.nativeWebSearchAllowedByToolPolicy,
-  });
+  createOpenAIResponsesLiteWrapper(
+    createOpenAINativeWebSearchWrapper(wrapOpenAIResponsesStreamFn?.(ctx) ?? ctx.streamFn, {
+      config: ctx.config,
+      agentId: ctx.agentId,
+      nativeWebSearchAllowedByToolPolicy: ctx.nativeWebSearchAllowedByToolPolicy,
+    }),
+  );
+
+const wrapOpenAIResponsesSimpleCompletionStreamFn: NonNullable<
+  OpenAIResponsesProviderHooks["wrapSimpleCompletionStreamFn"]
+> = (ctx) => createOpenAIResponsesLiteWrapper(ctx.streamFn);
 
 export function buildOpenAIResponsesProviderHooks(options?: {
   transport?: "auto" | "sse" | "websocket";
@@ -96,6 +111,7 @@ export function buildOpenAIResponsesProviderHooks(options?: {
     prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams, options),
     ...OPENAI_RESPONSES_STREAM_HOOKS,
     wrapStreamFn: wrapOpenAIResponsesProviderStreamFn,
+    wrapSimpleCompletionStreamFn: wrapOpenAIResponsesSimpleCompletionStreamFn,
     resolveTransportTurnState: resolveOpenAIResponsesTransportTurnState,
     resolveWebSocketSessionPolicy: resolveOpenAIResponsesWebSocketSessionPolicy,
   };

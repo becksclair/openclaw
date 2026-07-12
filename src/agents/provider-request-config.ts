@@ -434,7 +434,7 @@ function resolveProviderDefaultRequestHeaders(
 
 // Header keys are compared case-insensitively and prototype-polluting names are
 // dropped before values are attached to outbound provider requests.
-function mergeProviderRequestHeaders(
+export function mergeProviderRequestHeaders(
   ...headerSets: Array<Record<string, string> | undefined>
 ): Record<string, string> | undefined {
   let merged: Record<string, string> | undefined;

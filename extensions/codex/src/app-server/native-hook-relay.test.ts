@@ -301,6 +301,34 @@ describe("Codex native hook relay config", () => {
     );
   });
 
+  it("excludes only dynamic tools already handled by the OpenClaw bridge", () => {
+    const config = buildCodexNativeHookRelayConfig({
+      relay: createRelay(),
+      events: ["pre_tool_use", "post_tool_use", "permission_request"],
+      locallyHandledToolNames: ["openclawlcm_describe", "sessions_spawn", "a-b"],
+    });
+
+    const preMatcher = (config["hooks.PreToolUse"] as Array<{ matcher?: string }>)[0]?.matcher;
+    const postMatcher = (config["hooks.PostToolUse"] as Array<{ matcher?: string }>)[0]?.matcher;
+    expect(preMatcher).toBe(postMatcher);
+    const matcher = new RegExp(preMatcher ?? "");
+    for (const toolName of ["openclawlcm_describe", "sessions_spawn", "a-b"]) {
+      expect(matcher.test(toolName)).toBe(false);
+    }
+    for (const toolName of [
+      "exec",
+      "mcp__memory__search",
+      "openclawlcm_describe_more",
+      "sessions_spawn_child",
+      "a",
+    ]) {
+      expect(matcher.test(toolName)).toBe(true);
+    }
+    expect(
+      (config["hooks.PermissionRequest"] as Array<{ matcher?: unknown }>)[0],
+    ).not.toHaveProperty("matcher");
+  });
+
   it("builds deterministic clearing config when the relay is disabled", () => {
     expect(buildCodexNativeHookRelayDisabledConfig()).toEqual({
       "features.hooks": false,

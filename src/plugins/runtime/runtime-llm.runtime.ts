@@ -222,6 +222,33 @@ function finiteOption(value: number | undefined): number | undefined {
   return asFiniteNumber(value);
 }
 
+function throwForFailedCompletion(
+  result: Message & { errorStatusCode?: number; errorCode?: string; errorType?: string },
+  signal?: AbortSignal,
+): void {
+  if (result.role !== "assistant") {
+    return;
+  }
+  if (result.stopReason === "aborted") {
+    if (signal?.reason instanceof Error) {
+      throw signal.reason;
+    }
+    const error = new Error(result.errorMessage || "Plugin LLM completion was aborted.");
+    error.name = "AbortError";
+    throw error;
+  }
+  if (result.stopReason !== "error") {
+    return;
+  }
+  const error = new Error(result.errorMessage || "Plugin LLM completion failed.");
+  Object.assign(error, {
+    ...(result.errorStatusCode !== undefined ? { statusCode: result.errorStatusCode } : {}),
+    ...(result.errorCode ? { code: result.errorCode } : {}),
+    ...(result.errorType ? { type: result.errorType } : {}),
+  });
+  throw error;
+}
+
 function normalizeAllowedModelRef(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -449,6 +476,8 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
           ...(params.reasoning ? { reasoning: params.reasoning } : {}),
         },
       });
+
+      throwForFailedCompletion(result, params.signal);
 
       const text = result.content
         .filter((c): c is { type: "text"; text: string } => c.type === "text")

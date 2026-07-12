@@ -102,7 +102,10 @@ import {
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
-import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
+import {
+  mergeProviderRequestHeaders,
+  resolveProviderRequestPolicyConfig,
+} from "./provider-request-config.js";
 import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
@@ -1901,7 +1904,7 @@ function buildOpenAIClientHeaders(
       }),
     );
   }
-  const callerHeaders = { ...optionHeaders, ...turnHeaders };
+  const callerHeaders = { ...optionHeaders };
   const headers = resolveProviderRequestPolicyConfig({
     provider: model.provider,
     api: model.api,
@@ -1912,7 +1915,10 @@ function buildOpenAIClientHeaders(
     callerHeaders: Object.keys(callerHeaders).length > 0 ? callerHeaders : undefined,
     precedence: "caller-wins",
   }).headers;
-  const resolvedHeaders = headers ?? {};
+  // Provider turn state is emitted by trusted plugin code after caller attribution is
+  // sanitized. This lets a provider select a native transport identity without letting
+  // config or request options spoof protected attribution headers.
+  const resolvedHeaders = mergeProviderRequestHeaders(headers, turnHeaders) ?? {};
   // This header routes ChatGPT Responses session affinity; without it requests land
   // on arbitrary machines and prompt cache misses. codex-rs sends "session-id"
   // (codex-rs/codex-api/src/requests/headers.rs), but backend accepts "session_id"; align with packages/ai openai-chatgpt-responses.
@@ -2271,7 +2277,13 @@ function sanitizeOpenAICodexResponsesParams<T extends Record<string, unknown>>(
   if (!usesNativeOpenAICodexResponsesBackend(model)) {
     return params;
   }
+  const responsesLite = model.headers?.["x-openai-internal-codex-responses-lite"] === "true";
   for (const key of OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS) {
+    // Responses Lite follows the current Codex client contract, which supports
+    // priority service tiers even though older native Codex routes do not.
+    if (key === "service_tier" && responsesLite) {
+      continue;
+    }
     delete params[key];
   }
   stripOpenAICodexResponsesUnsupportedTextFields(params);

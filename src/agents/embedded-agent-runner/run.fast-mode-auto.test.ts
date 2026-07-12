@@ -87,6 +87,27 @@ describe("runEmbeddedAgent fast auto progress", () => {
     expect(attemptParams.contextEngine).toBeUndefined();
   });
 
+  it("forwards explicit fast mode to the attempt and execution-phase observer", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("openai", "gpt-5.6-luna"));
+    const onExecutionPhase = vi.fn();
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      runId: "run-fast-explicit",
+      fastMode: true,
+      onExecutionPhase,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ fastMode: true }),
+    );
+    expect(onExecutionPhase).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "attempt_dispatch", fastMode: true }),
+    );
+  });
+
   it("emits auto-off after a tool execution boundary crosses the threshold", async () => {
     vi.useFakeTimers();
 

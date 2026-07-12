@@ -3591,6 +3591,24 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("default");
   });
 
+  it("maps fast mode to priority service_tier for ChatGPT Responses Lite models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.6-luna",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        id: "gpt-5.6-luna",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      } as unknown as Model<"openai-chatgpt-responses">,
+      payload: {
+        store: false,
+      },
+    });
+    expect(payload.service_tier).toBe("priority");
+  });
+
   it("maps MiniMax /fast to the matching highspeed model", () => {
     const resolvedModelId = runResolvedModelIdCase({
       applyProvider: "minimax",

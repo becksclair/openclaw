@@ -112,6 +112,17 @@ export function flattenCodexDynamicToolFunctions(
   return (tools ?? []).flatMap((tool) => (tool.type === "namespace" ? tool.tools : [tool]));
 }
 
+/** Returns the exact hook identities Codex derives for OpenClaw dynamic tools. */
+export function resolveCodexDynamicToolHookNames(
+  tools: readonly CodexDynamicToolSpec[] | undefined,
+): string[] {
+  return (tools ?? []).flatMap((tool) =>
+    tool.type === "namespace"
+      ? tool.tools.map((nestedTool) => `${tool.name}${nestedTool.name}`)
+      : [tool.name],
+  );
+}
+
 export type CodexTurnEnvironmentParams = JsonObject & {
   environmentId: string;
   cwd: string;

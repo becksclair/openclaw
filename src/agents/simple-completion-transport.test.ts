@@ -272,6 +272,49 @@ describe("prepareModelForSimpleCompletion", () => {
     });
   });
 
+  it("applies provider wrappers after transport-aware model preparation", () => {
+    const model: Model<"openai-responses"> = {
+      id: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 372_000,
+      maxTokens: 128_000,
+    };
+    const transportModel = { ...model, api: "openclaw-openai-responses-transport" };
+    const transportStream = vi.fn(() => "transport" as never);
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
+    prepareTransportAwareSimpleModel.mockReturnValueOnce(transportModel);
+    buildTransportAwareSimpleStreamFn.mockReturnValueOnce(transportStream);
+    wrapProviderSimpleCompletionStreamFn.mockImplementationOnce(({ context }) => context.streamFn);
+
+    const result = prepareModelForSimpleCompletion({ model });
+
+    expect(wrapProviderSimpleCompletionStreamFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        context: expect.objectContaining({
+          model: transportModel,
+          streamFn: expect.any(Function),
+        }),
+      }),
+    );
+    expect(result.api).toBe(
+      "openclaw-provider-simple:openai:gpt-5.6-luna:openclaw-openai-responses-transport:https%3A%2F%2Fchatgpt.com%2Fbackend-api%2Fcodex",
+    );
+    const registeredStream = ensureCustomApiRegistered.mock.calls.at(-1)?.[1] as StreamFn;
+    registeredStream({ ...transportModel, api: result.api }, { messages: [] } as never, {});
+    expect(transportStream).toHaveBeenCalledWith(
+      expect.objectContaining({ api: "openclaw-openai-responses-transport" }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("uses the Google simple-completion sanitizer alias after transport checks pass through", () => {
     const model: Model<"google-generative-ai"> = {
       id: "gemini-flash-latest",

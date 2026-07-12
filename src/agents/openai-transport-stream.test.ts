@@ -946,6 +946,39 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("allows trusted provider turn state to select a native transport identity", () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      { "User-Agent": "caller-spoof" },
+      {
+        originator: "Codex Desktop",
+        "User-Agent": "Codex Desktop/0.144.1 (OpenClaw Responses Lite)",
+        "x-openai-internal-codex-responses-lite": "true",
+      },
+    );
+
+    expectRecordFields(headers, {
+      originator: "Codex Desktop",
+      version: "2026.3.22",
+      "User-Agent": "Codex Desktop/0.144.1 (OpenClaw Responses Lite)",
+      "x-openai-internal-codex-responses-lite": "true",
+    });
+  });
+
   it("adds OpenClaw attribution to native OpenAI Codex transport headers", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const headers = testing.buildOpenAIClientHeaders(
@@ -4237,6 +4270,36 @@ describe("openai transport stream", () => {
     expect(sanitized).not.toHaveProperty("temperature");
     expect(sanitized.text).toEqual({ verbosity: "low" });
     expect(sanitized).not.toHaveProperty("top_p");
+  });
+
+  it("preserves service_tier for native Responses Lite requests", () => {
+    const payload = {
+      model: "gpt-5.6-luna",
+      input: [],
+      stream: true,
+      service_tier: "priority",
+      temperature: 0.2,
+    };
+
+    const sanitized = testing.sanitizeOpenAICodexResponsesParams(
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        headers: { "x-openai-internal-codex-responses-lite": "true" },
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 372000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-chatgpt-responses">,
+      payload,
+    );
+
+    expect(sanitized.service_tier).toBe("priority");
+    expect(sanitized).not.toHaveProperty("temperature");
   });
 
   it("preserves custom Codex-compatible responses params", () => {

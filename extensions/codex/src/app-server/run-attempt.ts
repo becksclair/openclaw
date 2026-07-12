@@ -219,6 +219,7 @@ import {
 import {
   flattenCodexDynamicToolFunctions,
   isJsonObject,
+  resolveCodexDynamicToolHookNames,
   type CodexSandboxPolicy,
   type CodexTurnEnvironmentParams,
   type CodexServerNotification,
@@ -1136,6 +1137,9 @@ export async function runCodexAppServerAttempt(
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
     },
   });
+  const dynamicTools =
+    params.suppressPluginHooks === true ? toolBridge.availableSpecs : toolBridge.specs;
+  const locallyHandledToolNames = resolveCodexDynamicToolHookNames(dynamicTools);
   attemptStages.mark("tool-bridge");
   const hadSessionFile = await pathExists(activeSessionFile);
   const activeTranscriptTarget = {
@@ -1986,6 +1990,7 @@ export async function runCodexAppServerAttempt(
             relay: nativeHookRelay,
             events: nativeHookRelayEvents,
             hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+            locallyHandledToolNames,
           })
         : options.nativeHookRelay?.enabled === false
           ? buildCodexNativeHookRelayDisabledConfig()
@@ -2020,8 +2025,7 @@ export async function runCodexAppServerAttempt(
       sessionAgentId,
       effectiveWorkspace,
       effectiveCwd,
-      dynamicTools:
-        params.suppressPluginHooks === true ? toolBridge.availableSpecs : toolBridge.specs,
+      dynamicTools,
       persistentWebSearchAllowed,
       webSearchAllowed,
       baseInstructions: appServerBaseInstructions,

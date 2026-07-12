@@ -13,6 +13,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
+import { resolveCodexDynamicToolHookNames, type CodexDynamicToolSpec } from "./protocol.js";
 import {
   createParams,
   createResumeHarness,
@@ -67,12 +68,23 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     await run;
 
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
-    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
-      ?.config;
+    const startParams = startRequest?.params as
+      | { config?: Record<string, unknown>; dynamicTools?: CodexDynamicToolSpec[] }
+      | undefined;
+    const startConfig = startParams?.config;
     expect(startConfig?.["features.hooks"]).toBe(true);
     const preToolUseHooks = startConfig?.["hooks.PreToolUse"] as
-      | Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
+      | Array<{
+          matcher?: string;
+          hooks?: Array<{ command?: string; timeout?: number; type?: string }>;
+        }>
       | undefined;
+    const matcher = new RegExp(preToolUseHooks?.[0]?.matcher ?? "");
+    for (const toolName of resolveCodexDynamicToolHookNames(startParams?.dynamicTools)) {
+      expect(matcher.test(toolName)).toBe(false);
+    }
+    expect(matcher.test("exec")).toBe(true);
+    expect(matcher.test("mcp__filesystem__read_file")).toBe(true);
     const preToolUseCommand = preToolUseHooks?.[0]?.hooks?.[0];
     expect(preToolUseCommand?.type).toBe("command");
     expect(preToolUseCommand?.timeout).toBe(9);

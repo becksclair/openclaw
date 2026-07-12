@@ -336,7 +336,7 @@ function mergeGatewayClientInternal(
 }
 
 type DispatchGatewayMethodInProcessOptions = {
-  allowSyntheticModelOverride?: boolean;
+  allowPolicyModelOverride?: boolean;
   agentRunTracking?: "plugin_subagent";
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
@@ -450,15 +450,16 @@ export async function dispatchGatewayMethodInProcessRaw(
       ? options.pluginRuntimeOwnerId.trim()
       : undefined;
   const syntheticClient = createSyntheticOperatorClient({
-    allowModelOverride: options?.allowSyntheticModelOverride === true,
+    allowModelOverride: options?.allowPolicyModelOverride === true,
     agentRunTracking: options?.agentRunTracking,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
     scopes: options?.syntheticScopes,
   });
   const scopedClient = mergeGatewayClientInternal(
     scope?.client,
-    pluginRuntimeOwnerId || options?.agentRunTracking
+    pluginRuntimeOwnerId || options?.agentRunTracking || options?.allowPolicyModelOverride
       ? {
+          ...(options?.allowPolicyModelOverride ? { allowModelOverride: true } : {}),
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
         }
@@ -697,8 +698,8 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       const overrideRequested = Boolean(params.provider || params.model);
       const hasRequestScopeClient = Boolean(scope?.client);
       let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
-      let allowSyntheticModelOverride = false;
-      if (overrideRequested && !allowOverride && !hasRequestScopeClient) {
+      let allowPolicyModelOverride = false;
+      if (overrideRequested && !allowOverride) {
         const fallbackAuth = authorizeFallbackModelOverride({
           pluginId: scope?.pluginId,
           provider: params.provider,
@@ -708,7 +709,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           throw new Error(fallbackAuth.reason);
         }
         allowOverride = true;
-        allowSyntheticModelOverride = true;
+        allowPolicyModelOverride = true;
       }
       if (overrideRequested && !allowOverride) {
         throw new Error("provider/model override is not authorized for this plugin subagent run.");
@@ -765,7 +766,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           idempotencyKey: params.idempotencyKey || randomUUID(),
         },
         {
-          allowSyntheticModelOverride,
+          allowPolicyModelOverride,
           agentRunTracking: "plugin_subagent",
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
         },

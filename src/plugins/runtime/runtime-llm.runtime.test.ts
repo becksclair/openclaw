@@ -175,6 +175,44 @@ describe("runtime.llm.complete", () => {
     });
   });
 
+  it("rejects provider failures instead of returning an empty successful completion", async () => {
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage: "OpenAI API error (404): model unavailable",
+      errorStatusCode: 404,
+      errorCode: "model_not_found",
+      usage: { input: 0, output: 0, total: 0 },
+    });
+    const runtime = createRuntimeLlm({ getConfig: () => cfg });
+
+    const completion = runtime.complete({
+      messages: [{ role: "user", content: "summarize" }],
+    });
+
+    await expect(completion).rejects.toMatchObject({
+      message: "OpenAI API error (404): model unavailable",
+      statusCode: 404,
+      code: "model_not_found",
+    });
+  });
+
+  it("preserves abort semantics for aborted provider completions", async () => {
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      role: "assistant",
+      content: [],
+      stopReason: "aborted",
+      errorMessage: "request aborted",
+      usage: { input: 0, output: 0, total: 0 },
+    });
+    const runtime = createRuntimeLlm({ getConfig: () => cfg });
+
+    await expect(
+      runtime.complete({ messages: [{ role: "user", content: "summarize" }] }),
+    ).rejects.toMatchObject({ name: "AbortError", message: "request aborted" });
+  });
+
   it("passes the active auth profile to context-engine completions", async () => {
     const runtimeContext = resolveContextEngineCapabilities({
       config: cfg,

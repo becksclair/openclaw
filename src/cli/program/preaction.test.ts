@@ -179,6 +179,10 @@ describe("registerPreActionHooks", () => {
       .option("--lint")
       .action(() => {});
     programLocal.command("completion").action(() => {});
+    programLocal
+      .command("hooks")
+      .command("relay")
+      .action(() => {});
     programLocal.command("secrets").action(() => {});
     programLocal
       .command("agents")
@@ -683,6 +687,16 @@ describe("registerPreActionHooks", () => {
     await runPreAction({
       parseArgv: ["config", "validate"],
       processArgv: ["node", "openclaw", "config", "validate"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("bypasses config bootstrap for the internal native hook relay", async () => {
+    await runPreAction({
+      parseArgv: ["hooks", "relay"],
+      processArgv: ["node", "openclaw", "hooks", "relay"],
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();

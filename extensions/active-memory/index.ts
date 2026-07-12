@@ -477,11 +477,7 @@ function normalizeConfiguredToolsAllow(value: unknown): string[] | undefined {
 
 function isReservedActiveMemoryToolsAllowEntry(value: string): boolean {
   const normalized = value.trim().toLowerCase();
-  return (
-    normalized.startsWith("group:") ||
-    normalized.startsWith("honcho_") ||
-    ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW.has(normalized)
-  );
+  return normalized.startsWith("group:") || ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW.has(normalized);
 }
 
 function resolveDefaultToolsAllow(cfg: OpenClawConfig | undefined): string[] {
@@ -548,13 +544,6 @@ function resolvePersistentTranscriptBaseDir(api: OpenClawPluginApi, agentId: str
 
 function stableRecallDigest(value: string, length = 16): string {
   return crypto.createHash("sha1").update(value).digest("hex").slice(0, length);
-}
-
-function shouldUseCodexHarnessForReusableRecall(modelRef: {
-  provider: string;
-  model: string;
-}): boolean {
-  return modelRef.provider.trim().toLowerCase() === "openai";
 }
 
 function resolveCanonicalSessionKeyFromSessionId(params: {
@@ -1096,6 +1085,10 @@ function buildRecallPrompt(params: {
     "You receive a bounded search query plus conversation context, including the user's latest message.",
     "Use only the available memory tools.",
     "Use the bounded search query with the configured memory tools.",
+    "Make one batched search call first. Do not repeat equivalent searches with rewritten queries.",
+    "Use memory_get at most once, and only when the first search result identifies one clearly relevant item whose excerpt is insufficient.",
+    "Use deep historical expansion only when the first search result identifies a clearly relevant compressed item that cannot be summarized accurately from its returned excerpt.",
+    "After the search and optional single targeted fetch or expansion, immediately return NONE or the compact memory note.",
     `Configured memory tools: ${params.config.toolsAllow.join(", ")}.`,
     "Do not use channel metadata, provider metadata, debug output, or the full conversation context as the memory tool query.",
     "If the available memory tools find nothing useful, reply with NONE.",
@@ -2966,10 +2959,6 @@ async function runRecallSubagent(params: {
       sessionId: params.sessionId,
     });
   const subagentScope = parentSessionKey ?? params.sessionId ?? `agent:${params.agentId}`;
-  const recallAgentHarnessId = shouldUseCodexHarnessForReusableRecall(modelRef)
-    ? "codex"
-    : undefined;
-  const keepCodexClientWarm = recallAgentHarnessId === "codex";
   const runNonce = crypto.randomUUID().slice(0, 8);
   const recallSessionKeyBase = parentSessionKey
     ? `${parentSessionKey}:${ACTIVE_MEMORY_RECALL_SESSION_SUFFIX}`
@@ -3020,6 +3009,13 @@ async function runRecallSubagent(params: {
   let harnessHasUsableMemoryResult = false;
   let harnessHasUnavailableMemorySearchResult = false;
   const recallRunStartedAt = Date.now();
+  const recallRunStartedAtMonotonic = performance.now();
+  const phaseTimings: string[] = [];
+  let laneWaitMs = 0;
+  let modelCalls = 0;
+  let toolCalls = 0;
+  let toolResults = 0;
+  let firstAssistantOutputMs: number | undefined;
   const fastModeAgeMs =
     typeof params.fastModeStartedAtMs === "number" && Number.isFinite(params.fastModeStartedAtMs)
       ? Math.max(0, recallRunStartedAt - params.fastModeStartedAtMs)
@@ -3037,7 +3033,7 @@ async function runRecallSubagent(params: {
         `model=${toSingleLineLogValue(`${modelRef.provider}/${modelRef.model}`)}`,
         `timeoutMs=${embeddedTimeoutMs}`,
         `privateRuntime=${params.config.persistTranscripts ? "false" : "true"}`,
-        `codexWarmClient=${keepCodexClientWarm ? "true" : "false"}`,
+        `runtime=openclaw`,
         `startByteOffset=${sessionFileStartByteOffset}`,
         `tools=${hiddenToolsAllow.length}`,
         `fastMode=${String(params.fastMode ?? "unset")}`,
@@ -3060,7 +3056,7 @@ async function runRecallSubagent(params: {
       prompt,
       provider: modelRef.provider,
       model: modelRef.model,
-      agentHarnessId: recallAgentHarnessId,
+      agentHarnessRuntimeOverride: "openclaw",
       lane: ACTIVE_MEMORY_RECALL_LANE,
       timeoutMs: embeddedTimeoutMs,
       runId: subagentRunId,
@@ -3078,15 +3074,30 @@ async function runRecallSubagent(params: {
       bootstrapContextMode: "lightweight",
       verboseLevel: "off",
       thinkLevel: params.config.thinking,
-      reasoningLevel: "off",
       fastMode: params.fastMode,
       fastModeStartedAtMs: params.fastModeStartedAtMs,
       fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
       silentExpected: true,
       authProfileFailurePolicy: "local",
-      cleanupBundleMcpOnRunEnd: !keepCodexClientWarm,
+      cleanupBundleMcpOnRunEnd: true,
       abortSignal: params.abortSignal,
+      onLaneWait: (event) => {
+        laneWaitMs = Math.max(laneWaitMs, event.waitMs);
+      },
+      onExecutionPhase: (event) => {
+        const elapsedMs = Math.round(performance.now() - recallRunStartedAtMonotonic);
+        if (event.phase === "model_call_started") {
+          modelCalls += 1;
+        } else if (event.phase === "tool_execution_started") {
+          toolCalls += 1;
+        }
+        phaseTimings.push(`${event.phase}:${elapsedMs}`);
+      },
+      onAssistantMessageStart: () => {
+        firstAssistantOutputMs ??= Math.round(performance.now() - recallRunStartedAtMonotonic);
+      },
       onAgentToolResult: (event) => {
+        toolResults += 1;
         const evidence = readMemoryToolResultEvidence({
           ...event,
           toolsAllow: hiddenToolsAllow,
@@ -3096,6 +3107,7 @@ async function runRecallSubagent(params: {
       },
     });
     activeSessionFile = readActiveMemorySessionFileFromRunResult(result) ?? sessionFile;
+    const runnerCompletedMs = Math.round(performance.now() - recallRunStartedAtMonotonic);
     if (params.abortSignal?.aborted) {
       const reason = params.abortSignal.reason;
       if (reason instanceof Error) {
@@ -3126,12 +3138,21 @@ async function runRecallSubagent(params: {
       rotatedTranscriptState?.searchDebug ??
       stableTranscriptState.searchDebug ??
       readActiveMemorySearchDebugFromRunResult(result);
+    const completedMs = Math.round(performance.now() - recallRunStartedAtMonotonic);
     params.api.logger.info?.(
       [
         "active-memory: recall sub-agent completed",
         `agent=${toSingleLineLogValue(params.agentId)}`,
         `session=${subagentSessionId}`,
         `elapsedMs=${Date.now() - recallRunStartedAt}`,
+        `runnerMs=${runnerCompletedMs}`,
+        `postProcessMs=${completedMs - runnerCompletedMs}`,
+        `laneWaitMs=${laneWaitMs}`,
+        `modelCalls=${modelCalls}`,
+        `toolCalls=${toolCalls}`,
+        `toolResults=${toolResults}`,
+        `firstAssistantOutputMs=${firstAssistantOutputMs ?? "none"}`,
+        `phases=${phaseTimings.join(",") || "none"}`,
         `status=ok`,
         `rawChars=${rawReply.length}`,
         `stableEvidence=${stableTranscriptState.hasUsableMemoryResult ? "true" : "false"}`,
