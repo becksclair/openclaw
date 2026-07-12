@@ -90,23 +90,13 @@ export function patchOpenAIResponsesLitePayload(params: {
   params.payload.parallel_tool_calls = false;
   params.payload.tool_choice = "auto";
   params.payload.store = false;
-  // The family wrapper removes reasoning for thinking=off. Do not recreate it here,
-  // or Lite silently falls back to the model's default reasoning effort.
-  if (isRecord(params.payload.reasoning)) {
-    const include = Array.isArray(params.payload.include) ? params.payload.include : [];
-    params.payload.include = Array.from(new Set([...include, "reasoning.encrypted_content"]));
-    params.payload.reasoning = { ...params.payload.reasoning, context: "all_turns" };
-  } else {
-    const include = Array.isArray(params.payload.include)
-      ? params.payload.include.filter((entry) => entry !== "reasoning.encrypted_content")
-      : [];
-    if (include.length > 0) {
-      params.payload.include = include;
-    } else {
-      delete params.payload.include;
-    }
-    delete params.payload.reasoning;
-  }
+  const include = Array.isArray(params.payload.include) ? params.payload.include : [];
+  params.payload.include = Array.from(new Set([...include, "reasoning.encrypted_content"]));
+  // Responses Lite requires the reasoning envelope even when the caller selected
+  // thinking=off. Preserve the missing effort while adding its mandatory context.
+  params.payload.reasoning = isRecord(params.payload.reasoning)
+    ? { ...params.payload.reasoning, context: "all_turns" }
+    : { context: "all_turns" };
   return "patched";
 }
 

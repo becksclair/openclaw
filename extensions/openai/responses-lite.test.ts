@@ -117,15 +117,15 @@ describe("OpenAI Responses Lite", () => {
     expect(capture.getPayload()?.service_tier).toBe("priority");
   });
 
-  it("preserves thinking off through the composed Responses Lite wrapper stack", () => {
+  it("keeps the mandatory Lite reasoning context without restoring an effort", () => {
     const capture = runHook({
       modelId: "gpt-5.6-luna",
       simple: false,
       thinkingLevel: "off",
     });
 
-    expect(capture.getPayload()).not.toHaveProperty("reasoning");
-    expect(capture.getPayload()).not.toHaveProperty("include");
+    expect(capture.getPayload()?.reasoning).toEqual({ context: "all_turns" });
+    expect(capture.getPayload()?.include).toContain("reasoning.encrypted_content");
   });
 
   it.each(GPT_56_MODELS)("rewrites simple-completion payloads for %s", (modelId) => {
