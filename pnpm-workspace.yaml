@@ -156,3 +156,4 @@ packageExtensions:
 
 patchedDependencies:
   "@openclaw/fs-safe@0.4.1": patches/@openclaw__fs-safe@0.4.1.patch
+  tokenjuice@0.8.1: patches/tokenjuice@0.8.1.patch

@@ -38,6 +38,7 @@ packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
 
 patchedDependencies:
   '@openclaw/fs-safe@0.4.1': e49004277fcb3e714125baf15a996682c7310e8e9269c865cc5bcb9fef46a57c
+  tokenjuice@0.8.1: 2c25c81b42c596daa3a8dd4b9a52617361af2628ad92ab891d9dfb4c81aea0d4
 
 importers:
 
@@ -1652,7 +1653,7 @@ importers:
     dependencies:
       tokenjuice:
         specifier: 0.8.1
-        version: 0.8.1
+        version: 0.8.1(patch_hash=2c25c81b42c596daa3a8dd4b9a52617361af2628ad92ab891d9dfb4c81aea0d4)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -13415,7 +13416,7 @@ snapshots:
       '@tokenizer/token': 0.3.0
       ieee754: 1.2.1
 
-  tokenjuice@0.8.1: {}
+  tokenjuice@0.8.1(patch_hash=2c25c81b42c596daa3a8dd4b9a52617361af2628ad92ab891d9dfb4c81aea0d4): {}
 
   totalist@3.0.1: {}
 
