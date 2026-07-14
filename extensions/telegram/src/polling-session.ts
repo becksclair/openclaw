@@ -250,7 +250,7 @@ type SpooledUpdateHandlerState = {
   task: Promise<boolean>;
   update: ClaimedTelegramSpooledUpdate;
   updateId: number;
-  startedAt: number;
+  activity: { lastProgressAt: number };
   stopClaimRefresh: () => void;
   backlogStatusMessage?: string;
   timedOutAt?: number;
@@ -629,6 +629,7 @@ export class TelegramPollingSession {
   async #handleClaimedSpooledUpdate(params: {
     bot: TelegramBot;
     onTurnAdopted: () => void;
+    onProgress: () => void;
     stopClaimRefresh: () => void;
     update: ClaimedTelegramSpooledUpdate;
   }): Promise<boolean> {
@@ -637,7 +638,7 @@ export class TelegramPollingSession {
       const update = params.update.update as Parameters<typeof params.bot.handleUpdate>[0];
       replay = await runWithTelegramSpooledReplayUpdate(update, async () => {
         await params.bot.handleUpdate(update);
-      });
+      }, { onProgress: params.onProgress });
     } catch (err) {
       params.stopClaimRefresh();
       await this.#releaseFailedSpooledUpdate({
@@ -1016,10 +1017,14 @@ export class TelegramPollingSession {
           }
         },
       );
+      const activity = { lastProgressAt: Date.now() };
       const handler = this.#handleClaimedSpooledUpdate({
         bot: params.bot,
         onTurnAdopted: () => {
           abortReplyWorkOnClaimRefreshFailure = false;
+        },
+        onProgress: () => {
+          activity.lastProgressAt = Date.now();
         },
         stopClaimRefresh,
         update: claimedUpdate,
@@ -1030,7 +1035,7 @@ export class TelegramPollingSession {
         task: handler,
         update: claimedUpdate,
         updateId: claimedUpdate.updateId,
-        startedAt: Date.now(),
+        activity,
         stopClaimRefresh,
       };
       activeSpooledUpdateHandlersByLane.set(handlerKey, state);
@@ -1062,7 +1067,7 @@ export class TelegramPollingSession {
       if (!handler || handler.timedOutAt !== undefined) {
         continue;
       }
-      const ageMs = now - handler.startedAt;
+      const ageMs = now - handler.activity.lastProgressAt;
       if (ageMs < this.#spooledUpdateHandlerTimeoutMs) {
         continue;
       }
@@ -1090,7 +1095,7 @@ export class TelegramPollingSession {
     activeHandler.stopClaimRefresh();
     // Pre-adoption stall: the active handler should return once deferred work
     // is registered. A timeout here means ingress never reached adoption.
-    const message = `Telegram isolated polling spool handler timed out behind update ${handler.updateId} on lane ${handler.laneKey} after ${age}; marking the update failed (handler-timeout / pre-adoption) and restarting isolated ingress so later updates can drain.`;
+    const message = `Telegram isolated polling spool handler timed out behind update ${handler.updateId} on lane ${handler.laneKey} after no progress for ${age}; marking the update failed (handler-timeout / pre-adoption) and restarting isolated ingress so later updates can drain.`;
     activeHandler.timeoutMessage = message;
     try {
       const failed = await failTelegramSpooledUpdateClaim({
@@ -1157,7 +1162,7 @@ export class TelegramPollingSession {
       if (!handler || handler.timedOutAt !== undefined) {
         continue;
       }
-      const ageMs = now - handler.startedAt;
+      const ageMs = now - handler.activity.lastProgressAt;
       if (ageMs < ISOLATED_INGRESS_BACKLOG_STALL_MS) {
         continue;
       }

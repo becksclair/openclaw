@@ -1372,6 +1372,11 @@ export async function dispatchReplyFromConfig(
     };
   }
   const markProgress = () => {
+    try {
+      params.replyOptions?.onProgress?.();
+    } catch (err) {
+      logVerbose(`reply progress observer failed: ${String(err)}`);
+    }
     if (!canTrackSession || !sessionKey) {
       return;
     }
@@ -3524,6 +3529,9 @@ export async function dispatchReplyFromConfig(
                   suppressTyping: typing.suppressTyping,
                   onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply),
                   onReasoningStream: wrapProgressCallback(params.replyOptions?.onReasoningStream),
+                  onReasoningProgress: wrapProgressCallback(
+                    params.replyOptions?.onReasoningProgress,
+                  ),
                   streamReasoningInNonStreamModes:
                     params.replyOptions?.streamReasoningInNonStreamModes,
                   onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),

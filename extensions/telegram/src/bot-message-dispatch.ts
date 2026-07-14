@@ -245,6 +245,7 @@ type DispatchTelegramMessageParams = {
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
   opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
+  onProgress?: () => void;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
   /** Fires after recovery-relevant session/run state is durably persisted. */
@@ -2641,6 +2642,7 @@ export const dispatchTelegramMessage = async ({
                 },
                 replyOptions: {
                   skillFilter,
+                  onProgress: params.onProgress,
                   disableBlockStreaming,
                   abortSignal: replyAbortSignal,
                   onTurnAdopted: adoptReplyTurn,

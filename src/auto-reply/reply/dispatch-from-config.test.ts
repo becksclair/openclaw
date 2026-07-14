@@ -7353,11 +7353,14 @@ describe("dispatchReplyFromConfig", () => {
       To: "slack:C123",
     });
     const onReplyStart = vi.fn(async () => {});
+    const onProgress = vi.fn();
+    const onReasoningProgress = vi.fn();
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
     ): Promise<ReplyPayload> => {
       await opts?.onReplyStart?.();
+      await opts?.onReasoningProgress?.({ progressTokens: 128 });
       await opts?.onToolResult?.({ text: "tool progress" });
       return { text: "hi" };
     };
@@ -7366,12 +7369,14 @@ describe("dispatchReplyFromConfig", () => {
       ctx,
       cfg,
       dispatcher,
-      replyOptions: { onReplyStart },
+      replyOptions: { onProgress, onReasoningProgress, onReplyStart },
       replyResolver,
     });
 
     expect(onReplyStart).toHaveBeenCalledTimes(1);
-    expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledTimes(1);
+    expect(onReasoningProgress).toHaveBeenCalledTimes(1);
+    expect(onProgress).toHaveBeenCalledTimes(2);
+    expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledTimes(2);
     expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
     });

@@ -91,6 +91,8 @@ export type GetReplyOptions = {
    * Channels may complete ingress ownership here without waiting for settle.
    */
   onTurnAdopted?: () => void | Promise<void>;
+  /** Best-effort observer for reply, reasoning, tool, plan, and approval progress. */
+  onProgress?: () => void;
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onReplyStart?: () => Promise<void> | void;

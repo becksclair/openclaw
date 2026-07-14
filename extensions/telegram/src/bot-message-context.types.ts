@@ -31,6 +31,8 @@ export type TelegramMessageContextOptions = {
   spooledReplay?: boolean;
   /** Use an attempt-local participant so an outer retry loop owns final spool settlement. */
   isolateSpooledReplaySettlement?: boolean;
+  /** Refreshes the isolated-ingress watchdog when reply work makes progress. */
+  onProgress?: () => void;
 };
 
 export type TelegramPromptContextEntry = NonNullable<

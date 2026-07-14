@@ -12,12 +12,15 @@ type TelegramUpdateProcessingFrame = {
 
 type TelegramSpooledReplayFrame = {
   deferredWork?: TelegramSpooledReplayDeferredParticipant;
+  onProgress?: () => void;
 };
 
 export type TelegramSpooledReplayDeferredParticipant = {
   key: string;
   abortSignal: AbortSignal;
   task: Promise<TelegramMessageProcessingResult>;
+  lastProgressAt: () => number;
+  noteProgress: () => void;
   /** Defers external timeout settlement while durable adoption decides ownership. */
   beginSettlementHold: () => TelegramSpooledReplaySettlementHold | undefined;
   settle: (result: TelegramMessageProcessingResult) => void;
@@ -67,9 +70,11 @@ export function recordTelegramMessageProcessingResult(
 
 export function createTelegramSpooledReplayParticipant(
   key: string,
+  onProgress?: () => void,
 ): TelegramSpooledReplayDeferredParticipant {
   const abortController = new AbortController();
   let settled = false;
+  let progressAt = Date.now();
   let settlementHeld = false;
   let pendingSettlement: TelegramMessageProcessingResult | undefined;
   let resolveTask: (result: TelegramMessageProcessingResult) => void = () => {};
@@ -90,6 +95,11 @@ export function createTelegramSpooledReplayParticipant(
     key,
     abortSignal: abortController.signal,
     task,
+    lastProgressAt: () => progressAt,
+    noteProgress: () => {
+      progressAt = Date.now();
+      onProgress?.();
+    },
     beginSettlementHold: () => {
       if (settled || settlementHeld) {
         return undefined;
@@ -131,9 +141,13 @@ export function createTelegramSpooledReplayDeferredParticipant(
   if (!frame) {
     return null;
   }
-  const participant = createTelegramSpooledReplayParticipant(key);
+  const participant = createTelegramSpooledReplayParticipant(key, frame.onProgress);
   frame.deferredWork = participant;
   return participant;
+}
+
+export function recordTelegramSpooledReplayProgress(): void {
+  telegramSpooledReplayFrames.getStore()?.onProgress?.();
 }
 
 export function getTelegramSpooledReplayDeferredParticipant():
@@ -145,8 +159,9 @@ export function getTelegramSpooledReplayDeferredParticipant():
 export async function runWithTelegramSpooledReplayUpdate<T>(
   update: object,
   fn: () => Promise<T>,
+  options?: { onProgress?: () => void },
 ): Promise<{ value: T; deferredWork?: TelegramSpooledReplayDeferredParticipant }> {
-  const frame: TelegramSpooledReplayFrame = {};
+  const frame: TelegramSpooledReplayFrame = { onProgress: options?.onProgress };
   telegramSpooledReplayUpdates.add(update);
   try {
     const value = await telegramSpooledReplayFrames.run(frame, fn);

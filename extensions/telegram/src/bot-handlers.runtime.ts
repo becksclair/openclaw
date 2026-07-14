@@ -437,8 +437,17 @@ export const registerTelegramHandlers = ({
     createTelegramSpooledReplayDeferredParticipant(key) ?? undefined;
   const spooledReplayOptions = (
     participants: readonly TelegramSpooledReplayDeferredParticipant[],
-  ): Pick<TelegramMessageContextOptions, "spooledReplay"> =>
-    participants.length > 0 ? { spooledReplay: true } : {};
+  ): Pick<TelegramMessageContextOptions, "spooledReplay" | "onProgress"> =>
+    participants.length > 0
+      ? {
+          spooledReplay: true,
+          onProgress: () => {
+            for (const participant of participants) {
+              participant.noteProgress();
+            }
+          },
+        }
+      : {};
   const claimMessageDispatchDedupe = async (
     msg: Message,
   ): Promise<{ process: true; keys: string[] } | { process: false }> => {
