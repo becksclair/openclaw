@@ -758,6 +758,57 @@ export function hasNativeHookRelayInvocation(params: {
   );
 }
 
+/** Reads exact normalized Codex PreToolUse input from bounded relay history. */
+export function readNativeHookRelayToolInput(params: {
+  relayId: string;
+  toolUseId: string;
+}): Record<string, JsonValue> | undefined {
+  pruneExpiredNativeHookRelays();
+  const adapter = getNativeHookRelayProviderAdapter("codex");
+  for (let index = invocations.length - 1; index >= 0; index -= 1) {
+    const invocation = invocations[index];
+    if (
+      !invocation ||
+      invocation.provider !== "codex" ||
+      invocation.event !== "pre_tool_use" ||
+      invocation.relayId !== params.relayId ||
+      invocation.toolUseId !== params.toolUseId
+    ) {
+      continue;
+    }
+    const toolInput = adapter.readToolInput(invocation.rawPayload);
+    if (nativeHookRelaySnapshotWasTruncated(toolInput)) {
+      return undefined;
+    }
+    const snapshot = snapshotJsonValue(toolInput, {
+      remainingStringLength: MAX_NATIVE_HOOK_RELAY_HISTORY_TOTAL_STRING_LENGTH,
+    });
+    if (nativeHookRelaySnapshotWasTruncated(snapshot)) {
+      return undefined;
+    }
+    return isJsonObject(snapshot) ? (snapshot as Record<string, JsonValue>) : undefined;
+  }
+  return undefined;
+}
+
+function nativeHookRelaySnapshotWasTruncated(value: JsonValue): boolean {
+  // Invocation history is deliberately bounded. A clipped command is not exact presentation data,
+  // so callers must fall back to the execution-authoritative native item instead.
+  if (typeof value === "string") {
+    return value === "[truncated]" || value.endsWith("...[truncated]");
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => nativeHookRelaySnapshotWasTruncated(entry));
+  }
+  if (isJsonObject(value)) {
+    return (
+      Object.hasOwn(value, "[truncated]") ||
+      Object.values(value).some((entry) => nativeHookRelaySnapshotWasTruncated(entry))
+    );
+  }
+  return false;
+}
+
 export async function resolveNativeHookRelayDeferredToolApproval(params: {
   relayId: string;
   toolUseId?: string;

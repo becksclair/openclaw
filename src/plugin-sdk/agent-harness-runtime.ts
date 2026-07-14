@@ -108,6 +108,7 @@ export type {
   CodexAppServerToolResultHandlerResult,
 } from "../plugins/codex-app-server-extension-types.js";
 export type {
+  JsonValue,
   NativeHookRelayEvent,
   NativeHookRelayProcessResponse,
   NativeHookRelayProvider,
@@ -386,6 +387,7 @@ export {
   buildNativeHookRelayCommand,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
+  readNativeHookRelayToolInput,
   resolveNativeHookRelayDeferredToolApproval,
   testing as nativeHookRelayTesting,
   registerNativeHookRelay,

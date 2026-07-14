@@ -21,6 +21,7 @@ import {
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
   invokeNativeHookRelayBridge,
+  readNativeHookRelayToolInput,
   registerNativeHookRelay,
   resolveNativeHookRelayDeferredToolApproval,
 } from "./native-hook-relay.js";
@@ -1337,6 +1338,176 @@ describe("native hook relay registry", () => {
         event: "pre_tool_use",
       }),
     ).toBe(false);
+  });
+
+  it("reads normalized Codex PreToolUse input by relay and tool use id", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "exec_command",
+        tool_use_id: "call-1",
+        tool_input: { cmd: ["printf", "hello world"] },
+      },
+    });
+
+    expect(readNativeHookRelayToolInput({ relayId: relay.relayId, toolUseId: "call-1" })).toEqual({
+      cmd: ["printf", "hello world"],
+      command: "printf 'hello world'",
+    });
+  });
+
+  it("returns undefined for non-matching native hook invocations", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload: {
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        tool_use_id: "call-1",
+        tool_input: { command: "pnpm test" },
+        tool_response: { output: "ok" },
+      },
+    });
+
+    expect(
+      readNativeHookRelayToolInput({ relayId: relay.relayId, toolUseId: "call-1" }),
+    ).toBeUndefined();
+    expect(
+      readNativeHookRelayToolInput({ relayId: "other-relay", toolUseId: "call-1" }),
+    ).toBeUndefined();
+    expect(
+      readNativeHookRelayToolInput({ relayId: relay.relayId, toolUseId: "other-call" }),
+    ).toBeUndefined();
+  });
+
+  it("prefers the newest matching native hook invocation", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    for (const command of ["echo first", "echo newest"]) {
+      await invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "call-1",
+          tool_input: { command },
+        },
+      });
+    }
+
+    expect(readNativeHookRelayToolInput({ relayId: relay.relayId, toolUseId: "call-1" })).toEqual({
+      command: "echo newest",
+    });
+  });
+
+  it("returns a defensive snapshot of native hook tool input", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_use_id: "call-1",
+        tool_input: { command: "echo original", nested: { value: "original" } },
+      },
+    });
+
+    const first = readNativeHookRelayToolInput({ relayId: relay.relayId, toolUseId: "call-1" });
+    expect(first).toEqual({ command: "echo original", nested: { value: "original" } });
+    if (!first) {
+      throw new Error("Expected native hook tool input");
+    }
+    first.command = "echo mutated";
+    const nested = requireRecord(first.nested, "native hook tool input nested value");
+    nested.value = "mutated";
+
+    expect(readNativeHookRelayToolInput({ relayId: relay.relayId, toolUseId: "call-1" })).toEqual({
+      command: "echo original",
+      nested: { value: "original" },
+    });
+  });
+
+  it("rejects truncated native hook tool input", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_use_id: "call-1",
+        tool_input: { command: "x".repeat(4_001) },
+      },
+    });
+
+    expect(
+      readNativeHookRelayToolInput({ relayId: relay.relayId, toolUseId: "call-1" }),
+    ).toBeUndefined();
+  });
+
+  it("rejects normalized commands truncated after joining array arguments", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    await invokeNativeHookRelay({
+      relayId: relay.relayId,
+      provider: "codex",
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "exec_command",
+        tool_use_id: "call-1",
+        tool_input: { cmd: ["x".repeat(3_000), "y".repeat(3_000)] },
+      },
+    });
+
+    expect(
+      readNativeHookRelayToolInput({ relayId: relay.relayId, toolUseId: "call-1" }),
+    ).toBeUndefined();
   });
 
   it("retains bounded payload snapshots in invocation history", async () => {

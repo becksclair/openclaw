@@ -2610,6 +2610,165 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
+  it("presents original relay command args while auditing the executed command", async () => {
+    const onAgentEvent = vi.fn();
+    const onToolResult = vi.fn();
+    const readNativeToolPresentationArgs = vi.fn(() => ({
+      command: "pnpm test extensions/codex",
+    }));
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(
+      {
+        ...(await createParams()),
+        verboseLevel: "on",
+        onAgentEvent,
+        onToolResult,
+      },
+      {
+        readNativeToolPresentationArgs,
+        trajectoryRecorder,
+      },
+    );
+    const executedCommand =
+      "node /workspace/node_modules/tokenjuice/dist/cli/main.js wrap -- bash -lc 'pnpm test extensions/codex'";
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-tokenjuice-wrapper",
+          command: executedCommand,
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    expect(readNativeToolPresentationArgs).toHaveBeenCalledTimes(1);
+    expect(readNativeToolPresentationArgs).toHaveBeenCalledWith("cmd-tokenjuice-wrapper");
+    expect(
+      findAgentEvent(onAgentEvent, {
+        stream: "item",
+        phase: "start",
+        itemId: "cmd-tokenjuice-wrapper",
+      }).data.meta,
+    ).toBe("requested: run tests (workspace)");
+    expect(
+      findAgentEvent(onAgentEvent, {
+        stream: "tool",
+        phase: "start",
+        itemId: "cmd-tokenjuice-wrapper",
+        name: "bash",
+      }).data.args,
+    ).toEqual({ command: "pnpm test extensions/codex", cwd: "/workspace" });
+    expect(onToolResult.mock.calls.map(([payload]) => payload)).toEqual([
+      { text: "🛠️ `requested: run tests (workspace)`" },
+    ]);
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.call", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      itemId: "cmd-tokenjuice-wrapper",
+      toolCallId: "cmd-tokenjuice-wrapper",
+      name: "bash",
+      arguments: { command: executedCommand, cwd: "/workspace" },
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.toolMetas).toContainEqual({
+      toolName: "bash",
+      meta: "requested: run tests (workspace)",
+    });
+  });
+
+  it("retains relay presentation args through item notifications and the final snapshot", async () => {
+    const readNativeToolPresentationArgs = vi.fn(() => ({ command: "pnpm test" }));
+    const projector = await createProjector(await createParams(), {
+      readNativeToolPresentationArgs,
+    });
+    const startedItem = {
+      type: "commandExecution",
+      id: "cmd-tokenjuice-lifecycle",
+      command: "node /workspace/tokenjuice.js wrap -- bash -lc 'pnpm test'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "inProgress",
+      commandActions: [],
+      aggregatedOutput: null,
+      exitCode: null,
+      durationMs: null,
+    };
+    const completedItem = {
+      ...startedItem,
+      status: "completed",
+      aggregatedOutput: "ok",
+      exitCode: 0,
+      durationMs: 42,
+    };
+
+    await projector.handleNotification(forCurrentTurn("item/started", { item: startedItem }));
+    await projector.handleNotification(forCurrentTurn("item/completed", { item: completedItem }));
+    await projector.handleNotification(turnCompleted([completedItem]));
+
+    expect(readNativeToolPresentationArgs).toHaveBeenCalledTimes(1);
+    expect(projector.buildResult(buildEmptyToolTelemetry()).toolMetas).toContainEqual({
+      toolName: "bash",
+      meta: "requested: run tests (workspace)",
+    });
+  });
+
+  it("keeps executed command args in raw progress mode", async () => {
+    const onAgentEvent = vi.fn();
+    const executedCommand = "node /workspace/tokenjuice.js wrap -- bash -lc 'pnpm test'";
+    const projector = await createProjector(
+      {
+        ...(await createParams()),
+        onAgentEvent,
+        toolProgressDetail: "raw",
+      },
+      {
+        readNativeToolPresentationArgs: () => ({ command: "pnpm test" }),
+      },
+    );
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-tokenjuice-raw",
+          command: executedCommand,
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(
+      findAgentEvent(onAgentEvent, {
+        stream: "tool",
+        phase: "start",
+        itemId: "cmd-tokenjuice-raw",
+        name: "bash",
+      }).data.args,
+    ).toEqual({ command: executedCommand, cwd: "/workspace" });
+  });
+
   it("delivers completed assistant text when a native tool call finishes without a matching result", async () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",

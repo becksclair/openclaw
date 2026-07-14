@@ -76,6 +76,8 @@ export type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
   onNativeToolResultRecorded?: () => void | Promise<void>;
   readRecentRateLimits?: () => JsonValue | undefined;
+  /** Returns model-requested args for presentation only; execution and audit use the native item. */
+  readNativeToolPresentationArgs?: (toolCallId: string) => Record<string, unknown> | undefined;
   runAbortSignal?: AbortSignal;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
 };
@@ -479,6 +481,7 @@ type ToolTranscriptCallInput = {
   id: string;
   name: string;
   arguments?: unknown;
+  requested?: boolean;
 };
 
 type ToolTranscriptResultInput = {
@@ -536,6 +539,7 @@ export class CodexAppServerEventProjector {
   private readonly toolTrajectoryResultIds = new Set<string>();
   private readonly toolTrajectoryNamesById = new Map<string, string>();
   private readonly toolTrajectoryItemsById = new Map<string, CodexThreadItem>();
+  private readonly nativeToolPresentationArgsByItem = new Map<string, Record<string, unknown>>();
   private readonly transcriptToolProgressCallIds = new Set<string>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
   private readonly nativeGeneratedMediaItemIds = new Set<string>();
@@ -1110,6 +1114,7 @@ export class CodexAppServerEventProjector {
         },
       });
     }
+    this.captureNativeToolPresentationArgs(item);
     this.recordToolMeta(item);
     this.emitStandardItemEvent({ phase: "start", item });
     await this.emitNormalizedToolItemEvent({ phase: "start", item });
@@ -1123,6 +1128,7 @@ export class CodexAppServerEventProjector {
 
   private async handleItemCompleted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
+    this.captureNativeToolPresentationArgs(item);
     this.recordNativeToolOutcome(item);
     this.clearTerminalPresentationForNativeItem(item);
     const itemId = item?.id ?? readString(params, "itemId");
@@ -1314,6 +1320,7 @@ export class CodexAppServerEventProjector {
       }
     }
     for (const item of turnItems) {
+      this.captureNativeToolPresentationArgs(item);
       this.rememberAssistantPhase(item);
       if (item.type === "agentMessage" && typeof item.text === "string") {
         this.rememberAssistantItem(item.id);
@@ -1332,6 +1339,7 @@ export class CodexAppServerEventProjector {
       this.emitToolResultSummary(item);
       this.emitToolResultOutput(item);
     }
+    this.nativeToolPresentationArgsByItem.clear();
     this.activeCompactionItemIds.clear();
     await this.maybeEndReasoning();
   }
@@ -1681,6 +1689,45 @@ export class CodexAppServerEventProjector {
     });
   }
 
+  private captureNativeToolPresentationArgs(item: CodexThreadItem | undefined): void {
+    if (
+      item?.type !== "commandExecution" ||
+      this.nativeToolPresentationArgsByItem.has(item.id) ||
+      !this.options.readNativeToolPresentationArgs
+    ) {
+      return;
+    }
+    try {
+      // PreToolUse rewrites may wrap execution. Preserve the model-requested command for UI only;
+      // every policy, trajectory, hook, and action fingerprint keeps using item.command.
+      const originalArgs = this.options.readNativeToolPresentationArgs(item.id);
+      const originalCommand = originalArgs?.command;
+      if (typeof originalCommand !== "string" || !originalCommand.trim()) {
+        return;
+      }
+      this.nativeToolPresentationArgsByItem.set(
+        item.id,
+        sanitizeCodexAgentEventRecord({
+          ...itemToolArgs(item),
+          command: originalCommand,
+        }),
+      );
+    } catch (error) {
+      embeddedAgentLog.debug("codex native tool presentation lookup failed", {
+        error: formatErrorMessage(error),
+        itemId: item.id,
+      });
+    }
+  }
+
+  private nativeToolPresentationArgs(item: CodexThreadItem): Record<string, unknown> | undefined {
+    const executedArgs = itemToolArgs(item);
+    if (this.toolProgressDetailMode() === "raw") {
+      return executedArgs;
+    }
+    return this.nativeToolPresentationArgsByItem.get(item.id) ?? executedArgs;
+  }
+
   private emitStandardItemEvent(params: {
     phase: "start" | "end";
     item: CodexThreadItem | undefined;
@@ -1693,7 +1740,11 @@ export class CodexAppServerEventProjector {
     if (!kind) {
       return;
     }
-    const meta = itemMeta(item, this.toolProgressDetailMode());
+    const meta = itemMeta(
+      item,
+      this.toolProgressDetailMode(),
+      this.nativeToolPresentationArgs(item),
+    );
     const suppressChannelProgress = shouldSuppressChannelProgressForItem(item);
     this.emitAgentEvent({
       stream: "item",
@@ -1724,7 +1775,9 @@ export class CodexAppServerEventProjector {
     }
     const status = params.phase === "result" ? itemStatus(item) : "running";
     const args = itemToolArgs(item);
-    const meta = itemMeta(item, this.toolProgressDetailMode());
+    const presentationArgs = this.nativeToolPresentationArgs(item);
+    const meta = itemMeta(item, this.toolProgressDetailMode(), presentationArgs);
+    // Trajectory/audit receives the executed args; only emitted progress receives presentation args.
     this.recordToolTrajectoryEvent({ phase: params.phase, item, name, args, status });
     if (params.phase === "result") {
       this.recordNativeToolError({ item, name, meta, status });
@@ -1744,7 +1797,7 @@ export class CodexAppServerEventProjector {
         itemId: item.id,
         toolCallId: item.id,
         ...(meta ? { meta } : {}),
-        ...(params.phase === "start" && args ? { args } : {}),
+        ...(params.phase === "start" && presentationArgs ? { args: presentationArgs } : {}),
         ...(params.phase === "result"
           ? {
               status,
@@ -1917,7 +1970,9 @@ export class CodexAppServerEventProjector {
     // commandText "status" promises label-only command lines; drop the raw
     // command meta so channel-progress summaries do not leak it.
     const labelOnly = this.params.toolResultCommandText === "status" && isCommandToolName(toolName);
-    const meta = labelOnly ? undefined : itemMeta(item, this.toolProgressDetailMode());
+    const meta = labelOnly
+      ? undefined
+      : itemMeta(item, this.toolProgressDetailMode(), this.nativeToolPresentationArgs(item));
     this.emitToolResultMessage({
       itemId,
       text: formatToolSummary(toolName, meta),
@@ -1945,7 +2000,11 @@ export class CodexAppServerEventProjector {
     }
     this.emitToolResultMessage({
       itemId,
-      text: formatToolOutput(toolName, itemMeta(item, this.toolProgressDetailMode()), output),
+      text: formatToolOutput(
+        toolName,
+        itemMeta(item, this.toolProgressDetailMode(), this.nativeToolPresentationArgs(item)),
+        output,
+      ),
       finalOutput: true,
       isError: isNonSuccessItemStatus(itemStatus(item)),
     });
@@ -2008,7 +2067,11 @@ export class CodexAppServerEventProjector {
     if (!toolName) {
       return;
     }
-    const meta = itemMeta(item, this.toolProgressDetailMode());
+    const meta = itemMeta(
+      item,
+      this.toolProgressDetailMode(),
+      this.nativeToolPresentationArgs(item),
+    );
     const existing = this.toolMetas.get(item.id);
     this.toolMetas.set(item.id, {
       toolName,
@@ -2025,10 +2088,15 @@ export class CodexAppServerEventProjector {
     if (!name) {
       return;
     }
+    const requested =
+      this.toolProgressDetailMode() !== "raw" && this.nativeToolPresentationArgsByItem.has(item.id);
     this.recordToolTranscriptCall({
       id: item.id,
       name,
-      arguments: itemToolArgs(item),
+      // The transcript mirrors the model-requested call. Execution truth remains in the native
+      // item and trajectory, while normal progress avoids exposing transparent hook wrappers.
+      arguments: this.nativeToolPresentationArgs(item),
+      ...(requested ? { requested: true } : {}),
     });
   }
 
@@ -2150,7 +2218,7 @@ export class CodexAppServerEventProjector {
         if (name) {
           const item = this.toolTrajectoryItemsById.get(firstMissingId);
           const meta = item
-            ? itemMeta(item, this.toolProgressDetailMode())
+            ? itemMeta(item, this.toolProgressDetailMode(), this.nativeToolPresentationArgs(item))
             : this.toolMetas.get(firstMissingId)?.meta;
           const actionFingerprint = item ? nativeToolActionFingerprint(item) : undefined;
           this.lastNativeToolError = {
@@ -2182,11 +2250,12 @@ export class CodexAppServerEventProjector {
     // command meta so channel-progress summaries do not leak it.
     const labelOnly =
       this.params.toolResultCommandText === "status" && isCommandToolName(params.name);
-    const meta = labelOnly
+    const inferredMeta = labelOnly
       ? undefined
       : inferToolMetaFromArgs(params.name, args, {
           detailMode: this.toolProgressDetailMode(),
         });
+    const meta = params.requested && inferredMeta ? `requested: ${inferredMeta}` : inferredMeta;
     if (
       !this.params.onToolResult ||
       !this.shouldEmitToolResult() ||
@@ -2987,16 +3056,26 @@ function itemToolError(
 function itemMeta(
   item: CodexThreadItem,
   detailMode: ToolProgressDetailMode = "explain",
+  presentationArgs?: Record<string, unknown>,
 ): string | undefined {
   if (item.type === "commandExecution" && typeof item.command === "string") {
-    return inferToolMetaFromArgs(
+    const command =
+      typeof presentationArgs?.command === "string" ? presentationArgs.command : item.command;
+    const cwd =
+      typeof presentationArgs?.cwd === "string"
+        ? presentationArgs.cwd
+        : typeof item.cwd === "string"
+          ? item.cwd
+          : undefined;
+    const meta = inferToolMetaFromArgs(
       "exec",
       {
-        command: item.command,
-        cwd: typeof item.cwd === "string" ? item.cwd : undefined,
+        command,
+        cwd,
       },
       { detailMode },
     );
+    return detailMode !== "raw" && command !== item.command && meta ? `requested: ${meta}` : meta;
   }
   if (item.type === "webSearch") {
     return inferToolMetaFromArgs("web_search", webSearchToolArgs(item), { detailMode });

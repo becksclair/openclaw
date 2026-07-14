@@ -20,6 +20,7 @@ import {
   getBeforeToolCallPolicyDiagnosticState,
   isActiveHarnessContextEngine,
   loadCodexBundleMcpThreadConfig,
+  readNativeHookRelayToolInput,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveAgentRunAbortLifecycleFields,
   resolveContextEngineOwnerPluginId,
@@ -3520,6 +3521,9 @@ export async function runCodexAppServerAttempt(
     prompt: codexTurnPromptText,
     imagesCount: params.images?.length ?? 0,
   });
+  // The relay snapshots native PreToolUse input before another hook can rewrite execution args.
+  // Bind this turn's handle so later thread lifecycle changes cannot cross-wire presentation data.
+  const activeTurnNativeHookRelay = nativeHookRelay;
   projectorRef.current = new CodexAppServerEventProjector(
     {
       ...dynamicToolParams,
@@ -3539,8 +3543,15 @@ export async function runCodexAppServerAttempt(
     activeTurnId,
     {
       nativePostToolUseRelayEnabled:
-        nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
-        nativeHookRelay.shouldRelayEvent("post_tool_use"),
+        activeTurnNativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
+        activeTurnNativeHookRelay.shouldRelayEvent("post_tool_use"),
+      readNativeToolPresentationArgs: activeTurnNativeHookRelay
+        ? (toolCallId) =>
+            readNativeHookRelayToolInput({
+              relayId: activeTurnNativeHookRelay.relayId,
+              toolUseId: toolCallId,
+            })
+        : undefined,
       readRecentRateLimits: () => readRecentCodexRateLimits(client),
       runAbortSignal: runAbortController.signal,
       trajectoryRecorder,
