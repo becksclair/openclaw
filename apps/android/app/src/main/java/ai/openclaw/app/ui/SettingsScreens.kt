@@ -27,8 +27,8 @@ import ai.openclaw.app.isReady
 import ai.openclaw.app.loadAndroidLicenseNotices
 import ai.openclaw.app.locationModeAfterBackgroundSettings
 import ai.openclaw.app.node.DeviceNotificationListenerService
-import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.normalizeWearTargetSessionKeyOverride
+import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.resolveWearConversationTargetSessionKey
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
@@ -521,7 +521,6 @@ private fun VoiceSettingsScreen(
       mainSessionKey = mainSessionKey,
       currentSessionKey = chatSessionKey,
     )
-
 
   SettingsDetailFrame(title = "Talk Provider Setup", subtitle = "Configure voice, transport, and playback.", icon = Icons.Default.Mic, onBack = onBack) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {

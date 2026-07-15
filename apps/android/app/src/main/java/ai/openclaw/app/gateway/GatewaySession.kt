@@ -751,11 +751,9 @@ class GatewaySession(
       }
     }
 
-    private fun requestDeadlineNanos(timeoutMs: Long): Long =
-      System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs.coerceAtLeast(0))
+    private fun requestDeadlineNanos(timeoutMs: Long): Long = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs.coerceAtLeast(0))
 
-    private fun remainingRequestTimeoutMs(deadlineNanos: Long): Long =
-      TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()).coerceAtLeast(0)
+    private fun remainingRequestTimeoutMs(deadlineNanos: Long): Long = TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()).coerceAtLeast(0)
 
     private fun buildRequestFrame(
       id: String,

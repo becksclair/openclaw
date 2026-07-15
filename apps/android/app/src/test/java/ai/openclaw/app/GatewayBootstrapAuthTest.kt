@@ -10,7 +10,6 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.node.ConnectionManager
-import ai.openclaw.app.gateway.OPENCLAW_PAIRING_OPERATOR_AUTH_ROLE
 import ai.openclaw.app.node.InvokeDispatcher
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 import ai.openclaw.app.voice.MicCaptureManager

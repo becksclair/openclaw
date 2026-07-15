@@ -2050,7 +2050,11 @@ class ChatController internal constructor(
   // marked as unknown outcome; when the reconnect snapshot exposes a single in-flight run,
   // transfer ownership of the optimistic user row so the reply can land on the canonical run.
   private fun transferLostAckOwnershipFromHistory(history: ChatHistory) {
-    val snapshotRunId = history.inFlightRun?.runId?.trim()?.takeIf { it.isNotEmpty() } ?: return
+    val snapshotRunId =
+      history.inFlightRun
+        ?.runId
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() } ?: return
     if (unresolvedRepliesByRunId.containsKey(snapshotRunId)) return
     val localRunId =
       synchronized(pendingRuns) {

@@ -75,6 +75,7 @@ let recoverStaleTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-s
 let telegramSpooledUpdateClaimLeaseMs: typeof import("./telegram-ingress-spool.js").TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS;
 let writeTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").writeTelegramSpooledUpdate;
 let createTelegramSpooledReplayDeferredParticipant: typeof import("./bot-processing-outcome.js").createTelegramSpooledReplayDeferredParticipant;
+let recordTelegramSpooledReplayProgress: typeof import("./bot-processing-outcome.js").recordTelegramSpooledReplayProgress;
 let TelegramMessageDispatchReplayForgetError: typeof import("./message-dispatch-dedupe.js").TelegramMessageDispatchReplayForgetError;
 type TelegramMessageProcessingResult =
   import("./bot-processing-outcome.js").TelegramMessageProcessingResult;
@@ -692,7 +693,7 @@ describe("TelegramPollingSession", () => {
       TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS: telegramSpooledUpdateClaimLeaseMs,
       writeTelegramSpooledUpdate,
     } = await import("./telegram-ingress-spool.js"));
-    ({ createTelegramSpooledReplayDeferredParticipant } =
+    ({ createTelegramSpooledReplayDeferredParticipant, recordTelegramSpooledReplayProgress } =
       await import("./bot-processing-outcome.js"));
     ({ TelegramMessageDispatchReplayForgetError } = await import("./message-dispatch-dedupe.js"));
     ({
@@ -4083,6 +4084,90 @@ describe("TelegramPollingSession", () => {
       abort.abort();
       worker.stop();
       vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes the active spooled handler deadline when reply work reports progress", async () => {
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const log = vi.fn();
+    let releaseTurn: (() => void) | undefined;
+    const turnDone = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const handleUpdate = vi.fn(async () => {
+      setTimeout(recordTelegramSpooledReplayProgress, 100);
+      await Promise.race([
+        turnDone,
+        waitForTestReplyFenceAbort({
+          key: "test-progress-session:dm",
+          laneKey: "telegram:123",
+        }),
+      ]);
+    });
+    createTelegramBotMock.mockImplementation(() => ({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate,
+      stop: vi.fn(async () => undefined),
+    }));
+    await writeSpooledTestUpdates(tempDir, [
+      directUpdate(42, 123, "long active turn"),
+      directUpdate(43, 123, "blocked same-lane turn"),
+    ]);
+
+    const stopWorkers: Array<() => void> = [];
+    const createWorker = vi.fn(() => {
+      let stopWorker: (() => void) | undefined;
+      const workerDone = new Promise<void>((resolve) => {
+        stopWorker = resolve;
+      });
+      stopWorkers.push(() => stopWorker?.());
+      return {
+        onMessage: vi.fn(() => () => undefined),
+        stop: vi.fn(async () => stopWorker?.()),
+        task: vi.fn(async () => workerDone),
+      };
+    });
+
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        log,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 10,
+          spooledUpdateHandlerTimeoutMs: 300,
+          spooledUpdateHandlerAbortGraceMs: 300,
+        },
+      });
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
+      expectLogExcludes(log, "isolated polling spool handler timed out");
+
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toContain(42));
+      expectLogIncludes(log, "after no progress for");
+
+      abort.abort();
+      for (const stopWorker of stopWorkers) {
+        stopWorker();
+      }
+      await runPromise;
+    } finally {
+      releaseTurn?.();
+      abort.abort();
+      for (const stopWorker of stopWorkers) {
+        stopWorker();
+      }
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });

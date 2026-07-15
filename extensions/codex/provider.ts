@@ -403,3 +403,9 @@ export function isMaxReasoningCodexModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
   return GPT_56_MAX_MODEL_IDS.has(lower);
 }
+
+/** Return whether Codex accepts the GPT-5.6 proactive delegation effort. */
+export function isUltraReasoningCodexModel(modelId: string): boolean {
+  const lower = modelId.trim().toLowerCase();
+  return GPT_56_ULTRA_MODEL_IDS.has(lower);
+}

@@ -80,11 +80,11 @@ import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableStatusCodes
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -3841,7 +3841,10 @@ class NodeRuntime private constructor(
           storedOperatorToken = storedPairingToken,
         ) ?: return null
       } else {
-        NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = auth.password)
+        resolveOperatorSessionConnectAuth(
+          auth = auth,
+          storedOperatorToken = null,
+        ) ?: return null
       }
     if (!pairingOperatorConnected) {
       pairingOperatorConnectFailed = false
