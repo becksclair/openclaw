@@ -542,6 +542,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     replyToMode?: Parameters<typeof dispatchTelegramMessage>[0]["replyToMode"];
     retryDispatchErrors?: boolean;
     suppressFailureFallback?: boolean;
+    onProgress?: Parameters<typeof dispatchTelegramMessage>[0]["onProgress"];
     textLimit?: number;
     onTurnAdopted?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnAdopted"];
     onTurnDeferred?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnDeferred"];
@@ -562,6 +563,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       opts: { token: "token" },
       retryDispatchErrors: params.retryDispatchErrors,
       suppressFailureFallback: params.suppressFailureFallback,
+      onProgress: params.onProgress,
       onTurnAdopted: params.onTurnAdopted,
       onTurnDeferred: params.onTurnDeferred,
       onTurnAbandoned: params.onTurnAbandoned,
@@ -604,6 +606,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
       threadSpec: { id: 88, scope: "forum" },
     });
   }
+
+  it("forwards ingress progress tracking to reply dispatch", async () => {
+    const onProgress = vi.fn();
+
+    await dispatchWithContext({ context: createContext(), onProgress });
+
+    const dispatchParams = expectDispatchParams({});
+    expectRecordFields(dispatchParams.replyOptions, { onProgress });
+  });
 
   it("skips general understanding after describing a first-seen non-vision sticker", async () => {
     describeStickerImage.mockResolvedValueOnce("A curious sticker");

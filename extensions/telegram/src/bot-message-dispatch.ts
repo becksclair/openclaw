@@ -793,6 +793,7 @@ export const dispatchTelegramMessage = async ({
   telegramCfg,
   telegramDeps: injectedTelegramDeps,
   opts,
+  onProgress,
   retryDispatchErrors = false,
   suppressFailureFallback = false,
   onTurnAdopted,
@@ -2642,7 +2643,7 @@ export const dispatchTelegramMessage = async ({
                 },
                 replyOptions: {
                   skillFilter,
-                  onProgress: params.onProgress,
+                  onProgress,
                   disableBlockStreaming,
                   abortSignal: replyAbortSignal,
                   onTurnAdopted: adoptReplyTurn,

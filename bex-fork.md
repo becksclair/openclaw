@@ -1534,9 +1534,10 @@ Primary seam files:
 Replay notes:
 
 - Keep the generic `GetReplyOptions.onProgress` observer best-effort and non-fatal. It must follow the existing centralized reply-progress marker so tool, reasoning, item, plan, approval, patch, command-output, and block progress all count without Telegram duplicating event classification.
+- `dispatchTelegramMessage` must destructure and forward its optional `onProgress` callback directly into `replyOptions`; keep an identity assertion in `bot-message-dispatch.test.ts` so an undeclared or dropped callback cannot break every inbound Telegram dispatch at runtime.
 - Immediate spooled turns report through the replay async context. Buffered/debounced turns carry `TelegramSpooledReplayDeferredParticipant.noteProgress()` explicitly, and the participant owns the last-progress timestamp across the handoff.
 - Preserve stuck-turn recovery: once the inactivity threshold expires, fail the spool claim, supersede the Telegram reply fence, wait the abort grace, and restart isolated ingress exactly as before.
-- Focused proof: `node scripts/run-vitest.mjs extensions/telegram/src/polling-session.test.ts --reporter=verbose` passed 74/74, including active and buffered deadline refresh regressions. `src/auto-reply/reply/dispatch-from-config.test.ts` passed 259/259 in the combined focused run, including the generic observer assertion.
+- Focused proof: `node scripts/run-vitest.mjs extensions/telegram/src/polling-session.test.ts --reporter=verbose` passed 74/74, including active and buffered deadline refresh regressions. `src/auto-reply/reply/dispatch-from-config.test.ts` passed 259/259 in the combined focused run, including the generic observer assertion. After the post-land callback-plumbing correction, `node scripts/run-vitest.mjs extensions/telegram/src/bot-message-dispatch.test.ts` passed 177/177.
 
 ### WhatsApp inbound message archive
 
