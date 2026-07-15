@@ -237,12 +237,13 @@ async function runGatewaySimulationTest(config) {
   });
 
   const messages = hist?.messages ?? [];
-  const targetAssistant = messages.toReversed().find((m) => {
-    if (m.role !== "assistant") {
-      return false;
-    }
-    return readMessageText(m).includes(testPhrase);
+  const matchingAssistants = messages.toReversed().filter((m) => {
+    return m.role === "assistant" && readMessageText(m).includes(testPhrase);
   });
+  // A delivery mirror can follow the persisted ACP runtime row with the same text.
+  // Select the runtime-owned row so the verifier checks routing, not mirror ordering.
+  const targetAssistant =
+    matchingAssistants.find((message) => message.model === "acp-runtime") ?? matchingAssistants[0];
 
   if (!targetAssistant) {
     fail("No assistant turn containing the test phrase was found in history");
