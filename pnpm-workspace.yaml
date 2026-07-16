@@ -125,7 +125,7 @@ overrides:
   tough-cookie: 4.1.3
   yauzl: 3.2.1
   protobufjs: 7.6.3
-  tokenjuice: "https://git.heliasar.com/bex/openclaw-tokenjuice.git#86b6447ce81b557751a4f88f4801643aabc37056"
+  tokenjuice: "https://github.com/becksclair/openclaw-tokenjuice.git#3804be7e80e317683f3c5f6ae2fd67bdfebd40d6"
   uuid: 14.0.0
 
 allowBuilds:
