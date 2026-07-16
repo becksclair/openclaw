@@ -24,6 +24,8 @@ export type AgentRuntimeAcpConfig = {
   mode?: "persistent" | "oneshot";
   /** Optional runtime working directory override. */
   cwd?: string;
+  /** Optional backend target, such as a remote host alias. */
+  target?: string;
 };
 
 export type AgentRuntimeConfig =

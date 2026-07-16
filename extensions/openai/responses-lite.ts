@@ -55,7 +55,11 @@ export function patchOpenAIResponsesLitePayload(params: {
   if (!shouldUseOpenAIResponsesLite(params.model)) {
     return "not_applicable";
   }
-  if (!isRecord(params.payload) || !Array.isArray(params.payload.input)) {
+  if (!isRecord(params.payload)) {
+    return "invalid_input";
+  }
+  const input = params.payload.input;
+  if (!Array.isArray(input)) {
     return "invalid_input";
   }
 
@@ -77,8 +81,7 @@ export function patchOpenAIResponsesLitePayload(params: {
     });
   }
 
-  params.payload.input = [...prefix, ...params.payload.input];
-  params.payload.input = params.payload.input.map((item) => {
+  params.payload.input = [...prefix, ...input].map((item) => {
     if (!isRecord(item) || item.role !== "system") {
       return item;
     }

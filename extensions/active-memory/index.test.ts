@@ -2309,6 +2309,7 @@ describe("active-memory plugin", () => {
   });
 
   it("skips recall when no model or explicit fallback resolves", async () => {
+    const mkdtempSpy = vi.spyOn(fs, "mkdtemp");
     api.config = {};
     api.pluginConfig = {
       agents: ["main"],
@@ -2328,6 +2329,7 @@ describe("active-memory plugin", () => {
 
     expect(result).toBeUndefined();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(mkdtempSpy).not.toHaveBeenCalled();
   });
 
   it("uses config.modelFallback when no session or agent model resolves", async () => {

@@ -586,31 +586,6 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
-  it("clamps Ultra to the maximum Kimi Anthropic thinking budget", () => {
-    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
-    const wrapped = wrapKimiProviderStream({
-      provider: "kimi",
-      modelId: "kimi-code",
-      thinkingLevel: "ultra",
-      streamFn: baseStreamFn,
-    } as never);
-
-    void wrapped(
-      {
-        api: "anthropic-messages",
-        provider: "kimi",
-        id: "kimi-code",
-      } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      {},
-    );
-
-    expect(getCapturedPayload()).toEqual({
-      max_tokens: 16000,
-      thinking: { type: "enabled", budget_tokens: 8192 },
-    });
-  });
-
   it("preserves explicit Kimi Anthropic thinking budgets", () => {
     const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
 

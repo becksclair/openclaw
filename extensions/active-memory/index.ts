@@ -5,7 +5,6 @@
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import * as readline from "node:readline";
 import {
@@ -37,6 +36,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -2921,7 +2921,7 @@ function getModelRef(
   return undefined;
 }
 
-async function runRecallSubagent(params: {
+type RecallSubagentParams = {
   api: OpenClawPluginApi;
   config: ResolvedActiveRecallPluginConfig;
   agentId: string;
@@ -2939,9 +2939,9 @@ async function runRecallSubagent(params: {
   fastModeAutoOnSeconds?: number;
   abortSignal?: AbortSignal;
   onSessionFile?: (sessionFile: string, startByteOffset: number) => void;
-}): Promise<RecallSubagentResult> {
-  const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
-  const agentDir = resolveAgentDir(params.api.config, params.agentId);
+};
+
+async function runRecallSubagent(params: RecallSubagentParams): Promise<RecallSubagentResult> {
   const modelRef =
     params.modelRef ??
     getModelRef(params.api, params.agentId, params.config, {
@@ -2951,6 +2951,29 @@ async function runRecallSubagent(params: {
   if (!modelRef) {
     return { rawReply: "NONE" };
   }
+  if (params.config.persistTranscripts) {
+    const sessionDir = resolveSafeTranscriptDir(
+      resolvePersistentTranscriptBaseDir(params.api, params.agentId),
+      params.config.transcriptDir,
+    );
+    return await runRecallSubagentInSessionDir(params, sessionDir, modelRef);
+  }
+  return await withTempWorkspace(
+    {
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-active-memory-recall-",
+    },
+    async ({ dir }) => await runRecallSubagentInSessionDir(params, dir, modelRef),
+  );
+}
+
+async function runRecallSubagentInSessionDir(
+  params: RecallSubagentParams,
+  sessionDir: string,
+  modelRef: { provider: string; model: string },
+): Promise<RecallSubagentResult> {
+  const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
+  const agentDir = resolveAgentDir(params.api.config, params.agentId);
   const parentSessionKey =
     params.sessionKey ??
     resolveCanonicalSessionKeyFromSessionId({
@@ -2974,12 +2997,6 @@ async function runRecallSubagent(params: {
   const subagentRunId = `${subagentSessionId}:run:${Date.now().toString(36)}:${crypto
     .randomUUID()
     .slice(0, 8)}`;
-  const sessionDir = params.config.persistTranscripts
-    ? resolveSafeTranscriptDir(
-        resolvePersistentTranscriptBaseDir(params.api, params.agentId),
-        params.config.transcriptDir,
-      )
-    : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-recall-"));
   const sessionFile = path.join(sessionDir, `${subagentSessionId}.jsonl`);
   let sessionFileStartByteOffset = 0;
   try {
@@ -3209,10 +3226,6 @@ async function runRecallSubagent(params: {
       return { rawReply: "NONE", resultStatus: "failed" };
     }
     throw error;
-  } finally {
-    if (!params.config.persistTranscripts) {
-      await fs.rm(sessionDir, { recursive: true, force: true }).catch(() => undefined);
-    }
   }
 }
 
