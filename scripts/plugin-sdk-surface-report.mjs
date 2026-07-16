@@ -105,7 +105,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "approval-reply-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  "config-types": 421,
+  "config-types": 422,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 33,
@@ -190,22 +190,22 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      324,
+      325,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10466,
+      10490,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5222,
+      5229,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3263,
+      3264,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

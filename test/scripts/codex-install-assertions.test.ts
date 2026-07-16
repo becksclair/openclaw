@@ -221,6 +221,38 @@ function createCodexInstallFixture(root: string) {
   mkdirSync(path.dirname(codexBin), { recursive: true });
   writeFileSync(codexBin, "#!/usr/bin/env node\n", { mode: 0o755 });
   chmodSync(codexBin, 0o755);
+  const platformTargets: Record<string, [packageSuffix: string, targetTriple: string]> = {
+    "darwin-arm64": ["darwin-arm64", "aarch64-apple-darwin"],
+    "darwin-x64": ["darwin-x64", "x86_64-apple-darwin"],
+    "linux-arm64": ["linux-arm64", "aarch64-unknown-linux-musl"],
+    "linux-x64": ["linux-x64", "x86_64-unknown-linux-musl"],
+    "win32-arm64": ["win32-arm64", "aarch64-pc-windows-msvc"],
+    "win32-x64": ["win32-x64", "x86_64-pc-windows-msvc"],
+  };
+  const platformTarget = platformTargets[`${process.platform}-${process.arch}`];
+  if (!platformTarget) {
+    throw new Error(`unsupported Codex fixture platform: ${process.platform}-${process.arch}`);
+  }
+  const [packageSuffix, targetTriple] = platformTarget;
+  const platformPackageRoot = path.join(
+    projectRoot,
+    "node_modules",
+    "@openai",
+    `codex-${packageSuffix}`,
+  );
+  writeJson(path.join(platformPackageRoot, "package.json"), {
+    name: `@openai/codex-${packageSuffix}`,
+  });
+  const nativeCodexBin = path.join(
+    platformPackageRoot,
+    "vendor",
+    targetTriple,
+    "bin",
+    process.platform === "win32" ? "codex.exe" : "codex",
+  );
+  mkdirSync(path.dirname(nativeCodexBin), { recursive: true });
+  writeFileSync(nativeCodexBin, "", { mode: 0o755 });
+  chmodSync(nativeCodexBin, 0o755);
   writeJson(path.join(stateDir, "openclaw.json"), {
     agents: { defaults: { model: { primary: "openai/gpt-5.6" } } },
     models: { providers: { openai: { agentRuntime: { id: "codex" } } } },
