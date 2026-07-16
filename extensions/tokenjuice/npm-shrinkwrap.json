@@ -8,7 +8,7 @@
       "name": "@openclaw/tokenjuice",
       "version": "2026.7.1",
       "dependencies": {
-        "tokenjuice": "0.8.1"
+        "tokenjuice": "https://github.com/becksclair/openclaw-tokenjuice.git#4872cd59480159313ef164d6828a46abfd73db7d"
       },
       "peerDependencies": {
         "openclaw": ">=2026.7.1"
@@ -21,8 +21,8 @@
     },
     "node_modules/tokenjuice": {
       "version": "0.8.1",
-      "resolved": "https://registry.npmjs.org/tokenjuice/-/tokenjuice-0.8.1.tgz",
-      "integrity": "sha512-/CnrgVI7zm7P4yphNe2Ypqm4vOwzdIob4ki9nRdT8P1NAOgsWGv0ciTDLly4cyAaKIhLd0H3swLNn2R5FCDpYw==",
+      "resolved": "git+ssh://git@github.com/becksclair/openclaw-tokenjuice.git#4872cd59480159313ef164d6828a46abfd73db7d",
+      "integrity": "sha512-CAbMKCQz12gvK/MfJ9zw693Ha304cnF00E36hvcXCv6uyGrqOCTf5J1s7Z7QE4+AchtcxxLF3CA8IDwTUgH8Xw==",
       "license": "MIT",
       "bin": {
         "tokenjuice": "dist/cli/main.js"

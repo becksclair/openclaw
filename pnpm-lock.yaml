@@ -34,7 +34,7 @@ overrides:
   tough-cookie: 4.1.3
   yauzl: 3.2.1
   protobufjs: 7.6.3
-  tokenjuice: https://github.com/becksclair/openclaw-tokenjuice.git#3804be7e80e317683f3c5f6ae2fd67bdfebd40d6
+  tokenjuice: https://github.com/becksclair/openclaw-tokenjuice.git#4872cd59480159313ef164d6828a46abfd73db7d
   uuid: 14.0.0
 
 packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
@@ -1654,8 +1654,8 @@ importers:
   extensions/tokenjuice:
     dependencies:
       tokenjuice:
-        specifier: https://github.com/becksclair/openclaw-tokenjuice.git#3804be7e80e317683f3c5f6ae2fd67bdfebd40d6
-        version: https://codeload.github.com/becksclair/openclaw-tokenjuice/tar.gz/3804be7e80e317683f3c5f6ae2fd67bdfebd40d6
+        specifier: https://github.com/becksclair/openclaw-tokenjuice.git#4872cd59480159313ef164d6828a46abfd73db7d
+        version: https://codeload.github.com/becksclair/openclaw-tokenjuice/tar.gz/4872cd59480159313ef164d6828a46abfd73db7d
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -7221,8 +7221,8 @@ packages:
     resolution: {integrity: sha512-dRXchy+C0IgK8WPC6xvCHFRIWYUbqqdEIKPaKo/AcTUNzwLTK6AH7RjdLWsEZcAN/TBdtfUw3PYEgPr5VPr6ww==}
     engines: {node: '>=14.16'}
 
-  tokenjuice@https://codeload.github.com/becksclair/openclaw-tokenjuice/tar.gz/3804be7e80e317683f3c5f6ae2fd67bdfebd40d6:
-    resolution: {gitHosted: true, integrity: sha512-cWW9XHg7KEF/399u0+87G7ECHv3ehcReB34CPaL3W03v2Sf3BmShh60UWIFPNkeTRepBsWDgUpG1X+G/6EEL6A==, tarball: https://codeload.github.com/becksclair/openclaw-tokenjuice/tar.gz/3804be7e80e317683f3c5f6ae2fd67bdfebd40d6}
+  tokenjuice@https://codeload.github.com/becksclair/openclaw-tokenjuice/tar.gz/4872cd59480159313ef164d6828a46abfd73db7d:
+    resolution: {gitHosted: true, integrity: sha512-QdnJkdgXhibQvlbNI0gDlUt9OXi2qkABHFcRcYatOG1l6D5TwxmUFgJwu+9I8e09BZ/R5y78iOjlxzA8Og/lpg==, tarball: https://codeload.github.com/becksclair/openclaw-tokenjuice/tar.gz/4872cd59480159313ef164d6828a46abfd73db7d}
     version: 0.8.1
     engines: {node: '>=20'}
     hasBin: true
@@ -13416,7 +13416,7 @@ snapshots:
       '@tokenizer/token': 0.3.0
       ieee754: 1.2.1
 
-  tokenjuice@https://codeload.github.com/becksclair/openclaw-tokenjuice/tar.gz/3804be7e80e317683f3c5f6ae2fd67bdfebd40d6: {}
+  tokenjuice@https://codeload.github.com/becksclair/openclaw-tokenjuice/tar.gz/4872cd59480159313ef164d6828a46abfd73db7d: {}
 
   totalist@3.0.1: {}
 

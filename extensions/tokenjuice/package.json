@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "tokenjuice": "0.8.1"
+    "tokenjuice": "https://github.com/becksclair/openclaw-tokenjuice.git#4872cd59480159313ef164d6828a46abfd73db7d"
   },
   "peerDependencies": {
     "openclaw": ">=2026.7.1"

@@ -18,7 +18,9 @@ describe("tokenjuice package manifest", () => {
       fs.readFileSync(new URL("./package.json", import.meta.url), "utf8"),
     ) as TokenjuicePackageManifest;
 
-    expect(packageJson.dependencies?.tokenjuice).toBe("0.8.1");
+    expect(packageJson.dependencies?.tokenjuice).toBe(
+      "https://github.com/becksclair/openclaw-tokenjuice.git#4872cd59480159313ef164d6828a46abfd73db7d",
+    );
   });
 
   it("declares runtime-neutral tool result middleware ownership in the manifest contract", () => {
