@@ -942,14 +942,14 @@ test("sessions.changed mutation events include session management metadata", asy
   });
 });
 
-test("sessions.changed mutation events clear label-derived display names", async () => {
+test("sessions.changed mutation events restore canonical display names after clearing labels", async () => {
   await writeMainSessionStore({ label: "Dev" });
 
   const result = await invokeSessionsPatch({ key: "main", label: null });
 
   expectMainPatchBroadcast(result, {
     label: null,
-    displayName: null,
+    displayName: "Main session",
   });
 });
 

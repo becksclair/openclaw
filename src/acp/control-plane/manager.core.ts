@@ -195,7 +195,7 @@ export class AcpSessionManager {
       signal.addEventListener("abort", onAbort, { once: true });
       operation.then(
         (value) => settle(() => resolve(value)),
-        (error: unknown) => settle(() => reject(error)),
+        (error: unknown) => settle(() => reject(toErrorObject(error, "Non-Error rejection"))),
       );
       if (signal.aborted) {
         onAbort();

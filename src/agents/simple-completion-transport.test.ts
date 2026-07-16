@@ -307,7 +307,7 @@ describe("prepareModelForSimpleCompletion", () => {
       "openclaw-provider-simple:openai:gpt-5.6-luna:openclaw-openai-responses-transport:https%3A%2F%2Fchatgpt.com%2Fbackend-api%2Fcodex",
     );
     const registeredStream = ensureCustomApiRegistered.mock.calls.at(-1)?.[1] as StreamFn;
-    registeredStream({ ...transportModel, api: result.api }, { messages: [] } as never, {});
+    void registeredStream({ ...transportModel, api: result.api }, { messages: [] } as never, {});
     expect(transportStream).toHaveBeenCalledWith(
       expect.objectContaining({ api: "openclaw-openai-responses-transport" }),
       expect.anything(),

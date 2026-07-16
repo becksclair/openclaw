@@ -422,7 +422,7 @@ function escapeRegexLiteral(value: string): string {
 }
 
 function escapeRegexCharacterClass(value: string): string {
-  return value.replace(/[\\\]^\-]/gu, "\\$&");
+  return value.replace(/[\\\]^-]/gu, "\\$&");
 }
 
 export function resolveCodexNativeHookRelayCommandTimeoutMs(

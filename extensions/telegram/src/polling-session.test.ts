@@ -4150,7 +4150,9 @@ describe("TelegramPollingSession", () => {
       const runPromise = session.runUntilAbort();
       await vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
 
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250);
+      });
       expect(await failedUpdateIds(tempDir)).toEqual([]);
       expectLogExcludes(log, "isolated polling spool handler timed out");
 

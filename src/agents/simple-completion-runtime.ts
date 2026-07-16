@@ -411,7 +411,6 @@ function normalizeSimpleCompletionReasoning(
       return resolveClaudeSonnet5ModelIdentity(model) ? "off" : undefined;
     case "adaptive":
       return "medium";
-    case "ultra":
     case "max":
     case "ultra":
       return isOpenAIProvider(model.provider) && supportsOpenAIReasoningEffort(model, "max")

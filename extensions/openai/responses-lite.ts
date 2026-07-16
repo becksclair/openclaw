@@ -16,6 +16,13 @@ const RESPONSES_LITE_USER_AGENT = "Codex Desktop/0.144.1 (OpenClaw Responses Lit
 
 export type OpenAIResponsesLitePatchResult = "not_applicable" | "invalid_input" | "patched";
 
+function normalizeResponsesLiteInputRole(item: unknown): unknown {
+  if (!isRecord(item) || item.role !== "system") {
+    return item;
+  }
+  return { ...item, role: "developer" };
+}
+
 function shouldUseOpenAIResponsesLite(model: {
   provider?: unknown;
   id?: unknown;
@@ -81,12 +88,7 @@ export function patchOpenAIResponsesLitePayload(params: {
     });
   }
 
-  params.payload.input = [...prefix, ...input].map((item) => {
-    if (!isRecord(item) || item.role !== "system") {
-      return item;
-    }
-    return { ...item, role: "developer" };
-  });
+  params.payload.input = [...prefix, ...input].map(normalizeResponsesLiteInputRole);
   delete params.payload.instructions;
   delete params.payload.tools;
   delete params.payload.max_output_tokens;
