@@ -756,6 +756,13 @@ If the reply exceeds `maxLength`, OpenClaw never skips audio outright:
   summary model: truncates the text to `maxLength` chars and synthesizes the
   truncated text.
 
+The selected synthesis candidate is checked again against the lower of
+`messages.tts.maxTextLength` and any provider/model limit. Buffered calls
+(`/tts audio`, `tts.convert`, and `tts.speak`) and streaming synthesis use the
+same summary-then-truncate fallback before the provider request. Telephony
+rejects over-limit text instead, because its transcript must remain identical
+to the audio used for playback-echo detection.
+
 ```text
 Reply -> TTS enabled?
   no  -> send text
@@ -800,7 +807,7 @@ Reply -> TTS enabled?
       Provider-owned settings keyed by speech provider id. Legacy direct blocks (`messages.tts.openai`, `.elevenlabs`, `.microsoft`, `.edge`) are rewritten by `openclaw doctor --fix`; commit only `messages.tts.providers.<id>`.
     </ParamField>
     <ParamField path="maxTextLength" type="number" default="4096">
-      Hard cap for TTS input characters. `/tts audio`, `tts.convert`, and `tts.speak` fail if exceeded.
+      Host ceiling for TTS input characters. The effective limit is the lower of this value and a provider/model limit when declared. Buffered and streaming synthesis summarize over-limit text when summaries are enabled, then use UTF-16-safe bounded truncation if summarization is disabled, fails, is empty, or remains too long. Telephony rejects over-limit text.
     </ParamField>
     <ParamField path="timeoutMs" type="number" default="30000">
       Request timeout in milliseconds. A per-call `timeoutMs` (agent tool, gateway) wins when set; otherwise an explicitly configured `messages.tts.timeoutMs` wins over any plugin-authored provider default.

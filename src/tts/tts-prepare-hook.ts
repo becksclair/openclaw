@@ -19,7 +19,8 @@ import type { TtsPrepareHook } from "./tts.js";
 // the speech-core `TtsPrepareHook` input, this fails to compile until the author
 // either maps it into the Layer-B event/context or adds it to the intentionally-
 // dropped list. Consumed: text, providerId, providerModel, persona, personaId,
-// attempt. NOT forwarded to Layer B (host-only / agent-agnostic): target, timeoutMs.
+// attempt, maxTextLength. NOT forwarded to Layer B (host-only / agent-agnostic):
+// target, timeoutMs.
 type _AssertNever<T extends never> = T;
 // Exported only so `noUnusedLocals` does not flag it; the `T extends never`
 // constraint makes this fail to compile the moment a new (unmapped) field is
@@ -33,6 +34,7 @@ export type _TtsPrepareBridgeMappingComplete = _AssertNever<
     | "persona"
     | "personaId"
     | "attempt"
+    | "maxTextLength"
     | "target"
     | "timeoutMs"
   >
@@ -60,6 +62,7 @@ export function buildTtsPrepareHook(ctxInfo: {
       }
       const event: PluginHookTtsPrepareEvent = {
         text: input.text,
+        maxTextLength: input.maxTextLength,
         providerId: input.providerId,
         providerModelId: input.providerModel,
         personaId: input.personaId ?? input.persona?.id,

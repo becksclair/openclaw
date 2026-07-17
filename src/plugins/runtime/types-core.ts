@@ -152,17 +152,6 @@ export type LlmCompleteUsage = {
   costUsd?: number;
 };
 
-/** Reasoning/thinking effort labels accepted by simple completions. */
-export type LlmCompleteReasoning =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max";
-
 export type LlmCompleteParams = {
   messages: LlmCompleteMessage[];
   /** Model ref (e.g. "anthropic/claude-sonnet-4-6"); defaults to the target agent's configured model. */
@@ -175,8 +164,6 @@ export type LlmCompleteParams = {
   purpose?: string;
   /** Agent whose model/credentials to use. Session-bound capabilities may disallow overrides. */
   agentId?: string;
-  /** Reasoning/thinking effort for models that support it (e.g. codex gpt-5.x); omitted → provider default. */
-  reasoning?: LlmCompleteReasoning;
 };
 
 export type LlmCompleteResult = {

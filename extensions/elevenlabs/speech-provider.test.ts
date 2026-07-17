@@ -54,6 +54,36 @@ describe("elevenlabs speech provider", () => {
     ]);
   });
 
+  it("resolves the model-specific synthesis text limit after request overrides", () => {
+    const provider = buildElevenLabsSpeechProvider();
+    const resolveLimit = provider.resolveSynthesisTextLimit;
+    if (!resolveLimit) throw new Error("expected ElevenLabs text-limit resolver");
+    const base = {
+      cfg: {},
+      target: "audio-file" as const,
+    };
+
+    expect(
+      resolveLimit({
+        ...base,
+        providerConfig: { modelId: "eleven_multilingual_v2" },
+      }),
+    ).toBe(6_000);
+    expect(
+      resolveLimit({
+        ...base,
+        providerConfig: { modelId: "eleven_multilingual_v2" },
+        providerOverrides: { modelId: "eleven_v3" },
+      }),
+    ).toBe(5_000);
+    expect(
+      resolveLimit({
+        ...base,
+        providerConfig: { modelId: "eleven_v3_alpha" },
+      }),
+    ).toBe(5_000);
+  });
+
   it("keeps non-equivalent deprecated ElevenLabs TTS model IDs", async () => {
     const provider = buildElevenLabsSpeechProvider();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {

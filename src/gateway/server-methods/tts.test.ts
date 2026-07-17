@@ -152,7 +152,7 @@ describe("ttsHandlers", () => {
     expect(mocks.synthesizeSpeech).not.toHaveBeenCalled();
   });
 
-  it("tts.speak rejects text above the configured max length", async () => {
+  it("tts.speak delegates over-limit text so synthesis can summarize it", async () => {
     mocks.resolveTtsConfig.mockReturnValue({ maxTextLength: 10 });
 
     const { ttsHandlers } = await import("./tts.js");
@@ -164,11 +164,11 @@ describe("ttsHandlers", () => {
       context: { getRuntimeConfig: mocks.getRuntimeConfig },
     } as never);
 
-    expectGatewayErrorResponse(respond, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: "tts.speak text too long (33 chars, max 10)",
+    expect(mocks.synthesizeSpeech).toHaveBeenCalledWith({
+      text: "This text is definitely too long.",
+      cfg: {},
     });
-    expect(mocks.synthesizeSpeech).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ provider: "openai" }));
   });
 
   it("tts.speak maps synthesis failures to UNAVAILABLE", async () => {

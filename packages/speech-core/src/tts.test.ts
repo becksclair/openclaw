@@ -9,12 +9,25 @@ import {
 import type {
   SpeechProviderPlugin,
   SpeechProviderPrepareSynthesisContext,
+  SpeechSynthesisStreamRequest,
   SpeechSynthesisRequest,
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
+type MockSpeechStreamResult = Awaited<
+  ReturnType<NonNullable<SpeechProviderPlugin["streamSynthesize"]>>
+>;
+
+function createMockSpeechStreamResult(): MockSpeechStreamResult {
+  return {
+    audioStream: new ReadableStream<Uint8Array>(),
+    fileExtension: ".ogg",
+    outputFormat: "ogg",
+    voiceCompatible: false,
+  };
+}
 
 const synthesizeMock = vi.hoisted(() =>
   vi.fn(
@@ -849,6 +862,37 @@ describe("speech-core native voice-note routing", () => {
     expect(telephonyRequest.providerOverrides).toEqual({ voice: "directed-voice" });
   });
 
+  it("rejects telephony text above the resolved provider/model limit", async () => {
+    const synthesizeTelephony = vi.fn(async (_request: SpeechTelephonySynthesisRequest) => ({
+      audioBuffer: Buffer.from("voice"),
+      outputFormat: "pcm",
+      sampleRate: 24_000,
+    }));
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        resolveSynthesisTextLimit: () => 120,
+        synthesizeTelephony,
+      }),
+    ]);
+
+    const result = await textToSpeechTelephony({
+      text: "T".repeat(121),
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            maxTextLength: 1_000,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Text too long (121 chars, max 120)");
+    expect(synthesizeTelephony).not.toHaveBeenCalled();
+  });
+
   it("uses provider defaults when fallback policy allows missing persona bindings", async () => {
     await synthesizeSpeech({
       text: "Use neutral provider defaults.",
@@ -1053,6 +1097,556 @@ describe("speech-core native voice-note routing", () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]?.providerId).toBe("mock");
     expect(seen[0]?.attempt).toBe(0);
+  });
+
+  describe("provider/model text-limit pipeline", () => {
+    function limitedConfig(name: string, maxTextLength = 1_000): OpenClawConfig {
+      return {
+        messages: {
+          tts: {
+            ...createTtsConfig(name).messages?.tts,
+            maxTextLength,
+          },
+        },
+      };
+    }
+
+    function summaryResult(summary: string, inputLength: number) {
+      return {
+        summary,
+        latencyMs: 0,
+        inputLength,
+        outputLength: summary.length,
+      };
+    }
+
+    it("summarizes over the model limit, enriches the fitted text, and sends that exact text", async () => {
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          prepareSynthesis: undefined,
+          resolveSynthesisTextLimit: () => 120,
+        }),
+      ]);
+      const input = "Original material. ".repeat(20);
+      const summary = "A concise summary that remains safely below the selected model limit.";
+      const summarize = vi.fn(async () => summaryResult(summary, input.length));
+      const prepareHook = vi.fn(async (event: { text: string; maxTextLength: number }) => ({
+        text: `[warm] ${event.text}`,
+        providerOverrides: { applyTextNormalization: "off" },
+      }));
+
+      const result = await testApi.synthesizeSpeechWithDeps(
+        {
+          text: input,
+          cfg: limitedConfig("openclaw-speech-core-provider-limit-e2e"),
+          disableFallback: true,
+          prepareHook,
+        },
+        { summarizeText: summarize },
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.summarized).toBe(true);
+      expect(result.preparedInputText).toBe(summary);
+      expect(summarize).toHaveBeenCalledWith(
+        expect.objectContaining({ text: input, targetLength: 120 }),
+      );
+      expect(prepareHook).toHaveBeenCalledWith(
+        expect.objectContaining({ text: summary, maxTextLength: 120, attempt: 0 }),
+      );
+      const request = requireFirstSynthesisRequest("provider-limit enriched request");
+      expect(request.text).toBe(`[warm] ${summary}`);
+      expect(request.providerOverrides).toEqual({ applyTextNormalization: "off" });
+      expect(String(request.text).length).toBeLessThanOrEqual(120);
+    });
+
+    it("carries accepted enrichment through provider prepareSynthesis into synthesis", async () => {
+      const providerPrepare = vi.fn(async (ctx: SpeechProviderPrepareSynthesisContext) => ({
+        text: `provider-wrapper(${ctx.text})`,
+      }));
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          prepareSynthesis: providerPrepare,
+          resolveSynthesisTextLimit: () => 140,
+        }),
+      ]);
+      const input = "B".repeat(240);
+      const summary = "A fitted summary for the provider-owned preparation branch.";
+      const summarize = vi.fn(async () => summaryResult(summary, input.length));
+      const prepareHook = vi.fn(async ({ text }: { text: string }) => ({ text: `[calm] ${text}` }));
+
+      const result = await testApi.synthesizeSpeechWithDeps(
+        {
+          text: input,
+          cfg: limitedConfig("openclaw-speech-core-provider-prepare-e2e"),
+          disableFallback: true,
+          prepareHook,
+        },
+        { summarizeText: summarize },
+      );
+
+      expect(result.success).toBe(true);
+      expect(providerPrepare).toHaveBeenCalledWith(
+        expect.objectContaining({ text: `[calm] ${summary}` }),
+      );
+      expect(requireFirstSynthesisRequest("provider prepare synthesis request").text).toBe(
+        `provider-wrapper([calm] ${summary})`,
+      );
+    });
+
+    it("rejects an over-limit hook transformation and its coupled overrides", async () => {
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          prepareSynthesis: undefined,
+          resolveSynthesisTextLimit: () => 120,
+        }),
+      ]);
+      const input = "C".repeat(240);
+      const summary = "S".repeat(115);
+      const summarize = vi.fn(async () => summaryResult(summary, input.length));
+      const prepareHook = vi.fn(async () => ({
+        text: `[far too expressive] ${summary}`,
+        providerOverrides: { unsafeForPlainText: true },
+      }));
+
+      const result = await testApi.synthesizeSpeechWithDeps(
+        {
+          text: input,
+          cfg: limitedConfig("openclaw-speech-core-over-limit-hook"),
+          disableFallback: true,
+          prepareHook,
+        },
+        { summarizeText: summarize },
+      );
+
+      expect(result.success).toBe(true);
+      const request = requireFirstSynthesisRequest("over-limit hook fallback request");
+      expect(request.text).toBe(summary);
+      expect(request.providerOverrides).toBeUndefined();
+    });
+
+    it.each([
+      {
+        name: "summary failure",
+        summarize: async () => {
+          throw new Error("summary backend unavailable");
+        },
+        expectedSummaryFlag: false,
+      },
+      {
+        name: "empty summary",
+        summarize: async (input: { text: string }) => summaryResult("", input.text.length),
+        expectedSummaryFlag: false,
+      },
+      {
+        name: "over-limit summary",
+        summarize: async (input: { text: string }) =>
+          summaryResult(`${"D".repeat(119)}😀`, input.text.length),
+        expectedSummaryFlag: true,
+      },
+    ])("uses a UTF-16-safe bounded fallback for $name", async (testCase) => {
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          prepareSynthesis: undefined,
+          resolveSynthesisTextLimit: () => 120,
+        }),
+      ]);
+      const input = `${"😀".repeat(80)} trailing material`;
+      const summarize = vi.fn(testCase.summarize);
+
+      const result = await testApi.synthesizeSpeechWithDeps(
+        {
+          text: input,
+          cfg: limitedConfig(`openclaw-speech-core-${testCase.name.replaceAll(" ", "-")}`),
+          disableFallback: true,
+        },
+        { summarizeText: summarize as never },
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.summarized).toBe(testCase.expectedSummaryFlag);
+      const sent = String(requireFirstSynthesisRequest(`${testCase.name} request`).text);
+      expect(sent.length).toBeLessThanOrEqual(120);
+      expect(sent).not.toContain("\uFFFD");
+      expect(sent).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+      expect(sent).not.toMatch(/(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+    });
+
+    it("uses bounded truncation without calling the summary model when summarization is disabled", async () => {
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          prepareSynthesis: undefined,
+          resolveSynthesisTextLimit: () => 120,
+        }),
+      ]);
+      const prefsPath = "/tmp/openclaw-speech-core-summary-disabled.json";
+      const summarize = vi.fn();
+      setSummarizationEnabled(prefsPath, false);
+      try {
+        const result = await testApi.synthesizeSpeechWithDeps(
+          {
+            text: "G".repeat(240),
+            cfg: limitedConfig("openclaw-speech-core-summary-disabled"),
+            prefsPath,
+            disableFallback: true,
+          },
+          { summarizeText: summarize as never },
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.summarized).toBe(false);
+        expect(summarize).not.toHaveBeenCalled();
+        expect(String(requireFirstSynthesisRequest("summary-disabled request").text).length).toBe(
+          120,
+        );
+      } finally {
+        rmSync(prefsPath, { force: true });
+      }
+    });
+
+    it("does not call summarization when input already fits", async () => {
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          prepareSynthesis: undefined,
+          resolveSynthesisTextLimit: () => 120,
+        }),
+      ]);
+      const summarize = vi.fn();
+
+      const result = await testApi.synthesizeSpeechWithDeps(
+        {
+          text: "Already short enough.",
+          cfg: limitedConfig("openclaw-speech-core-under-limit"),
+          disableFallback: true,
+        },
+        { summarizeText: summarize as never },
+      );
+
+      expect(result.success).toBe(true);
+      expect(summarize).not.toHaveBeenCalled();
+      expect(requireFirstSynthesisRequest("under-limit request").text).toBe(
+        "Already short enough.",
+      );
+    });
+
+    it("fits independently for fallback providers with different model limits", async () => {
+      const primarySynthesize = vi.fn(async (_request: SpeechSynthesisRequest) => {
+        throw new Error("primary failed");
+      });
+      const fallbackSynthesize = vi.fn(
+        async (request: SpeechSynthesisRequest): Promise<MockSpeechSynthesisResult> => ({
+          audioBuffer: Buffer.from("voice"),
+          fileExtension: ".ogg",
+          outputFormat: "ogg",
+          voiceCompatible: request.target === "voice-note",
+        }),
+      );
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          prepareSynthesis: undefined,
+          resolveSynthesisTextLimit: () => 120,
+          synthesize: primarySynthesize,
+        }),
+        createMockSpeechProvider("fallback", {
+          prepareSynthesis: undefined,
+          resolveSynthesisTextLimit: () => 180,
+          synthesize: fallbackSynthesize,
+        }),
+      ]);
+      const input = "E".repeat(300);
+      const summarize = vi.fn(async ({ targetLength }: { targetLength: number }) => {
+        const summary = `${targetLength}: ${"x".repeat(targetLength - 10)}`;
+        return summaryResult(summary, input.length);
+      });
+      const seenHooks: Array<{ attempt: number; maxTextLength: number; text: string }> = [];
+      const prepareHook = vi.fn(
+        async (event: { attempt: number; maxTextLength: number; text: string }) => {
+          seenHooks.push(event);
+          return { text: event.text };
+        },
+      );
+
+      const result = await testApi.synthesizeSpeechWithDeps(
+        {
+          text: input,
+          cfg: limitedConfig("openclaw-speech-core-fallback-limits"),
+          prepareHook,
+        },
+        { summarizeText: summarize as never },
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.provider).toBe("fallback");
+      expect(summarize.mock.calls.map((call) => call[0].targetLength)).toEqual([120, 180]);
+      expect(seenHooks.map(({ attempt, maxTextLength }) => ({ attempt, maxTextLength }))).toEqual([
+        { attempt: 0, maxTextLength: 120 },
+        { attempt: 1, maxTextLength: 180 },
+      ]);
+      expect(primarySynthesize.mock.calls[0]?.[0].text).toBe(seenHooks[0]?.text);
+      expect(fallbackSynthesize.mock.calls[0]?.[0].text).toBe(seenHooks[1]?.text);
+    });
+
+    it("retries provider preparation with fitted text when hook wrapping exceeds the limit", async () => {
+      const providerPrepare = vi.fn(async (ctx: SpeechProviderPrepareSynthesisContext) => ({
+        text: ctx.providerOverrides?.personaPrompt
+          ? `${String(ctx.providerOverrides.personaPrompt)}\n${ctx.text}`
+          : ctx.text,
+      }));
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          resolveSynthesisTextLimit: () => 120,
+          prepareSynthesis: providerPrepare,
+        }),
+      ]);
+      const prepareHook = vi.fn(async () => ({
+        providerOverrides: { personaPrompt: "director note ".repeat(10) },
+      }));
+
+      const result = await synthesizeSpeech({
+        text: "The fitted spoken text remains unchanged.",
+        cfg: limitedConfig("openclaw-speech-core-provider-hook-overflow"),
+        disableFallback: true,
+        prepareHook,
+      });
+
+      expect(result.success).toBe(true);
+      expect(prepareHook).toHaveBeenCalledOnce();
+      expect(providerPrepare).toHaveBeenCalledTimes(2);
+      const request = requireFirstSynthesisRequest("provider hook-overflow retry request");
+      expect(request.text).toBe("The fitted spoken text remains unchanged.");
+      expect(request.providerOverrides).toBeUndefined();
+    });
+
+    it("streams the exact summarized and enriched text within the selected model limit", async () => {
+      const streamSynthesize = vi.fn(async (_request: SpeechSynthesisStreamRequest) =>
+        createMockSpeechStreamResult(),
+      );
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          prepareSynthesis: undefined,
+          resolveSynthesisTextLimit: () => 120,
+          streamSynthesize,
+        }),
+      ]);
+      const input = "Streaming source material. ".repeat(20);
+      const summary = "A bounded streaming summary.";
+      const summarize = vi.fn(async () => summaryResult(summary, input.length));
+      const prepareHook = vi.fn(async ({ text }: { text: string }) => ({
+        text: `[warm] ${text}`,
+      }));
+
+      const result = await testApi.streamSpeechWithDeps(
+        {
+          text: input,
+          cfg: limitedConfig("openclaw-speech-core-stream-summary"),
+          disableFallback: true,
+          prepareHook,
+        },
+        { summarizeText: summarize },
+      );
+
+      expect(result.success, result.error).toBe(true);
+      expect(result.summarized).toBe(true);
+      expect(result.preparedInputText).toBe(summary);
+      expect(prepareHook).toHaveBeenCalledWith(
+        expect.objectContaining({ text: summary, maxTextLength: 120 }),
+      );
+      expect(streamSynthesize).toHaveBeenCalledWith(
+        expect.objectContaining({ text: `[warm] ${summary}` }),
+      );
+      expect(String(streamSynthesize.mock.calls[0]?.[0].text).length).toBeLessThanOrEqual(120);
+    });
+
+    it("fits streaming fallbacks independently for different provider model limits", async () => {
+      const primaryStream = vi.fn(async (_request: SpeechSynthesisStreamRequest) => {
+        throw new Error("primary stream failed");
+      });
+      const fallbackStream = vi.fn(async (_request: SpeechSynthesisStreamRequest) =>
+        createMockSpeechStreamResult(),
+      );
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          models: ["stream-primary"],
+          prepareSynthesis: undefined,
+          resolveSynthesisTextLimit: () => 120,
+          streamSynthesize: primaryStream,
+        }),
+        createMockSpeechProvider("fallback", {
+          models: ["stream-fallback"],
+          prepareSynthesis: undefined,
+          resolveSynthesisTextLimit: () => 180,
+          streamSynthesize: fallbackStream,
+        }),
+      ]);
+      const input = "E".repeat(300);
+      const summarize = vi.fn(async ({ targetLength }: { targetLength: number }) =>
+        summaryResult(`${targetLength}: ${"x".repeat(targetLength - 10)}`, input.length),
+      );
+      const hookEvents: Array<{ attempt: number; providerModel?: string }> = [];
+      const prepareHook = vi.fn(
+        async (event: { attempt: number; providerModel?: string; text: string }) => {
+          hookEvents.push(event);
+          return { text: event.text };
+        },
+      );
+      const cfg: OpenClawConfig = {
+        ...limitedConfig("openclaw-speech-core-stream-fallback-limits"),
+        agents: {
+          defaults: {
+            voiceModel: {
+              primary: "mock/stream-primary",
+              fallbacks: ["fallback/stream-fallback"],
+            },
+          },
+        },
+      };
+
+      const result = await testApi.streamSpeechWithDeps(
+        {
+          text: input,
+          cfg,
+          prepareHook,
+        },
+        { summarizeText: summarize as never },
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.provider).toBe("fallback");
+      expect(summarize.mock.calls.map((call) => call[0].targetLength)).toEqual([120, 180]);
+      expect(hookEvents.map(({ attempt, providerModel }) => ({ attempt, providerModel }))).toEqual([
+        { attempt: 0, providerModel: "stream-primary" },
+        { attempt: 1, providerModel: "stream-fallback" },
+      ]);
+      expect(String(primaryStream.mock.calls[0]?.[0].text).length).toBeLessThanOrEqual(120);
+      expect(String(fallbackStream.mock.calls[0]?.[0].text).length).toBeLessThanOrEqual(180);
+      expect(result.preparedInputText).toBe(fallbackStream.mock.calls[0]?.[0].text);
+    });
+
+    it("keeps streaming truncation UTF-16 safe when summarization fails", async () => {
+      const streamSynthesize = vi.fn(async (_request: SpeechSynthesisStreamRequest) =>
+        createMockSpeechStreamResult(),
+      );
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          prepareSynthesis: undefined,
+          resolveSynthesisTextLimit: () => 120,
+          streamSynthesize,
+        }),
+      ]);
+      const summarize = vi.fn(async () => {
+        throw new Error("summary backend unavailable");
+      });
+
+      const result = await testApi.streamSpeechWithDeps(
+        {
+          text: `${"😀".repeat(80)} trailing material`,
+          cfg: limitedConfig("openclaw-speech-core-stream-utf16"),
+          disableFallback: true,
+        },
+        { summarizeText: summarize as never },
+      );
+
+      expect(result.success).toBe(true);
+      const sent = String(streamSynthesize.mock.calls[0]?.[0].text);
+      expect(sent.length).toBeLessThanOrEqual(120);
+      expect(sent).not.toContain("\uFFFD");
+      expect(sent).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+      expect(sent).not.toMatch(/(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+    });
+
+    it("retries streaming provider preparation without hook output on overflow", async () => {
+      const providerPrepare = vi.fn(async (ctx: SpeechProviderPrepareSynthesisContext) => ({
+        text: ctx.providerOverrides?.personaPrompt
+          ? `${String(ctx.providerOverrides.personaPrompt)}\n${ctx.text}`
+          : ctx.text,
+      }));
+      const streamSynthesize = vi.fn(async (_request: SpeechSynthesisStreamRequest) =>
+        createMockSpeechStreamResult(),
+      );
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          resolveSynthesisTextLimit: () => 120,
+          prepareSynthesis: providerPrepare,
+          streamSynthesize,
+        }),
+      ]);
+
+      const result = await testApi.streamSpeechWithDeps(
+        {
+          text: "The fitted streaming text remains unchanged.",
+          cfg: limitedConfig("openclaw-speech-core-stream-provider-hook-overflow"),
+          disableFallback: true,
+          prepareHook: async () => ({
+            providerOverrides: { personaPrompt: "director note ".repeat(10) },
+          }),
+        },
+        { summarizeText: vi.fn() as never },
+      );
+
+      expect(result.success).toBe(true);
+      expect(providerPrepare).toHaveBeenCalledTimes(2);
+      expect(streamSynthesize).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "The fitted streaming text remains unchanged.",
+          providerOverrides: undefined,
+        }),
+      );
+    });
+
+    it("rejects provider-prepared text above the configured host limit", async () => {
+      const providerSynthesize = vi.fn(
+        async (request: SpeechSynthesisRequest): Promise<MockSpeechSynthesisResult> => ({
+          audioBuffer: Buffer.from("voice"),
+          fileExtension: ".ogg",
+          outputFormat: "ogg",
+          voiceCompatible: request.target === "voice-note",
+        }),
+      );
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          prepareSynthesis: async ({ text }) => ({ text: `${text}${"F".repeat(100)}` }),
+          synthesize: providerSynthesize,
+        }),
+      ]);
+
+      const result = await synthesizeSpeech({
+        text: "Short input.",
+        cfg: limitedConfig("openclaw-speech-core-host-preparation-overflow", 100),
+        disableFallback: true,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("prepared text exceeds mock limit (112 > 100)");
+      expect(providerSynthesize).not.toHaveBeenCalled();
+    });
+
+    it("never sends provider-prepared text above the provider's declared limit", async () => {
+      const providerSynthesize = vi.fn(
+        async (request: SpeechSynthesisRequest): Promise<MockSpeechSynthesisResult> => ({
+          audioBuffer: Buffer.from("voice"),
+          fileExtension: ".ogg",
+          outputFormat: "ogg",
+          voiceCompatible: request.target === "voice-note",
+        }),
+      );
+      installSpeechProviders([
+        createMockSpeechProvider("mock", {
+          resolveSynthesisTextLimit: () => 120,
+          prepareSynthesis: async () => ({ text: "F".repeat(121) }),
+          synthesize: providerSynthesize,
+        }),
+      ]);
+
+      const result = await synthesizeSpeech({
+        text: "Short input.",
+        cfg: limitedConfig("openclaw-speech-core-provider-overflow"),
+        disableFallback: true,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("prepared text exceeds mock limit (121 > 120)");
+      expect(providerSynthesize).not.toHaveBeenCalled();
+    });
   });
 });
 

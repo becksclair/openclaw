@@ -107,6 +107,14 @@ export type SpeechProviderPrepareSynthesisContext = {
   timeoutMs: number;
 };
 
+/** Provider hook input for resolving the selected model's maximum input length. */
+export type SpeechProviderSynthesisTextLimitContext = {
+  cfg: OpenClawConfig;
+  providerConfig: SpeechProviderConfig;
+  providerOverrides?: SpeechProviderOverrides;
+  target: SpeechSynthesisTarget;
+};
+
 /** Optional provider-prepared synthesis overrides. */
 export type SpeechProviderPreparedSynthesis = {
   text?: string;

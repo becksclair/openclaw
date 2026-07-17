@@ -649,6 +649,8 @@ export type PluginHookReplyPayloadSendingResult = {
 export type PluginHookTtsPrepareEvent = {
   /** Text about to be synthesized for this attempt. */
   text: string;
+  /** Effective host/provider/model maximum already applied to `text`. */
+  maxTextLength?: number;
   /** Resolved speech provider id for this attempt (e.g. `google`, `elevenlabs`). */
   providerId: string;
   /** Resolved provider model id for this attempt, when known (strategy-load-bearing). */

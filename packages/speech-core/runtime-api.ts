@@ -37,6 +37,8 @@ export {
   type TtsDirectiveOverrides,
   type TtsDirectiveParseResult,
   type TtsPrepareHook,
+  type SynthesizeSpeechDeps,
+  type SynthesizeSpeechParams,
   type TtsResult,
   type TtsSynthesisResult,
   type TtsSynthesisStreamResult,

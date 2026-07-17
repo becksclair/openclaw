@@ -34,6 +34,11 @@ import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.j
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
 const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
+// Keep these provider limits aligned with codex-voice. Eleven v3 has a lower
+// documented request ceiling; the conservative default covers every other
+// supported model without making core aware of provider-specific model ids.
+const ELEVENLABS_DEFAULT_MAX_TEXT_LENGTH = 6_000;
+const ELEVENLABS_V3_MAX_TEXT_LENGTH = 5_000;
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
   similarityBoost: 0.75,
@@ -60,6 +65,11 @@ function normalizeElevenLabsTtsModelId(value: string | undefined): string | unde
     default:
       return value;
   }
+}
+
+function isElevenLabsV3Model(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  return normalized === "eleven_v3" || normalized.startsWith("eleven_v3_");
 }
 
 // ElevenLabs requires fully-qualified output_format strings (codec_sampleRate_bitrate),
@@ -488,6 +498,15 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     defaultModel: DEFAULT_ELEVENLABS_MODEL_ID,
     models: ELEVENLABS_TTS_MODELS,
     resolveConfig: ({ rawConfig }) => normalizeElevenLabsProviderConfig(rawConfig),
+    resolveSynthesisTextLimit: ({ providerConfig, providerOverrides }) => {
+      const config = readElevenLabsProviderConfig(providerConfig);
+      const modelId =
+        normalizeElevenLabsTtsModelId(trimToUndefined(providerOverrides?.modelId)) ??
+        config.modelId;
+      return isElevenLabsV3Model(modelId)
+        ? ELEVENLABS_V3_MAX_TEXT_LENGTH
+        : ELEVENLABS_DEFAULT_MAX_TEXT_LENGTH;
+    },
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeElevenLabsProviderConfig(baseTtsConfig);

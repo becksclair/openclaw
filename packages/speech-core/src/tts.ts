@@ -54,6 +54,7 @@ import {
   type SpeechProviderPlugin,
   type SpeechProviderConfig,
   type SpeechProviderOverrides,
+  type SpeechProviderPreparedSynthesis,
   type SpeechVoiceOption,
   type TtsDirectiveOverrides,
   type TtsDirectiveParseResult,
@@ -147,6 +148,9 @@ export type TtsResult = {
   voiceCompatible?: boolean;
   audioAsVoice?: boolean;
   target?: "audio-file" | "voice-note";
+  /** Fitted pre-hook input, for accurate status/payload reporting. */
+  preparedInputText?: string;
+  summarized?: boolean;
 };
 
 export type TtsSynthesisResult = {
@@ -165,6 +169,9 @@ export type TtsSynthesisResult = {
   voiceCompatible?: boolean;
   fileExtension?: string;
   target?: "audio-file" | "voice-note";
+  /** Fitted pre-hook input, before optional enrichment/provider wrapping. */
+  preparedInputText?: string;
+  summarized?: boolean;
 };
 
 export type TtsStreamResult = {
@@ -183,6 +190,9 @@ export type TtsStreamResult = {
   voiceCompatible?: boolean;
   fileExtension?: string;
   target?: "audio-file" | "voice-note";
+  /** Fitted pre-hook input, before optional enrichment/provider wrapping. */
+  preparedInputText?: string;
+  summarized?: boolean;
   release?: () => Promise<void>;
 };
 
@@ -1206,6 +1216,8 @@ export type TtsPrepareHookResult = {
  */
 export type TtsPrepareHook = (input: {
   text: string;
+  /** Effective host/provider/model limit already applied to `text`. */
+  maxTextLength: number;
   providerId: string;
   providerModel?: string;
   persona?: ResolvedTtsPersona;
@@ -1214,6 +1226,108 @@ export type TtsPrepareHook = (input: {
   timeoutMs: number;
   attempt: number;
 }) => Promise<TtsPrepareHookResult> | TtsPrepareHookResult;
+
+type SynthesisTextFit = {
+  text: string;
+  summarized: boolean;
+};
+
+export type SynthesizeSpeechDeps = {
+  summarizeText: typeof summarizeText;
+};
+
+const defaultSynthesizeSpeechDeps: SynthesizeSpeechDeps = { summarizeText };
+
+function normalizeSynthesisTextLimit(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.max(1, Math.floor(value))
+    : undefined;
+}
+
+function resolveProviderSynthesisTextLimit(params: {
+  provider: SpeechProviderPlugin;
+  cfg: OpenClawConfig;
+  providerConfig: SpeechProviderConfig;
+  providerOverrides?: SpeechProviderOverrides;
+  target: "audio-file" | "voice-note" | "telephony";
+}): number | undefined {
+  return normalizeSynthesisTextLimit(
+    params.provider.resolveSynthesisTextLimit?.({
+      cfg: params.cfg,
+      providerConfig: params.providerConfig,
+      providerOverrides: params.providerOverrides,
+      target: params.target,
+    }),
+  );
+}
+
+function resolveEffectiveSynthesisTextLimit(params: {
+  provider: SpeechProviderPlugin;
+  cfg: OpenClawConfig;
+  configuredMaxTextLength: number;
+  providerConfig: SpeechProviderConfig;
+  providerOverrides?: SpeechProviderOverrides;
+  target: "audio-file" | "voice-note" | "telephony";
+}): number {
+  const configuredLimit = normalizeSynthesisTextLimit(params.configuredMaxTextLength) ?? 1;
+  const providerLimit = resolveProviderSynthesisTextLimit(params);
+  return providerLimit === undefined ? configuredLimit : Math.min(configuredLimit, providerLimit);
+}
+
+function truncateSpeechText(text: string, maxTextLength: number): string {
+  if (maxTextLength <= 3) {
+    return truncateUtf16Safe(text, maxTextLength);
+  }
+  return `${truncateUtf16Safe(text, maxTextLength - 3)}...`;
+}
+
+async function fitSpeechText(params: {
+  text: string;
+  maxTextLength: number;
+  cfg: OpenClawConfig;
+  config: ResolvedTtsConfig;
+  prefsPath: string;
+  deps: SynthesizeSpeechDeps;
+}): Promise<SynthesisTextFit> {
+  if (params.text.length <= params.maxTextLength) {
+    return { text: params.text, summarized: false };
+  }
+
+  if (isSummarizationEnabled(params.prefsPath) && params.maxTextLength >= 100) {
+    try {
+      const summary = await params.deps.summarizeText({
+        text: params.text,
+        targetLength: params.maxTextLength,
+        cfg: params.cfg,
+        config: params.config,
+        timeoutMs: params.config.timeoutMs,
+      });
+      const summarizedText = summary.summary.trim();
+      if (!summarizedText) {
+        throw new Error("No summary returned");
+      }
+      if (summarizedText.length > params.maxTextLength) {
+        logVerbose(
+          `TTS: summary exceeded synthesis limit (${summarizedText.length} > ${params.maxTextLength}); truncating.`,
+        );
+        return {
+          text: truncateSpeechText(summarizedText, params.maxTextLength),
+          summarized: true,
+        };
+      }
+      return { text: summarizedText, summarized: true };
+    } catch (err) {
+      logVerbose(
+        `TTS: provider-limit summarization failed, truncating instead: ${formatErrorMessage(err)}`,
+      );
+    }
+  }
+
+  return {
+    text: truncateSpeechText(params.text, params.maxTextLength),
+    summarized: false,
+  };
+}
 
 async function prepareSpeechSynthesis(params: {
   provider: NonNullable<ReturnType<typeof getSpeechProvider>>;
@@ -1225,6 +1339,7 @@ async function prepareSpeechSynthesis(params: {
   personaProviderConfig?: SpeechProviderConfig;
   target: "audio-file" | "voice-note" | "telephony";
   timeoutMs: number;
+  maxTextLength: number;
   prepareHook?: TtsPrepareHook;
   providerModel?: string;
   attempt?: number;
@@ -1238,10 +1353,12 @@ async function prepareSpeechSynthesis(params: {
   // thrown hook or a hook that never runs leaves the originals untouched.
   let text = params.text;
   let providerOverrides = params.providerOverrides;
+  let hookApplied = false;
   if (params.prepareHook) {
     try {
       const hookResult = await params.prepareHook({
         text,
+        maxTextLength: params.maxTextLength,
         providerId: params.provider.id,
         // Prefer the model actually resolved from provider config/overrides (e.g.
         // Google's gemini-*-tts lives in providerConfig, not the candidate
@@ -1256,10 +1373,29 @@ async function prepareSpeechSynthesis(params: {
         timeoutMs: params.timeoutMs,
         attempt: params.attempt ?? 0,
       });
-      text = hookResult?.text ?? text;
-      providerOverrides = hookResult?.providerOverrides
+      const hookText = hookResult?.text ?? text;
+      const hookOverrides = hookResult?.providerOverrides
         ? { ...providerOverrides, ...hookResult.providerOverrides }
         : providerOverrides;
+      const hookLimit = resolveEffectiveSynthesisTextLimit({
+        provider: params.provider,
+        cfg: params.cfg,
+        configuredMaxTextLength: params.maxTextLength,
+        providerConfig: params.providerConfig,
+        providerOverrides: hookOverrides,
+        target: params.target,
+      });
+      if (hookText.length > hookLimit) {
+        // Text and overrides are one transformation. Reject both when the text
+        // no longer fits; an override may only be valid for the rejected text.
+        logVerbose(
+          `TTS: tts_prepare output exceeded limit (${hookText.length} > ${hookLimit}); using fitted input.`,
+        );
+      } else {
+        text = hookText;
+        providerOverrides = hookOverrides;
+        hookApplied = hookResult?.text !== undefined || hookResult?.providerOverrides !== undefined;
+      }
     } catch (err) {
       logVerbose(`TTS: tts_prepare hook failed (${formatErrorMessage(err)}); using original text.`);
     }
@@ -1272,29 +1408,120 @@ async function prepareSpeechSynthesis(params: {
       providerOverrides,
     };
   }
-  const prepared = await params.provider.prepareSynthesis({
-    text,
+  let prepared: SpeechProviderPreparedSynthesis | undefined;
+  try {
+    prepared = await params.provider.prepareSynthesis({
+      text,
+      cfg: params.cfg,
+      providerConfig: params.providerConfig,
+      providerOverrides,
+      persona: params.persona,
+      personaProviderConfig: params.personaProviderConfig,
+      target: params.target,
+      timeoutMs: params.timeoutMs,
+    });
+  } catch (err) {
+    if (!hookApplied) throw err;
+    logVerbose(
+      `TTS: provider preparation rejected tts_prepare output (${formatErrorMessage(err)}); retrying fitted input.`,
+    );
+    return prepareSpeechSynthesis({ ...params, prepareHook: undefined });
+  }
+  const preparedText = prepared?.text ?? text;
+  const preparedProviderConfig = prepared?.providerConfig
+    ? { ...params.providerConfig, ...prepared.providerConfig }
+    : params.providerConfig;
+  const preparedProviderOverrides = prepared?.providerOverrides
+    ? { ...providerOverrides, ...prepared.providerOverrides }
+    : providerOverrides;
+  const preparedTextLimit = resolveEffectiveSynthesisTextLimit({
+    provider: params.provider,
+    cfg: params.cfg,
+    configuredMaxTextLength: params.maxTextLength,
+    providerConfig: preparedProviderConfig,
+    providerOverrides: preparedProviderOverrides,
+    target: params.target,
+  });
+  if (preparedText.length > preparedTextLimit) {
+    if (hookApplied) {
+      logVerbose(
+        `TTS: provider-prepared hook output exceeded limit (${preparedText.length} > ${preparedTextLimit}); retrying fitted input.`,
+      );
+      return prepareSpeechSynthesis({ ...params, prepareHook: undefined });
+    }
+    throw new Error(
+      `prepared text exceeds ${params.provider.id} limit (${preparedText.length} > ${preparedTextLimit})`,
+    );
+  }
+  return {
+    text: preparedText,
+    providerConfig: preparedProviderConfig,
+    providerOverrides: preparedProviderOverrides,
+  };
+}
+
+async function prepareSpeechCandidate(params: {
+  rawText: string;
+  cfg: OpenClawConfig;
+  config: ResolvedTtsConfig;
+  prefsPath: string;
+  provider: SpeechProviderPlugin;
+  providerConfig: SpeechProviderConfig;
+  providerOverrides?: SpeechProviderOverrides;
+  persona?: ResolvedTtsPersona;
+  personaProviderConfig?: SpeechProviderConfig;
+  target: "audio-file" | "voice-note" | "telephony";
+  timeoutMs: number;
+  fittedTextByLimit: Map<number, Promise<SynthesisTextFit>>;
+  deps: SynthesizeSpeechDeps;
+  overLimitPolicy?: "fit" | "reject";
+  prepareHook?: TtsPrepareHook;
+  providerModel?: string;
+  attempt?: number;
+}) {
+  const maxTextLength = resolveEffectiveSynthesisTextLimit({
+    provider: params.provider,
+    cfg: params.cfg,
+    configuredMaxTextLength: params.config.maxTextLength,
+    providerConfig: params.providerConfig,
+    providerOverrides: params.providerOverrides,
+    target: params.target,
+  });
+  if (params.overLimitPolicy === "reject" && params.rawText.length > maxTextLength) {
+    throw new Error(`Text too long (${params.rawText.length} chars, max ${maxTextLength})`);
+  }
+  let fittedText = params.fittedTextByLimit.get(maxTextLength);
+  if (!fittedText) {
+    fittedText = fitSpeechText({
+      text: params.rawText,
+      maxTextLength,
+      cfg: params.cfg,
+      config: params.config,
+      prefsPath: params.prefsPath,
+      deps: params.deps,
+    });
+    params.fittedTextByLimit.set(maxTextLength, fittedText);
+  }
+  const fitted = await fittedText;
+  const prepared = await prepareSpeechSynthesis({
+    provider: params.provider,
+    text: fitted.text,
     cfg: params.cfg,
     providerConfig: params.providerConfig,
-    providerOverrides,
+    providerOverrides: params.providerOverrides,
     persona: params.persona,
     personaProviderConfig: params.personaProviderConfig,
     target: params.target,
     timeoutMs: params.timeoutMs,
+    maxTextLength,
+    prepareHook: params.prepareHook,
+    providerModel: params.providerModel,
+    attempt: params.attempt,
   });
-  return {
-    text: prepared?.text ?? text,
-    providerConfig: prepared?.providerConfig
-      ? { ...params.providerConfig, ...prepared.providerConfig }
-      : params.providerConfig,
-    providerOverrides: prepared?.providerOverrides
-      ? { ...providerOverrides, ...prepared.providerOverrides }
-      : providerOverrides,
-  };
+  return { fitted, prepared };
 }
 
 function resolveTtsRequestSetup(params: {
-  text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
   providerOverride?: TtsProvider;
@@ -1302,16 +1529,13 @@ function resolveTtsRequestSetup(params: {
   agentId?: string;
   channelId?: string;
   accountId?: string;
-}):
-  | {
-      cfg: OpenClawConfig;
-      config: ResolvedTtsConfig;
-      persona?: ResolvedTtsPersona;
-      providers: VoiceProviderCandidate[];
-    }
-  | {
-      error: string;
-    } {
+}): {
+  cfg: OpenClawConfig;
+  config: ResolvedTtsConfig;
+  prefsPath: string;
+  persona?: ResolvedTtsPersona;
+  providers: VoiceProviderCandidate[];
+} {
   const cfg = resolveTtsRuntimeConfig(params.cfg);
   const config = resolveTtsConfig(cfg, {
     agentId: params.agentId,
@@ -1319,17 +1543,13 @@ function resolveTtsRequestSetup(params: {
     accountId: params.accountId,
   });
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
-  if (params.text.length > config.maxTextLength) {
-    return {
-      error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
-    };
-  }
 
   const userProvider = getTtsProvider(config, prefsPath);
   const provider = canonicalizeSpeechProviderId(params.providerOverride, cfg) ?? userProvider;
   return {
     cfg,
     config,
+    prefsPath,
     persona: getTtsPersona(config, prefsPath),
     providers: params.disableFallback
       ? [resolvePrimaryTtsProviderCandidate(provider, cfg)]
@@ -1391,6 +1611,8 @@ export async function textToSpeech(params: {
       persona: synthesis.persona,
       attemptedProviders: synthesis.attemptedProviders,
       attempts: synthesis.attempts,
+      preparedInputText: synthesis.preparedInputText,
+      summarized: synthesis.summarized,
     };
   }
 
@@ -1438,6 +1660,8 @@ export async function textToSpeech(params: {
       outputFormat,
     }),
     target: synthesis.target,
+    preparedInputText: synthesis.preparedInputText,
+    summarized: synthesis.summarized,
   };
 }
 
@@ -1487,7 +1711,7 @@ async function maybePreTranscodeForVoiceDelivery(params: {
   };
 }
 
-export async function synthesizeSpeech(params: {
+export type SynthesizeSpeechParams = {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
@@ -1498,9 +1722,19 @@ export async function synthesizeSpeech(params: {
   agentId?: string;
   accountId?: string;
   prepareHook?: TtsPrepareHook;
-}): Promise<TtsSynthesisResult> {
+};
+
+export async function synthesizeSpeech(
+  params: SynthesizeSpeechParams,
+): Promise<TtsSynthesisResult> {
+  return synthesizeSpeechWithDeps(params, defaultSynthesizeSpeechDeps);
+}
+
+async function synthesizeSpeechWithDeps(
+  params: SynthesizeSpeechParams,
+  deps: SynthesizeSpeechDeps,
+): Promise<TtsSynthesisResult> {
   const setup = resolveTtsRequestSetup({
-    text: params.text,
     cfg: params.cfg,
     prefsPath: params.prefsPath,
     providerOverride: params.overrides?.provider,
@@ -1509,12 +1743,10 @@ export async function synthesizeSpeech(params: {
     channelId: params.channel,
     accountId: params.accountId,
   });
-  if ("error" in setup) {
-    return { success: false, error: setup.error };
-  }
 
-  const { cfg, config, persona, providers } = setup;
+  const { cfg, config, prefsPath, persona, providers } = setup;
   const target = resolveTtsSynthesisTarget(params.channel);
+  const fittedTextByLimit = new Map<number, Promise<SynthesisTextFit>>();
 
   const errors: string[] = [];
   const attemptedProviders: string[] = [];
@@ -1561,16 +1793,21 @@ export async function synthesizeSpeech(params: {
         config,
         provider: resolvedProvider.provider,
       });
-      const prepared = await prepareSpeechSynthesis({
+      const providerOverrides = params.overrides?.providerOverrides?.[resolvedProvider.provider.id];
+      const { fitted, prepared } = await prepareSpeechCandidate({
+        rawText: params.text,
+        config,
+        prefsPath,
         provider: resolvedProvider.provider,
-        text: params.text,
         cfg,
         providerConfig: resolvedProvider.providerConfig,
-        providerOverrides: params.overrides?.providerOverrides?.[resolvedProvider.provider.id],
+        providerOverrides,
         persona: resolvedProvider.synthesisPersona,
         personaProviderConfig: resolvedProvider.personaProviderConfig,
         target,
         timeoutMs,
+        fittedTextByLimit,
+        deps,
         prepareHook: params.prepareHook,
         providerModel: voiceModel?.model,
         attempt: attempt++,
@@ -1607,6 +1844,8 @@ export async function synthesizeSpeech(params: {
         voiceCompatible: synthesis.voiceCompatible,
         fileExtension: synthesis.fileExtension,
         target,
+        preparedInputText: fitted.text,
+        summarized: fitted.summarized,
       };
     } catch (err) {
       const errorMsg = formatTtsProviderError(provider, err);
@@ -1642,7 +1881,7 @@ export async function synthesizeSpeech(params: {
   return buildTtsFailureResult(errors, attemptedProviders, attempts, persona?.id);
 }
 
-export async function streamSpeech(params: {
+type StreamSpeechParams = {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
@@ -1652,9 +1891,14 @@ export async function streamSpeech(params: {
   timeoutMs?: number;
   agentId?: string;
   accountId?: string;
-}): Promise<TtsSynthesisStreamResult> {
+  prepareHook?: TtsPrepareHook;
+};
+
+async function streamSpeechWithDeps(
+  params: StreamSpeechParams,
+  deps: SynthesizeSpeechDeps,
+): Promise<TtsSynthesisStreamResult> {
   const setup = resolveTtsRequestSetup({
-    text: params.text,
     cfg: params.cfg,
     prefsPath: params.prefsPath,
     providerOverride: params.overrides?.provider,
@@ -1663,12 +1907,10 @@ export async function streamSpeech(params: {
     channelId: params.channel,
     accountId: params.accountId,
   });
-  if ("error" in setup) {
-    return { success: false, error: setup.error };
-  }
 
-  const { cfg, config, persona, providers } = setup;
+  const { cfg, config, prefsPath, persona, providers } = setup;
   const target = resolveTtsSynthesisTarget(params.channel);
+  const fittedTextByLimit = new Map<number, Promise<SynthesisTextFit>>();
   const errors: string[] = [];
   const attemptedProviders: string[] = [];
   const attempts: TtsProviderAttempt[] = [];
@@ -1682,6 +1924,7 @@ export async function streamSpeech(params: {
     }`,
   );
 
+  let attempt = 0;
   for (const { provider, voiceModel } of providers) {
     attemptedProviders.push(provider);
     const providerStart = Date.now();
@@ -1727,16 +1970,24 @@ export async function streamSpeech(params: {
         config,
         provider: resolvedProvider.provider,
       });
-      const prepared = await prepareSpeechSynthesis({
+      const providerOverrides = params.overrides?.providerOverrides?.[resolvedProvider.provider.id];
+      const { fitted, prepared } = await prepareSpeechCandidate({
+        rawText: params.text,
+        config,
+        prefsPath,
         provider: resolvedProvider.provider,
-        text: params.text,
         cfg,
         providerConfig: resolvedProvider.providerConfig,
-        providerOverrides: params.overrides?.providerOverrides?.[resolvedProvider.provider.id],
+        providerOverrides,
         persona: resolvedProvider.synthesisPersona,
         personaProviderConfig: resolvedProvider.personaProviderConfig,
         target,
         timeoutMs,
+        fittedTextByLimit,
+        deps,
+        prepareHook: params.prepareHook,
+        providerModel: voiceModel?.model,
+        attempt: attempt++,
       });
       const synthesis = await resolvedProvider.provider.streamSynthesize({
         text: prepared.text,
@@ -1770,6 +2021,8 @@ export async function streamSpeech(params: {
         voiceCompatible: synthesis.voiceCompatible,
         fileExtension: synthesis.fileExtension,
         target,
+        preparedInputText: fitted.text,
+        summarized: fitted.summarized,
         release: synthesis.release,
       };
     } catch (err) {
@@ -1806,6 +2059,10 @@ export async function streamSpeech(params: {
   return buildTtsFailureResult(errors, attemptedProviders, attempts, persona?.id);
 }
 
+export async function streamSpeech(params: StreamSpeechParams): Promise<TtsSynthesisStreamResult> {
+  return streamSpeechWithDeps(params, defaultSynthesizeSpeechDeps);
+}
+
 export async function textToSpeechStream(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -1838,16 +2095,13 @@ export async function textToSpeechTelephony(params: {
   timeoutMs?: number;
 }): Promise<TtsTelephonyResult> {
   const setup = resolveTtsRequestSetup({
-    text: params.text,
     cfg: params.cfg,
     prefsPath: params.prefsPath,
     providerOverride: params.overrides?.provider,
   });
-  if ("error" in setup) {
-    return { success: false, error: setup.error };
-  }
 
-  const { cfg, config, persona, providers } = setup;
+  const { cfg, config, prefsPath, persona, providers } = setup;
+  const fittedTextByLimit = new Map<number, Promise<SynthesisTextFit>>();
   const errors: string[] = [];
   const attemptedProviders: string[] = [];
   const attempts: TtsProviderAttempt[] = [];
@@ -1896,16 +2150,22 @@ export async function textToSpeechTelephony(params: {
       const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony as NonNullable<
         typeof resolvedProvider.provider.synthesizeTelephony
       >;
-      const prepared = await prepareSpeechSynthesis({
+      const providerOverrides = params.overrides?.providerOverrides?.[resolvedProvider.provider.id];
+      const { prepared } = await prepareSpeechCandidate({
+        rawText: params.text,
+        config,
+        prefsPath,
         provider: resolvedProvider.provider,
-        text: params.text,
         cfg,
         providerConfig: resolvedProvider.providerConfig,
-        providerOverrides: params.overrides?.providerOverrides?.[resolvedProvider.provider.id],
+        providerOverrides,
         persona: resolvedProvider.synthesisPersona,
         personaProviderConfig: resolvedProvider.personaProviderConfig,
         target: "telephony",
         timeoutMs,
+        fittedTextByLimit,
+        deps: defaultSynthesizeSpeechDeps,
+        overLimitPolicy: "reject",
       });
       const synthesis = await synthesizeTelephony({
         text: prepared.text,
@@ -2157,11 +2417,13 @@ export async function maybeApplyTtsToPayload(params: {
   });
 
   if (result.success && result.audioPath) {
+    const preparedInputText = result.preparedInputText ?? textForAudio;
+    const summarized = wasSummarized || result.summarized === true;
     lastTtsAttempt = {
       timestamp: Date.now(),
       success: true,
       textLength: text.length,
-      summarized: wasSummarized,
+      summarized,
       provider: result.provider,
       persona: result.persona,
       fallbackFrom: result.fallbackFrom,
@@ -2174,7 +2436,7 @@ export async function maybeApplyTtsToPayload(params: {
       ...nextPayload,
       mediaUrl: result.audioPath,
       audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
-      spokenText: textForAudio,
+      spokenText: preparedInputText,
       trustedLocalMedia: true,
     } as ReplyPayload;
     return nextPayload.text?.trim()
@@ -2186,7 +2448,7 @@ export async function maybeApplyTtsToPayload(params: {
     timestamp: Date.now(),
     success: false,
     textLength: text.length,
-    summarized: wasSummarized,
+    summarized: wasSummarized || result.summarized === true,
     persona: result.persona,
     attemptedProviders: result.attemptedProviders,
     attempts: result.attempts,
@@ -2209,6 +2471,8 @@ export const testApi = {
   getResolvedSpeechProviderConfig,
   formatTtsProviderError,
   sanitizeTtsErrorForLog,
+  synthesizeSpeechWithDeps,
+  streamSpeechWithDeps,
 };
 
 /** @deprecated Use `testApi`. */

@@ -41,6 +41,7 @@ export type {
   SpeechProviderPlugin,
   SpeechProviderPreparedSynthesis,
   SpeechProviderPrepareSynthesisContext,
+  SpeechProviderSynthesisTextLimitContext,
   SpeechProviderResolveConfigContext,
   SpeechProviderResolveTalkConfigContext,
   SpeechProviderResolveTalkOverridesContext,

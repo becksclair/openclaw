@@ -71,6 +71,7 @@ import type {
   SpeechProviderResolveTalkOverridesContext,
   SpeechListVoicesRequest,
   SpeechProviderPrepareSynthesisContext,
+  SpeechProviderSynthesisTextLimitContext,
   SpeechProviderPreparedSynthesis,
   SpeechProviderId,
   SpeechSynthesisRequest,
@@ -1879,6 +1880,8 @@ export type SpeechProviderPlugin = {
     | SpeechProviderPreparedSynthesis
     | undefined
     | Promise<SpeechProviderPreparedSynthesis | undefined>;
+  /** Maximum input characters accepted by the resolved provider/model. */
+  resolveSynthesisTextLimit?: (ctx: SpeechProviderSynthesisTextLimitContext) => number | undefined;
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
   streamSynthesize?: (req: SpeechSynthesisStreamRequest) => Promise<SpeechSynthesisStreamResult>;

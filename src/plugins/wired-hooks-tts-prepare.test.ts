@@ -5,6 +5,7 @@ import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
 
 const ttsPrepareEvent: PluginHookTtsPrepareEvent = {
   text: "hello",
+  maxTextLength: 5_000,
   providerId: "elevenlabs",
   providerModelId: "eleven_v3",
   personaId: "luke",

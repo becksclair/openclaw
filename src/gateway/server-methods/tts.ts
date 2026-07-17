@@ -177,20 +177,6 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = context.getRuntimeConfig();
-      // synthesizeSpeech enforces the same messages.tts.maxTextLength bound but
-      // reports it as a synthesis failure; pre-check to return a request error.
-      const maxTextLength = resolveTtsConfig(cfg).maxTextLength;
-      if (text.length > maxTextLength) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `tts.speak text too long (${text.length} chars, max ${maxTextLength})`,
-          ),
-        );
-        return;
-      }
       const result = await synthesizeSpeech({ text, cfg });
       const provider = normalizeOptionalString(result.provider);
       if (!result.success || !result.audioBuffer || result.audioBuffer.length === 0 || !provider) {

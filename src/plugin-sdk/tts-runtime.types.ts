@@ -161,6 +161,9 @@ export type TtsResult = {
   voiceCompatible?: boolean;
   audioAsVoice?: boolean;
   target?: TtsSpeechTarget;
+  /** Fitted pre-hook input, for accurate status/payload reporting. */
+  preparedInputText?: string;
+  summarized?: boolean;
 };
 
 /** Buffer-backed synthesis result returned by lower-level provider orchestration. */
@@ -180,6 +183,9 @@ export type TtsSynthesisResult = {
   voiceCompatible?: boolean;
   fileExtension?: string;
   target?: TtsSpeechTarget;
+  /** Fitted pre-hook input, before optional enrichment/provider wrapping. */
+  preparedInputText?: string;
+  summarized?: boolean;
 };
 
 /** Stream-backed synthesis result with optional release hook for provider resources. */
@@ -189,6 +195,8 @@ export type TtsStreamResult = {
   error?: string;
   latencyMs?: number;
   provider?: string;
+  providerModel?: string;
+  providerVoice?: string;
   persona?: string;
   fallbackFrom?: string;
   attemptedProviders?: string[];
@@ -197,6 +205,9 @@ export type TtsStreamResult = {
   voiceCompatible?: boolean;
   fileExtension?: string;
   target?: TtsSpeechTarget;
+  /** Fitted pre-hook input, before optional enrichment/provider wrapping. */
+  preparedInputText?: string;
+  summarized?: boolean;
   release?: () => Promise<void>;
 };
 
