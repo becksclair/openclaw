@@ -579,6 +579,7 @@ async function invokeAgent(
     reqId?: string;
     context?: GatewayRequestContext;
     client?: AgentHandlerArgs["client"];
+    abortSignal?: AbortSignal;
     isWebchatConnect?: AgentHandlerArgs["isWebchatConnect"];
     flushDispatch?: boolean;
   },
@@ -590,6 +591,7 @@ async function invokeAgent(
     context: options?.context ?? makeContext(),
     req: { type: "req", id: options?.reqId ?? "agent-test-req", method: "agent" },
     client: options?.client ?? null,
+    abortSignal: options?.abortSignal,
     isWebchatConnect: options?.isWebchatConnect ?? (() => false),
   });
   if (options?.flushDispatch !== false) {
@@ -623,6 +625,29 @@ async function invokeAgentIdentityGet(
 }
 
 describe("gateway agent handler", () => {
+  it("rejects an in-process request aborted before acceptance", async () => {
+    const abortController = new AbortController();
+    abortController.abort(new DOMException("Gateway request timed out", "TimeoutError"));
+
+    const respond = await invokeAgent(
+      {
+        message: "hello",
+        idempotencyKey: "aborted-before-acceptance",
+      },
+      { abortSignal: abortController.signal, flushDispatch: false },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.UNAVAILABLE,
+        message: "agent request aborted before acceptance",
+      }),
+    );
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
   afterEach(() => {
     envSnapshot.restore();
     resetDetachedTaskLifecycleRuntimeForTests();
@@ -676,6 +701,21 @@ describe("gateway agent handler", () => {
         maxEntries: 42,
       },
     });
+  });
+
+  it("forwards a trusted runtime tool allowlist to the admitted agent run", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent({
+      message: "expand this memory query",
+      agentId: "main",
+      sessionKey: "agent:main:subagent:lcm-expand:allowlist",
+      toolsAllow: ["lcm_expand"],
+      idempotencyKey: "runtime-tools-allowlist",
+    });
+
+    const call = await waitForAgentCommandCall<{ toolsAllow?: string[] }>();
+    expect(call.toolsAllow).toEqual(["lcm_expand"]);
   });
 
   it("resolves explicit recipient sessions before Gateway admission", async () => {

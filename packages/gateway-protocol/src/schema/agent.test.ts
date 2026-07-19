@@ -65,6 +65,7 @@ describe("AgentParamsSchema", () => {
         fastMode: "auto",
         fastModeStartedAtMs: 123_456,
         fastModeAutoOnSeconds: 45,
+        toolsAllow: ["lcm_expand"],
         idempotencyKey: "lcm-expand-1",
       }),
     ).toBe(true);

@@ -174,6 +174,7 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
     throw new RequestScopedSubagentRuntimeError();
   };
   return {
+    capabilities: { thinkingOverride: true },
     run: unavailable,
     waitForRun: unavailable,
     getSessionMessages: unavailable,
@@ -269,6 +270,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
+    capabilities: { responsesLiteAllTurns: true },
     gateway: createRuntimeGateway(),
     config: createRuntimeConfig(),
     agent: createRuntimeAgent(),

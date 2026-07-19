@@ -838,12 +838,16 @@ test("sessions.get reads selected global messages from the requested agent store
       },
     });
 
-    const result = await directSessionReq<{ messages?: unknown[] }>("sessions.get", {
-      key: "global",
-      agentId: "work",
-    });
+    const result = await directSessionReq<{ messages?: unknown[]; totalMessages?: number }>(
+      "sessions.get",
+      {
+        key: "global",
+        agentId: "work",
+      },
+    );
 
     expect(result.ok).toBe(true);
+    expect(result.payload?.totalMessages).toBe(1);
     const renderedMessages = JSON.stringify(result.payload?.messages ?? []);
     expect(renderedMessages).toContain("work global");
     expect(renderedMessages).not.toContain("main global");

@@ -750,7 +750,7 @@ describe("loadGatewayPlugins", () => {
       .mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
         expect(opts.req.method).toBe("sessions.get");
         expect(opts.req.params).toEqual({ key: "s-read" });
-        opts.respond(true, { messages: [{ id: "m-1" }] });
+        opts.respond(true, { messages: [{ id: "m-1" }], totalMessages: 7 });
       })
       .mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
         expect(opts.req.method).toBe("sessions.get");
@@ -765,6 +765,7 @@ describe("loadGatewayPlugins", () => {
 
     await expect(runtime.getSessionMessages({ sessionKey: "s-read" })).resolves.toEqual({
       messages: [{ id: "m-1" }],
+      totalMessages: 7,
     });
     await expect(runtime.getSession({ sessionKey: "s-legacy" })).resolves.toEqual({
       messages: [{ id: "m-2" }],
@@ -792,6 +793,55 @@ describe("loadGatewayPlugins", () => {
         { timeoutMs: 5 },
       ),
     ).rejects.toThrow("gateway request timeout for sessions.delete");
+  });
+
+  test("applies the subagent timeout while waiting for gateway admission", async () => {
+    const runtime = await createSubagentRuntime(serverPluginsModule);
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("subagent-admission-timeout"));
+    let releaseHandler: () => void = () => undefined;
+    const handlerReleased = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    let admittedAfterTimeout = false;
+    let observedAbort = false;
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      await handlerReleased;
+      observedAbort = opts.abortSignal?.aborted === true;
+      if (!observedAbort) {
+        admittedAfterTimeout = true;
+        opts.respond(true, { runId: "late-run" });
+      }
+    });
+
+    await expect(
+      runtime.run({
+        sessionKey: "s-stuck-subagent",
+        message: "hello",
+        timeoutMs: 5,
+      }),
+    ).rejects.toThrow("gateway request timeout for agent");
+    releaseHandler();
+    await vi.waitFor(() => expect(observedAbort).toBe(true));
+    expect(admittedAfterTimeout).toBe(false);
+  });
+
+  test("preserves timeoutMs zero as the no-timeout sentinel", async () => {
+    const runtime = await createSubagentRuntime(serverPluginsModule);
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("subagent-no-timeout"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
+      opts.respond(true, { runId: "no-timeout-run" });
+    });
+
+    await expect(
+      runtime.run({
+        sessionKey: "s-no-timeout",
+        message: "hello",
+        timeoutMs: 0,
+      }),
+    ).resolves.toEqual({ runId: "no-timeout-run" });
   });
 
   test("returns an accepted in-process response without waiting for handler completion", async () => {
@@ -1184,6 +1234,8 @@ describe("loadGatewayPlugins", () => {
       fastMode: "auto",
       fastModeStartedAtMs: 123_456,
       fastModeAutoOnSeconds: 45,
+      thinking: "off",
+      toolsAllow: ["lcm_expand"],
       timeoutMs: 120_000,
       deliver: false,
     });
@@ -1193,6 +1245,8 @@ describe("loadGatewayPlugins", () => {
     expect(params.fastMode).toBe("auto");
     expect(params.fastModeStartedAtMs).toBe(123_456);
     expect(params.fastModeAutoOnSeconds).toBe(45);
+    expect(params.thinking).toBe("off");
+    expect(params.toolsAllow).toEqual(["lcm_expand"]);
     expect(params.timeout).toBe(120);
   });
 

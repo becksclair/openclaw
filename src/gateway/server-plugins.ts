@@ -371,7 +371,7 @@ function unwrapGatewayMethodDispatchResponse(
 }
 
 function resolveInProcessDispatchTimeoutMs(timeoutMs?: number): number | undefined {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
     ? resolveSafeTimeoutDelayMs(timeoutMs)
     : undefined;
 }
@@ -391,6 +391,7 @@ async function waitForInProcessDispatch<T>(
   method: string,
   promise: Promise<T>,
   deadlineMs?: number,
+  onTimeout?: () => void,
 ): Promise<T> {
   const remainingTimeoutMs = resolveRemainingInProcessDispatchTimeoutMs(deadlineMs);
   if (remainingTimeoutMs === undefined) {
@@ -402,6 +403,7 @@ async function waitForInProcessDispatch<T>(
       promise,
       new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
+          onTimeout?.();
           reject(new Error(`gateway request timeout for ${method}`));
         }, remainingTimeoutMs);
       }),
@@ -444,6 +446,7 @@ export async function dispatchGatewayMethodInProcessRaw(
     rejectFirstResponse = reject;
   });
   const deadlineMs = resolveInProcessDispatchDeadlineMs(options?.timeoutMs);
+  const requestAbortController = deadlineMs === undefined ? undefined : new AbortController();
   const { handleGatewayRequest } = await import("./server-methods.js");
   const pluginRuntimeOwnerId =
     typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
@@ -479,6 +482,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       options?.forceSyntheticClient === true
         ? syntheticClient
         : (scopedClient ?? (options?.disableSyntheticClient === true ? null : syntheticClient)),
+    abortSignal: requestAbortController?.signal,
     isWebchatConnect,
     respond: (ok, payload, error, meta) => {
       const response = { ok, payload, error, ...(meta ? { meta } : {}) };
@@ -511,7 +515,9 @@ export async function dispatchGatewayMethodInProcessRaw(
       rejectFinalResponse?.(error);
     });
 
-  firstResponse = await waitForInProcessDispatch(method, firstResponsePromise, deadlineMs);
+  firstResponse = await waitForInProcessDispatch(method, firstResponsePromise, deadlineMs, () =>
+    requestAbortController?.abort(new DOMException("Gateway request timed out", "TimeoutError")),
+  );
   const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
   if (options?.expectFinal !== true || firstPayload?.status !== "accepted") {
     return firstResponse;
@@ -681,14 +687,26 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
             PLUGIN_SUBAGENT_SESSION_MESSAGES_MAX_LIMIT,
             Math.max(1, Math.floor(params.limit)),
           );
-    const payload = await dispatchGatewayMethod<{ messages?: unknown[] }>("sessions.get", {
-      key: params.sessionKey,
-      ...(limit != null && { limit }),
-    });
-    return { messages: Array.isArray(payload?.messages) ? payload.messages : [] };
+    const payload = await dispatchGatewayMethod<{ messages?: unknown[]; totalMessages?: unknown }>(
+      "sessions.get",
+      {
+        key: params.sessionKey,
+        ...(limit != null && { limit }),
+      },
+      params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : undefined,
+    );
+    return {
+      messages: Array.isArray(payload?.messages) ? payload.messages : [],
+      ...(typeof payload?.totalMessages === "number" &&
+      Number.isFinite(payload.totalMessages) &&
+      payload.totalMessages >= 0
+        ? { totalMessages: Math.floor(payload.totalMessages) }
+        : {}),
+    };
   };
 
   return {
+    capabilities: { thinkingOverride: true },
     async run(params) {
       const scope = getPluginRuntimeGatewayRequestScope();
       const pluginId =
@@ -758,6 +776,8 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           ...(params.fastModeAutoOnSeconds !== undefined && {
             fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
           }),
+          ...(params.thinking !== undefined && { thinking: params.thinking }),
+          ...(params.toolsAllow !== undefined && { toolsAllow: params.toolsAllow }),
           ...(agentTimeoutSeconds !== undefined && { timeout: agentTimeoutSeconds }),
           // The gateway `agent` schema requires `idempotencyKey: NonEmptyString`,
           // so fall back to a generated UUID when the caller omits it. Without
@@ -768,6 +788,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         {
           allowPolicyModelOverride,
           agentRunTracking: "plugin_subagent",
+          ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
         },
       );
@@ -887,7 +908,10 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           key: params.sessionKey,
           deleteTranscript: params.deleteTranscript ?? true,
         },
-        pluginOwnedCleanupOptions,
+        {
+          ...pluginOwnedCleanupOptions,
+          ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+        },
       );
     },
   };

@@ -2542,10 +2542,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       agentId: requestedAgent.agentId,
     });
     if (!entry?.sessionId) {
-      respond(true, { messages: [] }, undefined);
+      respond(true, { messages: [], totalMessages: 0 }, undefined);
       return;
     }
-    const { messages } = await readRecentSessionMessagesWithStatsAsync(
+    const { messages, totalMessages } = await readRecentSessionMessagesWithStatsAsync(
       {
         agentId: requestedAgent.agentId,
         sessionEntry: entry,
@@ -2559,7 +2559,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         allowResetArchiveFallback: true,
       },
     );
-    respond(true, { messages }, undefined);
+    respond(true, { messages, totalMessages }, undefined);
   },
   "sessions.compact": async ({ req, params, respond, context, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {

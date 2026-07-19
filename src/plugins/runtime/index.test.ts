@@ -186,6 +186,18 @@ describe("plugin runtime command execution", () => {
       readValue: (runtime: ReturnType<typeof createPluginRuntime>) => runtime.version,
       expected: VERSION,
     },
+    {
+      name: "advertises subagent thinking override support",
+      readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
+        runtime.subagent.capabilities?.thinkingOverride,
+      expected: true,
+    },
+    {
+      name: "advertises Responses Lite all-turn reasoning context support",
+      readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
+        runtime.capabilities?.responsesLiteAllTurns,
+      expected: true,
+    },
   ] as const)("$name", ({ readValue, expected }) => {
     expectRuntimeValue(readValue, expected);
   });

@@ -199,4 +199,21 @@ describe("plugin registry runtime config scope", () => {
       pluginSource: "/plugins/google-meet/index.js",
     });
   });
+
+  it("forwards subagent capabilities through the plugin-scoped runtime facade", () => {
+    const runtime = createPluginRuntime();
+    runtime.subagent.capabilities = { thinkingOverride: true };
+    const pluginRegistry = createTestRegistry(runtime);
+    const record = createPluginRecord({
+      id: "lossless-claw",
+      name: "Lossless Claw",
+      source: "/plugins/lossless-claw/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+
+    expect(api.runtime.subagent.capabilities).toEqual({ thinkingOverride: true });
+  });
 });

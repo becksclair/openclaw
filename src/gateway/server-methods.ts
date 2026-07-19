@@ -723,7 +723,7 @@ function createRequestGatewayMethodRegistry(
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
-  const { req, respond, client, isWebchatConnect, context } = opts;
+  const { req, respond, client, abortSignal, isWebchatConnect, context } = opts;
   // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
   // metadata newer than global runtime state still authorizes and dispatches correctly. When the
   // attached snapshot does not own the method, rebuild from the live plugin registry so plugin RPC
@@ -793,6 +793,7 @@ export async function handleGatewayRequest(
       req,
       params: (req.params ?? {}) as Record<string, unknown>,
       client,
+      abortSignal,
       isWebchatConnect,
       respond,
       context,

@@ -186,6 +186,9 @@ type RuntimeRunEmbeddedAgent = (
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
   version: string;
+  capabilities?: {
+    responsesLiteAllTurns?: true;
+  };
   config: {
     /** Current process runtime config snapshot. Prefer config passed into the active call path. */
     current: () => DeepReadonly<import("../../config/types.openclaw.js").OpenClawConfig>;

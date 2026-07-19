@@ -9,6 +9,17 @@ type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 
 // ── Subagent runtime types ──────────────────────────────────────────
 
+export type SubagentThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra"
+  | "adaptive";
+
 export type SubagentRunParams = {
   sessionKey: string;
   message: string;
@@ -21,6 +32,8 @@ export type SubagentRunParams = {
   fastMode?: FastMode;
   fastModeStartedAtMs?: number;
   fastModeAutoOnSeconds?: number;
+  thinking?: SubagentThinkingLevel;
+  toolsAllow?: string[];
   timeoutMs?: number;
   idempotencyKey?: string;
   cwd?: string;
@@ -49,10 +62,12 @@ export type SubagentWaitResult = {
 export type SubagentGetSessionMessagesParams = {
   sessionKey: string;
   limit?: number;
+  timeoutMs?: number;
 };
 
 export type SubagentGetSessionMessagesResult = {
   messages: unknown[];
+  totalMessages?: number;
 };
 
 /** @deprecated Use SubagentGetSessionMessagesParams. */
@@ -64,6 +79,7 @@ export type SubagentGetSessionResult = SubagentGetSessionMessagesResult;
 export type SubagentDeleteSessionParams = {
   sessionKey: string;
   deleteTranscript?: boolean;
+  timeoutMs?: number;
 };
 
 export type RuntimeNodeListParams = {
@@ -108,6 +124,9 @@ export type PluginRuntime = PluginRuntimeCore & {
     ) => Promise<T>;
   };
   subagent: {
+    capabilities?: {
+      thinkingOverride?: true;
+    };
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<SubagentWaitResult>;
     getSessionMessages: (

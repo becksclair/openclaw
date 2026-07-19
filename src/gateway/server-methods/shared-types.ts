@@ -174,6 +174,8 @@ export type GatewayRequestContext = {
 export type GatewayRequestOptions = {
   req: RequestFrame;
   client: GatewayClient | null;
+  /** In-process callers can cancel work that has not crossed the acceptance boundary. */
+  abortSignal?: AbortSignal;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   respond: RespondFn;
   context: GatewayRequestContext;
@@ -185,6 +187,7 @@ export type GatewayRequestHandlerOptions = {
   req: RequestFrame;
   params: Record<string, unknown>;
   client: GatewayClient | null;
+  abortSignal?: AbortSignal;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   respond: RespondFn;
   context: GatewayRequestContext;

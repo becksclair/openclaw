@@ -1113,7 +1113,7 @@ function yieldAfterAgentAcceptedAck(): Promise<void> {
 }
 
 export const agentHandlers: GatewayRequestHandlers = {
-  agent: async ({ params, respond, context, client, isWebchatConnect }) => {
+  agent: async ({ params, respond, context, client, abortSignal, isWebchatConnect }) => {
     const p = params;
     if (!validateAgentParams(p)) {
       respond(
@@ -1136,6 +1136,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       sessionId?: string;
       sessionKey?: string;
       thinking?: string;
+      toolsAllow?: string[];
       fastMode?: AgentCommandOpts["fastMode"];
       fastModeStartedAtMs?: number;
       fastModeAutoOnSeconds?: number;
@@ -1179,6 +1180,22 @@ export const agentHandlers: GatewayRequestHandlers = {
       workspaceDir?: string;
       voiceWakeTrigger?: string;
     };
+    const rejectIfDispatchAborted = (): boolean => {
+      if (!abortSignal?.aborted) {
+        return false;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "agent request aborted before acceptance", {
+          retryable: true,
+        }),
+      );
+      return true;
+    };
+    if (rejectIfDispatchAborted()) {
+      return;
+    }
     if (request.cwd && !path.isAbsolute(request.cwd)) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "cwd must be absolute"));
       return;
@@ -3175,6 +3192,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       const canUseInheritedFastModeTiming = taskTrackingMode === "plugin_subagent";
 
+      // In-process callers can expire while this handler waits on session setup.
+      // Never cross the accepted boundary after their deadline, or the caller can retry
+      // without knowing that this request will still start work.
+      if (rejectIfDispatchAborted()) {
+        return;
+      }
+
       const accepted = {
         runId,
         sessionKey: resolvedSessionKey,
@@ -3309,6 +3333,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               sessionId: resolvedSessionId,
               sessionKey: resolvedSessionKey,
               thinking: request.thinking,
+              toolsAllow: request.toolsAllow,
               fastMode: request.fastMode,
               fastModeStartedAtMs: canUseInheritedFastModeTiming
                 ? request.fastModeStartedAtMs

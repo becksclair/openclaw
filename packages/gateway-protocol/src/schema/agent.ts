@@ -193,6 +193,7 @@ export const AgentParamsSchema = Type.Object(
     sessionId: Type.Optional(Type.String()),
     sessionKey: Type.Optional(Type.String()),
     thinking: Type.Optional(Type.String()),
+    toolsAllow: Type.Optional(Type.Array(NonEmptyString)),
     fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
     fastModeStartedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     fastModeAutoOnSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
