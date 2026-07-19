@@ -18,7 +18,9 @@ Replayed from fork head `cd140f04eb` onto upstream `v2026.7.1` (`2d2ddc43d0`). T
 
 This table is the authoritative seam list. `claw-fork-prep`'s `parse_ledger_seams()` reads only the first `| Seam | Decision |` table in this file, so a seam absent from it is invisible to the generated goal package. Every row below must have a matching `### <exact name>` section under **Seam inventory** (or **Deferred live proof**), and every such section must have a row here. Seams removed from the carry live under **Dropped seams (do not reintroduce)** and must not reappear here.
 
-Reconciled 2026-07-09 against the `v2026.7.1-beta.1..v2026.7.1-beta.3` delta: eight seams that existed only as `###` sections were added to this table (they were invisible to the prep generator); the misfiled **WhatsApp inbound message archive** row was moved here from the stale v2026.6.8 table; two drifted names were normalized (`Discord 30032 command deploy recovery` → `Discord command deploy 30032 recovery`; `Codex app-server force full access` → dropped entirely); and four seams were removed. Net: 43 carries, table and inventory in 1:1 agreement.
+Reconciled 2026-07-19 after the Luna/Terra Responses Lite and delegated-memory pass: the existing Responses Lite seam now includes explicit `off` → wire `none`, managed Codex transport identity, and simple-completion coverage; **Policy-safe plugin subagent delegation** is a new runtime carry for the generic host contract consumed by `lossless-claw`. The current table now contains 45 active carry rows plus 3 absorbed-upstream records.
+
+The prior 2026-07-09 reconciliation covered the `v2026.7.1-beta.1..v2026.7.1-beta.3` delta: eight seams that existed only as `###` sections were added to this table (they were invisible to the prep generator); the misfiled **WhatsApp inbound message archive** row was moved here from the stale v2026.6.8 table; two drifted names were normalized (`Discord 30032 command deploy recovery` → `Discord command deploy 30032 recovery`; `Codex app-server force full access` → dropped entirely); and four seams were removed.
 
 Two seams are absorbed by upstream this replay: **Reply session init burst serialization** (upstream shipped `runExclusiveSessionStoreWrite` around session initialization, so the fork queue was dropped) and **Gateway main session direct delivery** (`resolveChatSendOriginatingRoute` is byte-identical upstream). **Telegram transcribed-audio TTS intent** remains a partial-overlap carry through the shared outbound TTS path. The **Native Codex message-tool TTS delivery** and Telegram rich-message seams were reconciled onto upstream's current delivery contracts, and **Context-rich realtime Talk tools** was folded onto the current capability-policy abstraction.
 
@@ -26,7 +28,8 @@ Two seams are absorbed by upstream this replay: **Reply session init burst seria
 | -------------------------------------------------------------------- | --------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Backup archive owner-only mode                                       | Runtime carry         | High       | Stable still creates the archive output without mode `0o600`; replay source commit `add54436bb` remains required.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Codex binding migration convergence                                  | Absorbed upstream     | High       | Stable commit `39fac06f48` and its newer bounded-fingerprint migration supersede source commit `03ac9ab6a0`; keep focused migration proof and the two-pass rehearsal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Mandatory Responses Lite reasoning context                           | Runtime carry         | High       | Stable lacks `extensions/openai/responses-lite.ts`; replay source commit `003a72ba7e` preserves mandatory encrypted reasoning context.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Mandatory Responses Lite reasoning context                           | Runtime carry         | High       | Stable lacks `extensions/openai/responses-lite.ts`; carry all-turn reasoning context, explicit `off` → wire `none` on normal and simple-completion paths, Lite-scoped transport headers, and the managed Codex package version captured at build/module startup.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Policy-safe plugin subagent delegation                               | Runtime carry         | High       | Stable's public plugin subagent facade lacks the thinking/tool override and capability contract required by `lossless-claw`. Carry policy-enforced model routing, fail-closed capability discovery, bounded/cancellable admission and session I/O, and total-message reply fencing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Wear OS voice companion                                              | Runtime carry         | Critical   | HEAD settings.gradle includes :wear/:audio/:common; wear/WatchViewModel.kt TTS gain=1.5 + RotaryStepAccumulator; WatchMainActivity FLAG_KEEP_SCREEN_ON; app compileSdk=37+ndkVersion, GatewayDiscovery CINNAMON_BUN. Tag: only :app/:benchmark, compileSdk=36, no wear/audio tree.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ACP remote target-backed bridge                                      | Partial-overlap carry | Critical   | HEAD acp-spawn.ts:459 resolveTargetAcpAgentId extracts runtime.acp backend/target, threaded via targetBackendId:1372/targetRuntimeTarget:1373→spawn(target:1427,backendId:1511); schema.help.ts:321 runtime.acp.target; scripts/verify-codex-devbox-acp.js present. v2026.7.1-beta.1 returns only {agentId,configAgentId}, no target/backendId, verifier absent. acpx-remote out-of-tree in both.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Gateway runtime metadata hotpath                                     | Partial-overlap carry | Critical   | HEAD server.impl.ts:1354 captureCurrentPluginMetadataSnapshotState, :1400 applyPluginAutoEnable, :1416 restore-on-error try/catch, :1421 compatibleConfigs:[nextPluginRuntimeConfig] — all ABSENT in v2026.7.1-beta.1 server.impl.ts (reload sets snapshot at :1385 w/o restore). Snapshot module + server-model-catalog.ts byte-identical (empty diff); upstream uses restore only in list.status-command.ts:191.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -267,6 +270,8 @@ keytool -printcert -jarfile <app.aab>         # AAB: read the "SHA256:" line
 
 ## Replay impact
 
+- `responses-lite-reasoning-context` - active seam: keep Luna/Terra/Sol Responses Lite requests on `reasoning.context: "all_turns"`, translate intentional OpenClaw `thinking: "off"` to wire effort `none` across normal and simple-completion transports, and advertise the managed Codex package version rather than a hand-maintained user-agent version.
+- `policy-safe-plugin-subagent-delegation` - active seam: keep delegated plugin work on the public host subagent runtime so model allowlists/override policy remain authoritative, while exposing the thinking/tool capability, timeout/cancellation, session-total, and reply-read contracts required by `lossless-claw`.
 - `d5f0ca2e6b` - support/proof carry: keep private/non-git-tracked plugin directories out of runtime sidecar baseline collection.
 - `e000c3410d` - active seam: keep ACP backend alias routing so `sessions_spawn({ runtime: "acp", agentId })` resolves the selected config agent's `runtime.acp.backend` instead of falling through to global `acp.backend`.
 - `9349edd41c` - active seam: keep ACP backend-managed runtime options hidden from core runtime control writes.
@@ -288,8 +293,6 @@ keytool -printcert -jarfile <app.aab>         # AAB: read the "SHA256:" line
 - `da4c5c7c34` - partial-overlap carry: keep exec safe-bin realpath trust for approved safe binaries reached through symlinks or wrapper paths.
 - `ci-replay-repair-2026-05-20` - pending/drop candidate: v2026.5.22 has moved past the v2026.5.18 CI repair context; do not replay stale CI repairs unless broad proof fails for the same dependency-contract class.
 - `docker-replay-validation` - support/proof carry: keep the root `AGENTS.md` Docker-first Bex fork replay directives and run fork replay, build proof, and broad tests in a clean Docker validation container before deploying to Bex's live Gateway; use host-local tests only for targeted checks that intentionally depend on Bex's local environment.
-- `codex-app-server-force-full-access` - active seam: when `OPENCLAW_CODEX_FORCE_FULL_ACCESS` is set, the native Codex app-server runtime clamps to `sandbox: danger-full-access` + `approvalPolicy: never` + `approvalsReviewer: user` (unrestricted network is implied by danger-full-access at the Codex protocol level) at the resolver output, the OpenClaw tool-policy promotion bail, the bound thread/turn request builders, and the side-question fork. This defeats OpenClaw-side exec-mode/guardian/promotion/binding downgrades. Opt-in, default off; `/etc/codex/requirements.toml` is intentionally not consulted (this fork does not use it).
-
 - `generic-agent-base-prompt` - active seam: keep the generated global `agent-base.md` template and the agent-scoped runtime override convention for embedded OpenClaw/full prompts and native Codex app-server `baseInstructions`. Gateway startup regenerates `<stateDir>/agent-base.md`; only `<agentDir>/agent-base.md` affects runtime. Codex app-server also accepts `<agentDir>/app-server-base.md` as a legacy alias when the canonical file is absent.
 - `context-rich-realtime-talk-tools` - active seam: keep Gateway-owned realtime Talk as a context-rich voice agent surface with exact `voice-agent-base.md` prompt loading, transient current-session context, latest projected `message` tool mirror context, degraded large-session fallback, opt-in `talk.realtime.tools`, the `voice` tool profile, hard exclusion of message-sending tools, and server-executed direct tools. Browser/client-owned realtime remains consult/control-only.
 - `android-phone-chat-bubble-width` - active seam: keep full-screen Android phone chat bubbles in `apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt` at `CHAT_SCREEN_BUBBLE_WIDTH_FRACTION = 0.85f` for user, assistant, streaming, and persisted rows. Guard with `apps/android/app/src/test/java/ai/openclaw/app/ui/chat/ChatScreenLayoutTest.kt` and verify with `./gradlew :app:testThirdPartyDebugUnitTest --tests ai.openclaw.app.ui.chat.ChatScreenLayoutTest --console=plain`; deploy Bex's phone with the third-party release APK, never Play release.
@@ -308,15 +311,91 @@ keytool -printcert -jarfile <app.aab>         # AAB: read the "SHA256:" line
 
 ### Backup archive owner-only mode
 
-Stable `v2026.7.1` still opens backup output without an owner-only mode. Carry source commit `add54436bb` and prove `src/infra/backup-create.test.ts`.
+Carry behavior: backup archive creation and publication keep owner-only mode `0o600`, including copy fallback paths. Stable `v2026.7.1` still opens archive output without this guarantee.
 
-### Codex binding migration convergence
+Primary seam files:
 
-Absorbed by stable's newer convergence and bounded-fingerprint migration. Do not replay source commit `03ac9ab6a0`; retain focused Codex migration tests and the mandatory two-pass sanitized rehearsal.
+- `src/infra/backup-create.ts`
+- `src/infra/backup-create.test.ts`
+
+Primary seam tests:
+
+- `src/infra/backup-create.test.ts`
+
+Rebase notes:
+
+- Carry source commit `add54436bb` behaviorally. Preserve `0o600` at initial creation and after publication/copy fallback; proving only the temporary archive is insufficient.
 
 ### Mandatory Responses Lite reasoning context
 
-Carry source commit `003a72ba7e`; stable lacks the Responses Lite adapter that preserves encrypted reasoning context across all turns.
+Carry behavior: ChatGPT-backed GPT-5.6 Luna, Terra, and Sol requests use the Responses Lite payload and transport contract. Every Lite request carries `reasoning.context: "all_turns"`; an intentional OpenClaw `thinking: "off"` becomes wire `reasoning.effort: "none"` instead of dropping the reasoning block, including simple-completion callers such as Active Memory. Lite-only headers identify Codex Desktop with the managed `@openai/codex` version resolved once at build or module startup, avoiding manual version drift. Non-Lite OpenAI-compatible providers keep their existing reasoning and header behavior.
+
+Primary seam files:
+
+- `extensions/openai/responses-lite.ts`
+- `src/llm/providers/stream-wrappers/openai.ts`
+- `src/agents/simple-completion-runtime.ts`
+- `src/agents/openai-transport-stream.ts`
+- `tsdown.config.ts`
+
+Primary seam tests:
+
+- `extensions/openai/responses-lite.test.ts`
+- `src/llm/providers/stream-wrappers/openai.test.ts`
+- `src/agents/simple-completion-runtime.test.ts`
+- `src/agents/openai-transport-stream.test.ts`
+- Command: `pnpm test extensions/openai/responses-lite.test.ts src/llm/providers/stream-wrappers/openai.test.ts src/agents/simple-completion-runtime.test.ts src/agents/openai-transport-stream.test.ts`
+
+Rebase notes:
+
+- Responses Lite requires `reasoning.context: "all_turns"` even when no effort was requested. Never omit the entire reasoning object for Lite traffic.
+- Preserve the semantic distinction between omitted thinking and explicit `off`: omitted effort sends only the required context; explicit `off` sends context plus effort `none`.
+- Keep Lite detection transport-aware and model-bounded. The model id alone must not add private ChatGPT headers or payload rules to arbitrary OpenAI-compatible endpoints.
+- Resolve the managed Codex version once. Production bundles inject the package version at build time; source mode may read the installed package manifest once during module initialization. Do not poll or reread package metadata per request.
+- The checked sibling Codex catalog currently advertises Luna/Terra reasoning levels from `low` upward, not `none`; preserve `none` here as an explicit Responses Lite wire override for OpenClaw `off`, and re-check whether Codex later promotes it into model capability metadata.
+- Re-check the exact Responses Lite reasoning and model metadata contract against sibling `../codex` on every replay. Drop this seam only when upstream covers all-turn context, explicit none effort, simple-completion parity, and managed transport identity.
+
+### Policy-safe plugin subagent delegation
+
+Carry behavior: external plugins delegate agent work through `api.runtime.subagent`, not the private embedded-agent runner. The host remains the owner of `subagent.allowModelOverride` and `subagent.allowedModels`; canonical `provider/model` references such as `openai/gpt-5.6-luna` reach that policy boundary correctly. The runtime advertises its thinking-override capability through the actual loaded-plugin facade, forwards explicit thinking and tool allowlists, bounds admission and session reads with one caller deadline, suppresses late admission after timeout, preserves `timeoutMs: 0` as unbounded, and returns total session message counts so retained transcripts can fence the current reply beyond the 1,000-message tail cap. `lossless-claw` feature-detects the complete contract before DB initialization and fails closed when the host is incompatible.
+
+Primary seam files:
+
+- `src/plugins/runtime/types.ts`
+- `src/plugins/runtime/types-core.ts`
+- `src/plugins/runtime/index.ts`
+- `src/plugins/registry.ts`
+- `src/gateway/server-plugins.ts`
+- `src/gateway/server-methods.ts`
+- `src/gateway/server-methods/shared-types.ts`
+- `src/gateway/server-methods/agent.ts`
+- `src/gateway/server-methods/sessions.ts`
+- `packages/gateway-protocol/src/schema/agent.ts`
+- `../lossless-claw/src/plugin/index.ts`
+- `../lossless-claw/src/focus-briefs.ts`
+- `../lossless-claw/doctor-contract-api.js`
+
+Primary seam tests:
+
+- `src/plugins/runtime/index.test.ts`
+- `src/plugins/registry.runtime-config.test.ts`
+- `src/gateway/server-plugins.test.ts`
+- `src/gateway/server-methods/agent.test.ts`
+- `src/gateway/server.sessions.create.test.ts`
+- `packages/gateway-protocol/src/schema/agent.test.ts`
+- `../lossless-claw/test/plugin-config-registration.test.ts`
+- `../lossless-claw/test/focus-briefs.test.ts`
+- `../lossless-claw/test/doctor-contract-api.test.ts`
+
+Rebase notes:
+
+- Do not restore direct `runEmbeddedAgent` use in Lossless. The public subagent runtime is the policy boundary; bypassing it silently bypasses model-override and allowlist enforcement.
+- Forward capabilities through both the raw runtime and the plugin-scoped registry facade. Testing only `createPluginRuntime()` is insufficient because loaded plugins receive the facade.
+- Admission timeout is cancellation, not merely a caller-side race. A timed-out request must not start later without returning a run id; zero remains the explicit no-timeout sentinel.
+- Retained transcript reply selection uses host-reported total message count, not the length of a capped tail. Accept visible assistant string content plus `text` and Responses Lite `output_text` blocks.
+- A canonical `summaryModel` overrides `summaryProvider`; otherwise host policy sees a malformed composite identity such as `openrouter/openai/gpt-5.6-luna`.
+- Temporary delegated-session cleanup is best-effort and detached after the result deadline. Retained focus sessions are not deleted.
+- The host compatibility gate is capability-based so compatible fork builds can retain an older package version. Do not replace it with a version-only check; update the declared minimum after the first tagged release containing the complete contract.
 
 ### Private plugin sidecar baseline filtering
 
@@ -604,7 +683,7 @@ Carry behavior: ACP backends can declare runtime option keys that they own, and 
 
 Primary seam files:
 
-- `src/acp/runtime/types.ts`
+- `packages/acp-core/src/runtime/types.ts`
 - `src/acp/control-plane/manager.runtime-controls.ts`
 - `src/acp/control-plane/manager.test.ts`
 
@@ -785,7 +864,7 @@ Carry behavior: OpenClaw can keep the top-level ACP agent generic, such as `code
 Primary seam files:
 
 - `scripts/verify-codex-devbox-acp.js`
-- `extensions/acpx-remote`
+- `../acpx-remote`
 - `src/acp/control-plane/manager.core.ts`
 - `src/acp/control-plane/runtime-options.ts`
 - `src/acp/persistent-bindings.lifecycle.ts`
@@ -794,8 +873,6 @@ Primary seam files:
 - `src/config/zod-schema.agents.ts`
 - `src/config/zod-schema.agent-runtime.ts`
 - `docs/tools/acp-agents.md`
-- `CONTINUITY.md`
-- `NOTES.md`
 
 Primary seam tests:
 
@@ -893,7 +970,7 @@ Primary seam tests:
 - `pnpm docs:list`
 - `git diff --check`
 
-Replay order:
+Rebase notes:
 
 1. Restore the `voice` tool profile, `talk.realtime.tools`, schema metadata, and Gateway protocol Talk config shape, including `consultRouting`.
 2. Restore `runtimeToolPolicy` support in `createOpenClawCodingTools` so Talk can reuse profile, allow, alsoAllow, deny, plugin, MCP, fs, and exec policy.
@@ -957,7 +1034,7 @@ Primary seam files:
 - `src/gateway/server-methods/talk-client.ts`
 - `src/gateway/server-methods/talk-session.ts`
 - `src/gateway/server-methods-list.ts`
-- `src/gateway/protocol/schema/channels.ts`
+- `packages/gateway-protocol/src/schema/channels.ts`
 - `src/gateway/server-broadcast.ts`
 - `src/gateway/server/ws-connection.ts`
 - `src/gateway/talk-realtime-relay.ts`
@@ -981,15 +1058,13 @@ Primary seam tests:
 - `apps/android/app/src/test/java/ai/openclaw/app/chat/ChatControllerMessageIdentityTest.kt`
 - `apps/android/app/src/test/java/ai/openclaw/app/gateway/GatewaySessionInvokeTest.kt`
 - `apps/android/app/src/test/java/ai/openclaw/app/node/ConnectionManagerTest.kt`
-- `apps/android/app/src/test/java/ai/openclaw/app/voice/RealtimeTalkRelayEventParserTest.kt`
-- `apps/android/app/src/test/java/ai/openclaw/app/voice/RealtimeTalkManagerAudioInjectionTest.kt`
 - `apps/android/app/src/test/java/ai/openclaw/app/voice/TalkModeConfigParsingTest.kt`
 - `src/gateway/gateway-misc.test.ts`
-- `src/gateway/protocol/index.test.ts`
+- `packages/gateway-protocol/src/index.test.ts`
 - `src/gateway/server-methods/talk.test.ts`
 - `node scripts/run-vitest.mjs extensions/openai/realtime-voice-provider.test.ts src/talk/provider-resolver.test.ts src/gateway/server-methods/talk.test.ts`
 - `extensions/discord/src/voice/manager.e2e.test.ts`
-- `extensions/discord/src/voice/realtime.test.ts`
+- `extensions/discord/src/voice/realtime.wake-name-followup.test.ts`
 
 Rebase notes:
 
@@ -1070,14 +1145,14 @@ Primary seam files:
 - `apps/android/wear/src/main/java/ai/openclaw/wear/audio/AudioPlayer.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/audio/AudioTrackFactory.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/audio/WearAudioRecord.kt`
-- `apps/android/wear/src/main/java/ai/openclaw/wear/audio/PcmBoundarySmoother.kt`
+- `apps/android/audio/src/main/java/ai/openclaw/audio/PcmAudio.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/audio/AcousticAudioDebugCapture.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/audio/PlaybackAudioDebugCapture.kt`
-- `apps/android/wear/src/main/java/ai/openclaw/wear/audio/WireAudioDebugCapture.kt`
+- `apps/android/wear/src/main/java/ai/openclaw/wear/client/WireAudioDebugCapture.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/client/PhoneRelayClient.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/client/AudioStreamAssembler.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/client/BufferedAudioResponseReceiver.kt`
-- `apps/android/wear/src/main/java/ai/openclaw/wear/client/StreamingAudioResponseReceiver.kt`
+- `apps/android/wear/src/main/java/ai/openclaw/wear/client/BufferedAudioResponseReceiver.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/speech/SpeechDictation.kt`
 - `apps/android/wear/src/main/java/ai/openclaw/wear/ui/WatchFace.kt`
 - `apps/android/wear/src/main/res/xml/data_extraction_rules.xml`
@@ -1091,7 +1166,8 @@ Primary seam files:
 - `apps/android/wear/src/test/java/ai/openclaw/wear/audio/AudioCaptureTest.kt`
 - `apps/android/wear/src/test/java/ai/openclaw/wear/audio/AudioEndpointDetectorTest.kt`
 - `apps/android/wear/src/test/java/ai/openclaw/wear/audio/AudioPlayerTest.kt`
-- `apps/android/wear/src/test/java/ai/openclaw/wear/audio/PcmBoundarySmootherTest.kt`
+- `apps/android/wear/src/test/java/ai/openclaw/wear/audio/PcmAudioTest.kt`
+- `apps/android/wear/src/test/java/ai/openclaw/wear/client/BufferedAudioResponseReceiverTest.kt`
 - `apps/android/wear/src/test/java/ai/openclaw/wear/client/AudioStreamAssemblerTest.kt`
 - `apps/android/app/src/test/java/ai/openclaw/app/SecurePrefsTest.kt`
 - `apps/android/app/src/test/java/ai/openclaw/app/SessionKeyTest.kt`
@@ -1201,7 +1277,6 @@ Primary seam files:
 - `src/auto-reply/reply/tts-trusted-media.ts`
 - `src/auto-reply/reply/tts-trusted-media.test.ts`
 - `extensions/telegram/src/action-runtime.ts`
-- `extensions/telegram/src/limits.ts`
 - `extensions/telegram/src/outbound-adapter.ts`
 - `extensions/telegram/src/outbound-adapter.test.ts`
 - `extensions/telegram/src/send.ts`
@@ -1479,7 +1554,19 @@ Rebase notes:
 
 ### Voice Emotion plugin (out-of-tree seam consumer)
 
-The `tts_prepare` hook and Google `personaPrompt` override above serve one feature: the `voice-emotion` plugin — a separate git-installed repo at `~/projects/voice-emotion`, wired through `plugins.entries.voice-emotion` — which preprocesses every agent voice note through an LLM to add provider-appropriate emotional delivery before synthesis. It is documented here because the seams are inert without their consumer, and the plugin's integrity contract (fail-open; never corrupt spoken text) is what justifies their transform-only and director's-notes-only shapes.
+Carry behavior: the `tts_prepare` hook and Google `personaPrompt` override above serve one feature: the `voice-emotion` plugin — a separate git-installed repo at `~/projects/voice-emotion`, wired through `plugins.entries.voice-emotion` — which preprocesses every agent voice note through an LLM to add provider-appropriate emotional delivery before synthesis. It is documented here because the seams are inert without their consumer, and the plugin's integrity contract (fail-open; never corrupt spoken text) is what justifies their transform-only and director's-notes-only shapes.
+
+Primary seam files:
+
+- `../voice-emotion/index.ts`
+- `../voice-emotion/src/engine.ts`
+- `../voice-emotion/src/runtime-guard.ts`
+
+Primary seam tests:
+
+- `../voice-emotion/test/engine.test.ts`
+- `../voice-emotion/test/pipeline.test.ts`
+- `../voice-emotion/test/runtime-guard.test.ts`
 
 Binding. On load (when `enabled`) the plugin registers `api.on("tts_prepare", handler)` — the TYPED hook table, NOT the legacy `api.registerHook`, which the typed dispatcher silently ignores (a hook registered the legacy way never fires, with no error). It resolves `runtime.llm.complete` lazily per invocation, not at register time, so it never dereferences a missing runtime in a CLI/no-gateway context. The handler wraps the whole engine in try/catch and returns `undefined` on any throw, so a plugin bug degrades to plain TTS instead of breaking synthesis.
 
@@ -1490,6 +1577,11 @@ Integrity guards — the part that took four review passes to get right, because
 Orchestration + fail-open. Each annotation runs the configured `model` then `fallbackModels` in order, each under a per-attempt AbortController timeout RACED against an independent timer (so a signal-ignoring adapter still cannot exceed the budget), bounded by a total budget; retryable failures (timeout/429/5xx/408/425) advance to the next model, auth/config errors are terminal, and a non-string completion is treated as retryable rather than allowed to throw. Results are cached in a bounded LRU keyed by strategy+model+persona+text. Any exhaustion, timeout, JSON-parse failure, or validation miss returns the original text unchanged — synthesis is never blocked or corrupted.
 
 Live wiring (`openclaw.json`). Annotation uses `openai/gpt-5.6-luna` with no explicit reasoning request and no fallback model. Sky's persona routes to ElevenLabs `eleven_v3` (inline-tags), as does Luke. The plugin owns its own tests (`npm test` in `~/projects/voice-emotion`); the fork-side seam tests are listed under the `tts_prepare` section above.
+
+Rebase notes:
+
+- Keep this as an out-of-tree consumer contract. Core owns the generic `tts_prepare` and provider-override seams; model prompts, integrity guards, retry policy, and cache behavior remain in `voice-emotion`.
+- Re-prove fail-open behavior in both repositories whenever the hook event, provider override, or synthesis-limit contract changes.
 
 ### Message tool progress sends (message_tool_only turn-release opt-out)
 
@@ -1531,7 +1623,7 @@ Primary seam files:
 - `extensions/telegram/src/bot-message-dispatch.ts`
 - `extensions/telegram/src/polling-session.ts`
 
-Replay notes:
+Rebase notes:
 
 - Keep the generic `GetReplyOptions.onProgress` observer best-effort and non-fatal. It must follow the existing centralized reply-progress marker so tool, reasoning, item, plan, approval, patch, command-output, and block progress all count without Telegram duplicating event classification.
 - `dispatchTelegramMessage` must destructure and forward its optional `onProgress` callback directly into `replyOptions`; keep an identity assertion in `bot-message-dispatch.test.ts` so an undeclared or dropped callback cannot break every inbound Telegram dispatch at runtime.
@@ -1571,7 +1663,7 @@ Carry behavior: `apps/android/.../ui/chat/ChatScreen.kt` defines `CHAT_SCREEN_BU
 Primary seam files:
 
 - `apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt`
-- `apps/android/app/src/test/java/ai/openclaw/app/ChatScreenLayoutTest.kt`
+- `apps/android/app/src/test/java/ai/openclaw/app/ui/chat/ChatScreenLayoutTest.kt`
 
 Rebase notes:
 
@@ -1675,6 +1767,9 @@ Rebase notes:
 
 ## Narrow validation set
 
+- `pnpm test extensions/openai/responses-lite.test.ts src/llm/providers/stream-wrappers/openai.test.ts src/agents/simple-completion-runtime.test.ts src/agents/openai-transport-stream.test.ts`
+- `pnpm test src/plugins/runtime/index.test.ts src/plugins/registry.runtime-config.test.ts src/gateway/server-plugins.test.ts src/gateway/server-methods/agent.test.ts src/gateway/server.sessions.create.test.ts packages/gateway-protocol/src/schema/agent.test.ts extensions/active-memory/index.test.ts`
+- `cd ../lossless-claw && npm test -- --run test/plugin-config-registration.test.ts test/focus-briefs.test.ts test/doctor-contract-api.test.ts && npm run typecheck && npm run build`
 - `pnpm test src/plugins/bundled-plugin-metadata.test.ts test/scripts/tracked-bundled-plugin-dirs.test.ts`
 - `pnpm runtime-sidecars:check`
 - `pnpm test src/agents/acp-spawn.test.ts`
@@ -1684,8 +1779,8 @@ Rebase notes:
 - `openclaw gateway restart && openclaw gateway status --deep`
 - `./scripts/verify-codex-devbox-acp.js --help`
 - `pnpm test ui/src/ui/chat/grouped-render.test.ts ui/src/ui/chat/talk-tts.test.ts ui/src/ui/chat/strip-markdown-for-speech.test.ts`
-- `pnpm test src/gateway/server-methods/talk.test.ts src/gateway/talk-realtime-relay.test.ts src/gateway/protocol/index.test.ts`
-- `pnpm test src/gateway/gateway-misc.test.ts src/gateway/server-methods/talk.test.ts src/gateway/talk-realtime-relay.test.ts src/gateway/protocol/index.test.ts extensions/discord/src/voice/realtime.test.ts extensions/discord/src/voice/manager.e2e.test.ts`
+- `pnpm test src/gateway/server-methods/talk.test.ts src/gateway/talk-realtime-relay.test.ts packages/gateway-protocol/src/index.test.ts`
+- `pnpm test src/gateway/gateway-misc.test.ts src/gateway/server-methods/talk.test.ts src/gateway/talk-realtime-relay.test.ts packages/gateway-protocol/src/index.test.ts extensions/discord/src/voice/realtime.wake-name-followup.test.ts extensions/discord/src/voice/manager.e2e.test.ts`
 - `node scripts/run-vitest.mjs extensions/discord/src/monitor/auto-presence.test.ts`
 - `node scripts/run-vitest.mjs extensions/codex/src/app-server/config.test.ts extensions/codex/src/app-server/app-server-policy.test.ts extensions/codex/src/conversation-binding.test.ts extensions/codex/src/app-server/side-question.test.ts`
 - `pnpm android:test`
@@ -1781,7 +1876,7 @@ Rebase notes:
 - Context-engine thread-bootstrap projection must be decided against the effective native thread state. If a base prompt fingerprint change will rotate the native Codex thread, project bootstrap context as if there is no existing thread; otherwise a fresh thread can be persisted with bootstrap metadata while missing the actual bootstrap prompt.
 - Cache-hygiene smoke: render `~/.openclaw/agent-base.md` and `~/.openclaw/app-server-base.md` after startup and assert no hits for `OPENCLAW_CACHE_BOUNDARY`, Messaging, Workspace, Runtime, Voice/TTS, Assistant Output Directives, Silent Replies, Current Date & Time, skills, memory, heartbeat, `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, or `MEMORY.md`.
 - Codex hard-gate: re-verify `thread/start.baseInstructions` and resume override behavior against sibling `../codex` on each upstream bump.
-- The managed/minimum Codex app-server is `0.144.1`. Its current-platform npm package must contain executable sibling `codex` and `codex-code-mode-host` artifacts; no separate sidecar package is installed. Preserve `ultra` as a distinct canonical thinking level for GPT-5.6 Sol/Terra and clamp it through authoritative model metadata for models such as Luna that stop at `max`.
+- The managed/minimum Codex app-server is `0.144.5`. Its current-platform npm package must contain executable sibling `codex` and `codex-code-mode-host` artifacts; no separate sidecar package is installed. Responses Lite transport identity must derive this managed package version instead of carrying a second hardcoded version. Preserve `ultra` as a distinct canonical thinking level for GPT-5.6 Sol/Terra and clamp it through authoritative model metadata for models such as Luna that stop at `max`.
 
 Closeout proof from the implementation pass:
 
