@@ -1,6 +1,7 @@
 // Vitest shared config wires the shared test shard.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import codexPackageJson from "../../extensions/codex/package.json" with { type: "json" };
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
@@ -152,6 +153,11 @@ if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(proc
 export const sharedVitestConfig = {
   root: repoRoot,
   envFile: false,
+  define: {
+    __OPENCLAW_MANAGED_CODEX_VERSION__: JSON.stringify(
+      codexPackageJson.dependencies["@openai/codex"],
+    ),
+  },
   resolve: {
     alias: [
       {

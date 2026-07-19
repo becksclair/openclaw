@@ -1,6 +1,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import codexPackageJson from "../codex/package.json" with { type: "json" };
 import { buildOpenAIResponsesProviderHooks } from "./shared.js";
 
 const GPT_56_MODELS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] as const;
@@ -73,7 +74,7 @@ describe("OpenAI Responses Lite", () => {
 
     expect(state?.headers).toMatchObject({
       originator: "Codex Desktop",
-      "User-Agent": "Codex Desktop/0.144.1 (OpenClaw Responses Lite)",
+      "User-Agent": `Codex Desktop/${codexPackageJson.dependencies["@openai/codex"]} (OpenClaw Responses Lite)`,
       "x-openai-internal-codex-responses-lite": "true",
     });
   });
@@ -117,16 +118,22 @@ describe("OpenAI Responses Lite", () => {
     expect(capture.getPayload()?.service_tier).toBe("priority");
   });
 
-  it("keeps the mandatory Lite reasoning context without restoring an effort", () => {
-    const capture = runHook({
-      modelId: "gpt-5.6-luna",
-      simple: false,
-      thinkingLevel: "off",
-    });
+  it.each(["gpt-5.6-terra", "gpt-5.6-luna"])(
+    "preserves explicit none effort with mandatory Lite context for %s",
+    (modelId) => {
+      const capture = runHook({
+        modelId,
+        simple: false,
+        thinkingLevel: "off",
+      });
 
-    expect(capture.getPayload()?.reasoning).toEqual({ context: "all_turns" });
-    expect(capture.getPayload()?.include).toContain("reasoning.encrypted_content");
-  });
+      expect(capture.getPayload()?.reasoning).toEqual({
+        effort: "none",
+        context: "all_turns",
+      });
+      expect(capture.getPayload()?.include).toContain("reasoning.encrypted_content");
+    },
+  );
 
   it.each(GPT_56_MODELS)("rewrites simple-completion payloads for %s", (modelId) => {
     const capture = runHook({ modelId, simple: true });

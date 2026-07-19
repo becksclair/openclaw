@@ -533,12 +533,64 @@ describe("createOpenAIThinkingLevelWrapper", () => {
     expect(payloads[0]?.reasoning).toEqual({ effort: "high" });
   });
 
-  it("removes reasoning when thinkingLevel is off on reasoning-capable model", () => {
+  it("sends explicit none effort when thinkingLevel is off on a model that supports none", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoning: { effort: "medium", summary: "auto" },
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "off");
+    void wrapped(
+      {
+        ...codexModel,
+        id: "gpt-5.6-luna",
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      } as unknown as Model<"openai-chatgpt-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.reasoning).toEqual({ effort: "none", summary: "auto" });
+  });
+
+  it("creates explicit none effort for Terra when upstream omits reasoning", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "off");
+    void wrapped(
+      {
+        ...codexModel,
+        id: "gpt-5.6-terra",
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      } as unknown as Model<"openai-chatgpt-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.reasoning).toEqual({ effort: "none" });
+  });
+
+  it("removes reasoning for a model that does not support none", () => {
     const { baseStreamFn, payloads } = createPayloadCapture({
       initialReasoning: { effort: "medium" },
     });
     const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "off");
     void wrapped(codexModel, { messages: [] }, {});
+
+    expect(payloads[0]).not.toHaveProperty("reasoning");
+  });
+
+  it("honors explicit non-Lite GPT-5.6 capability metadata that excludes none", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture({
+      initialReasoning: { effort: "medium" },
+    });
+    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "off");
+    void wrapped(
+      {
+        ...openaiModel,
+        id: "gpt-5.6-luna",
+        compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+      } as Model<"openai-responses">,
+      { messages: [] },
+      {},
+    );
 
     expect(payloads[0]).not.toHaveProperty("reasoning");
   });

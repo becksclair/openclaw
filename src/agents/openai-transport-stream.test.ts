@@ -5,6 +5,7 @@ import OpenAI from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import codexPackageJson from "../../extensions/codex/package.json" with { type: "json" };
 import {
   classifyAssistantFailoverReason,
   formatUserFacingAssistantErrorText,
@@ -966,7 +967,7 @@ describe("openai transport stream", () => {
       { "User-Agent": "caller-spoof" },
       {
         originator: "Codex Desktop",
-        "User-Agent": "Codex Desktop/0.144.1 (OpenClaw Responses Lite)",
+        "User-Agent": `Codex Desktop/${codexPackageJson.dependencies["@openai/codex"]} (OpenClaw Responses Lite)`,
         "x-openai-internal-codex-responses-lite": "true",
       },
     );
@@ -974,7 +975,7 @@ describe("openai transport stream", () => {
     expectRecordFields(headers, {
       originator: "Codex Desktop",
       version: "2026.3.22",
-      "User-Agent": "Codex Desktop/0.144.1 (OpenClaw Responses Lite)",
+      "User-Agent": `Codex Desktop/${codexPackageJson.dependencies["@openai/codex"]} (OpenClaw Responses Lite)`,
       "x-openai-internal-codex-responses-lite": "true",
     });
   });

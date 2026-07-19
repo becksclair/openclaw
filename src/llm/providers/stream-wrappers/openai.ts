@@ -238,6 +238,17 @@ function shouldApplyOpenAIReasoningCompatibility(model: {
   return resolveOpenAIRequestCapabilities(model).supportsOpenAIReasoningCompatPayload;
 }
 
+function isCodexResponsesLiteModel(model: {
+  api?: unknown;
+  provider?: unknown;
+  id?: unknown;
+}): boolean {
+  if (model.api !== "openai-chatgpt-responses" || model.provider !== "openai") {
+    return false;
+  }
+  return model.id === "gpt-5.6-sol" || model.id === "gpt-5.6-terra" || model.id === "gpt-5.6-luna";
+}
+
 function shouldFlattenOpenAICompletionMessages(model: {
   api?: unknown;
   compat?: unknown;
@@ -564,8 +575,23 @@ export function createOpenAIThinkingLevelWrapper(
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
       const existingReasoning = payloadObj.reasoning;
       if (thinkingLevel === "off") {
-        if (existingReasoning !== undefined) {
+        // Responses Lite GPT-5.6 rows accept `none` even when the Codex UI catalog's
+        // supported-effort list is stale and omits it.
+        const disabledEffort = isCodexResponsesLiteModel(model)
+          ? "none"
+          : resolveOpenAIReasoningEffortForModel({ model, effort: "off" });
+        if (disabledEffort !== "none") {
           delete payloadObj.reasoning;
+          return;
+        }
+        if (
+          existingReasoning &&
+          typeof existingReasoning === "object" &&
+          !Array.isArray(existingReasoning)
+        ) {
+          (existingReasoning as Record<string, unknown>).effort = "none";
+        } else {
+          payloadObj.reasoning = { effort: "none" };
         }
         return;
       }

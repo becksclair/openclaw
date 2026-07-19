@@ -1,4 +1,5 @@
 // OpenAI provider-owned Responses Lite transport compatibility.
+import { createRequire } from "node:module";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderTransportTurnState } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -7,12 +8,33 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isOpenAICodexBaseUrl } from "./base-url.js";
 
+// oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled builds replace this compile-time define identifier.
+declare const __OPENCLAW_MANAGED_CODEX_VERSION__: string | undefined;
+
 const RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite";
 const RESPONSES_LITE_MODEL_IDS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
 // Responses Lite model eligibility is tied to the Codex Desktop transport identity.
 // Keep the version aligned with the managed Codex train; scope both headers to Lite rows.
 const RESPONSES_LITE_ORIGINATOR = "Codex Desktop";
-const RESPONSES_LITE_USER_AGENT = "Codex Desktop/0.144.1 (OpenClaw Responses Lite)";
+
+function resolveManagedCodexVersion(): string {
+  if (typeof __OPENCLAW_MANAGED_CODEX_VERSION__ === "string") {
+    return __OPENCLAW_MANAGED_CODEX_VERSION__;
+  }
+  try {
+    const require = createRequire(import.meta.url);
+    const manifest = require("@openai/codex/package.json") as { version?: unknown };
+    if (typeof manifest.version === "string" && manifest.version.trim()) {
+      return manifest.version.trim();
+    }
+  } catch {
+    // Source mode resolves the installed package; production builds inject the managed pin.
+  }
+  throw new Error("Unable to resolve the managed Codex runtime version for Responses Lite.");
+}
+
+const RESPONSES_LITE_CODEX_VERSION = resolveManagedCodexVersion();
+const RESPONSES_LITE_USER_AGENT = `Codex Desktop/${RESPONSES_LITE_CODEX_VERSION} (OpenClaw Responses Lite)`;
 
 export type OpenAIResponsesLitePatchResult = "not_applicable" | "invalid_input" | "patched";
 
@@ -98,7 +120,7 @@ export function patchOpenAIResponsesLitePayload(params: {
   const include = Array.isArray(params.payload.include) ? params.payload.include : [];
   params.payload.include = Array.from(new Set([...include, "reasoning.encrypted_content"]));
   // Responses Lite requires the reasoning envelope even when the caller selected
-  // thinking=off. Preserve the missing effort while adding its mandatory context.
+  // thinking=off. Preserve any explicit effort while adding its mandatory context.
   params.payload.reasoning = isRecord(params.payload.reasoning)
     ? { ...params.payload.reasoning, context: "all_turns" }
     : { context: "all_turns" };

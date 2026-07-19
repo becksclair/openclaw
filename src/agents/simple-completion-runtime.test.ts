@@ -804,6 +804,48 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
     );
   });
 
+  it("preserves explicit off for a Codex Responses Lite simple completion", async () => {
+    const model = {
+      provider: "openai",
+      id: "gpt-5.6-luna",
+      name: "gpt-5.6-luna",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 372_000,
+      maxTokens: 128_000,
+    } satisfies Model<"openai-chatgpt-responses">;
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "codex-auth",
+        source: "auth-profile",
+        mode: "api-key",
+      },
+      context: {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      options: { reasoning: "off" },
+    });
+
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.6-luna",
+      }),
+      {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      {
+        reasoning: "off",
+        apiKey: "codex-auth",
+      },
+    );
+  });
+
   it("preserves explicit off for a prepared Claude Sonnet 5 alias", async () => {
     const model = {
       provider: "anthropic",

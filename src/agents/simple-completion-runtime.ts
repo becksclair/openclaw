@@ -94,6 +94,18 @@ export type PreparedSimpleCompletionModelForAgent =
       auth?: ResolvedProviderAuth;
     };
 
+const RESPONSES_LITE_MODEL_IDS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+
+function isCodexResponsesLiteSimpleModel(model: Model): boolean {
+  if (model.provider !== "openai" || !RESPONSES_LITE_MODEL_IDS.has(model.id)) {
+    return false;
+  }
+  return (
+    typeof model.baseUrl === "string" &&
+    /^https?:\/\/chatgpt\.com\/backend-api(?:\/codex)?(?:\/v1)?\/?$/iu.test(model.baseUrl)
+  );
+}
+
 export function resolveSimpleCompletionSelectionForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -408,7 +420,9 @@ function normalizeSimpleCompletionReasoning(
     case undefined:
       return undefined;
     case "off":
-      return resolveClaudeSonnet5ModelIdentity(model) ? "off" : undefined;
+      return resolveClaudeSonnet5ModelIdentity(model) || isCodexResponsesLiteSimpleModel(model)
+        ? "off"
+        : undefined;
     case "adaptive":
       return "medium";
     case "max":

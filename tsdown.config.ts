@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { UserConfig } from "tsdown";
+import codexPackageJson from "./extensions/codex/package.json" with { type: "json" };
 import {
   collectBundledPluginBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
@@ -38,9 +39,10 @@ type ExternalOptionFunction = (
 const env = {
   NODE_ENV: "production",
 };
+const managedCodexVersion = codexPackageJson.dependencies["@openai/codex"];
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
-const TSDOWN_DECLARATIONS = RUN_NODE_SKIP_DTS_BUILD ? false : true;
+const TSDOWN_DECLARATIONS = !RUN_NODE_SKIP_DTS_BUILD;
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
   "@protobufjs/inquire/index.js",
@@ -137,6 +139,10 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
 function nodeBuildConfig(config: UserConfig): UserConfig {
   return {
     ...config,
+    define: {
+      ...config.define,
+      __OPENCLAW_MANAGED_CODEX_VERSION__: JSON.stringify(managedCodexVersion),
+    },
     env,
     outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
     fixedExtension: false,
