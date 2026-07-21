@@ -41,11 +41,8 @@ jobs:
           set -euo pipefail
           SOURCE_VERSION="$(node -p "require('./package.json').version")"
           RUN_ID="${GITHUB_RUN_ID:?GITHUB_RUN_ID is required}"
-          if [[ "$SOURCE_VERSION" == *-* ]]; then
-            PACKAGE_VERSION="${SOURCE_VERSION}.private.${RUN_ID}"
-          else
-            PACKAGE_VERSION="${SOURCE_VERSION}-private.${RUN_ID}"
-          fi
+          BASE_VERSION="${SOURCE_VERSION%%-*}"
+          PACKAGE_VERSION="${BASE_VERSION}-${RUN_ID}"
           echo "source_version=$SOURCE_VERSION" >> "$GITHUB_OUTPUT"
           echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
 

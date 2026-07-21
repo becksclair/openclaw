@@ -44,7 +44,7 @@ curl -fsS --range 0-0 -o /dev/null "$package_url"
 pnpm add -g --force "$package_url"
 
 cli_version="$(openclaw --version)"
-if [[ "$cli_version" != "OpenClaw ${source_version} (${short_sha})"* ]]; then
+if [[ "$cli_version" != "OpenClaw ${package_version} (${short_sha})"* ]]; then
   echo "Installed CLI identity mismatch: ${cli_version}" >&2
   exit 1
 fi
@@ -85,7 +85,7 @@ fi
 
 status_json="$(openclaw gateway status --json)"
 jq -e \
-  --arg version "$source_version" \
+  --arg version "$package_version" \
   '.service.runtime.state == "active" and .rpc.ok == true and .rpc.server.version == $version' \
   <<<"$status_json" >/dev/null
 
