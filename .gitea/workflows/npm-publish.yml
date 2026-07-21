@@ -17,6 +17,7 @@ jobs:
       - pacman-build
     env:
       NPM_REGISTRY: https://git.heliasar.com/api/packages/bex/npm/
+      SAGA_DEPLOY_HOST: 172.17.0.1
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -34,19 +35,30 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Read release version
+      - name: Assign immutable private package version
         id: version
         run: |
           set -euo pipefail
-          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
-          echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+          SOURCE_VERSION="$(node -p "require('./package.json').version")"
+          RUN_ID="${GITHUB_RUN_ID:?GITHUB_RUN_ID is required}"
+          if [[ "$SOURCE_VERSION" == *-* ]]; then
+            PACKAGE_VERSION="${SOURCE_VERSION}.private.${RUN_ID}"
+          else
+            PACKAGE_VERSION="${SOURCE_VERSION}-private.${RUN_ID}"
+          fi
+          echo "source_version=$SOURCE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Build and pack OpenClaw
         id: pack
         run: |
           set -euo pipefail
           mkdir -p ci-artifacts
-          pnpm pack --pack-destination ci-artifacts
+          pnpm run prepack
+          npm version "${{ steps.version.outputs.package_version }}" \
+            --no-git-tag-version \
+            --ignore-scripts
+          npm pack --ignore-scripts --pack-destination ci-artifacts
           mapfile -t TARBALLS < <(find ci-artifacts -maxdepth 1 -type f -name '*.tgz' -print)
           if [[ "${#TARBALLS[@]}" -ne 1 ]]; then
             echo "Expected exactly one packed tarball, found ${#TARBALLS[@]}." >&2
@@ -54,7 +66,7 @@ jobs:
           fi
           TARBALL="$PWD/${TARBALLS[0]}"
           PACKED_VERSION="$(tar -xOf "$TARBALL" package/package.json | node -e 'let s=""; process.stdin.on("data", c => s += c); process.stdin.on("end", () => process.stdout.write(JSON.parse(s).version));')"
-          test "$PACKED_VERSION" = "${{ steps.version.outputs.version }}"
+          test "$PACKED_VERSION" = "${{ steps.version.outputs.package_version }}"
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
 
       - name: Publish to private npm registry
@@ -71,12 +83,33 @@ jobs:
             --registry "$NPM_REGISTRY" \
             --tag latest
 
+      - name: Deploy and verify Saga-Sky
+        env:
+          SAGA_DEPLOY_SSH_KEY_B64: ${{ secrets.SAGA_DEPLOY_SSH_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          SSH_DIR="$RUNNER_TEMP/saga-deploy-ssh"
+          install -d -m 0700 "$SSH_DIR"
+          printf '%s' "$SAGA_DEPLOY_SSH_KEY_B64" | base64 --decode > "$SSH_DIR/id_ed25519"
+          chmod 0600 "$SSH_DIR/id_ed25519"
+          install -m 0600 .gitea/saga-known-hosts "$SSH_DIR/known_hosts"
+          ssh \
+            -i "$SSH_DIR/id_ed25519" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$SSH_DIR/known_hosts" \
+            "ubuntu@$SAGA_DEPLOY_HOST" \
+            "deploy-openclaw ${{ steps.version.outputs.package_version }} ${{ steps.version.outputs.source_version }} $GITHUB_SHA"
+
       - name: Report published package
         run: |
           {
             echo "### Private OpenClaw package published"
             echo
-            echo "- Package: \`openclaw@${{ steps.version.outputs.version }}\`"
+            echo "- Package: \`openclaw@${{ steps.version.outputs.package_version }}\`"
+            echo "- Runtime release: \`${{ steps.version.outputs.source_version }}\`"
             echo "- Registry tag: \`latest\`"
             echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Saga-Sky: deployed and healthy"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="/opt/openclaw/node-v24.15.0-linux-x64/bin:/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin:/home/ubuntu/.local/share/pnpm"
+
+readonly REGISTRY_BASE="https://git.heliasar.com/api/packages/bex/npm/openclaw/-"
+readonly STATE_DIR="$HOME/.local/state/openclaw-ci-deploy"
+readonly SERVICE="openclaw-gateway.service"
+
+install -d -m 0700 "$STATE_DIR"
+exec 9>"$STATE_DIR/deploy.lock"
+flock -n 9 || {
+  echo "Another OpenClaw deployment is already running." >&2
+  exit 75
+}
+
+exec > >(tee -a "$STATE_DIR/deploy.log") 2>&1
+
+IFS=' ' read -r action package_version source_version commit_sha extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+if [[ "$action" != "deploy-openclaw" || -n "${extra:-}" ]]; then
+  echo "Rejected deployment command." >&2
+  exit 64
+fi
+if [[ ! "$package_version" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}[-.][0-9A-Za-z.-]+$ ]]; then
+  echo "Rejected package version." >&2
+  exit 64
+fi
+if [[ ! "$source_version" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "Rejected source version." >&2
+  exit 64
+fi
+if [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Rejected commit SHA." >&2
+  exit 64
+fi
+
+readonly short_sha="${commit_sha:0:7}"
+readonly package_url="${REGISTRY_BASE}/${package_version}/openclaw-${package_version}.tgz"
+readonly repair_log="$STATE_DIR/repair-${commit_sha}.log"
+readonly install_log="$STATE_DIR/service-install-${commit_sha}.log"
+
+echo "[$(date -Is)] deploying openclaw@${package_version} from ${commit_sha}"
+curl -fsS --range 0-0 -o /dev/null "$package_url"
+pnpm add -g --force "$package_url"
+
+cli_version="$(openclaw --version)"
+if [[ "$cli_version" != "OpenClaw ${source_version} (${short_sha})"* ]]; then
+  echo "Installed CLI identity mismatch: ${cli_version}" >&2
+  exit 1
+fi
+
+systemctl --user stop "$SERVICE"
+openclaw update repair \
+  --channel stable \
+  --yes \
+  --json \
+  --timeout 1800 >"$repair_log" 2>&1
+openclaw gateway install \
+  --force \
+  --runtime node \
+  --port 18789 \
+  --json >"$install_log" 2>&1
+
+if [[ -f "$HOME/.openclaw/gateway.systemd.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$HOME/.openclaw/gateway.systemd.env"
+  set +a
+fi
+
+healthy=false
+for _ in $(seq 1 24); do
+  if health_json="$(openclaw health --json 2>/dev/null)" &&
+    jq -e '.ok == true and (.plugins.errors | length == 0)' <<<"$health_json" >/dev/null; then
+    healthy=true
+    break
+  fi
+  sleep 5
+done
+if [[ "$healthy" != true ]]; then
+  echo "Saga-Sky did not become healthy after deployment." >&2
+  journalctl --user -u "$SERVICE" -n 120 --no-pager >&2
+  exit 1
+fi
+
+status_json="$(openclaw gateway status --json)"
+jq -e \
+  --arg version "$source_version" \
+  '.service.runtime.state == "active" and .rpc.ok == true and .rpc.server.version == $version' \
+  <<<"$status_json" >/dev/null
+
+plugin_json="$(openclaw plugins list --json)"
+jq -e '[.plugins[] | select(.status == "error")] | length == 0' <<<"$plugin_json" >/dev/null
+
+printf '%s\n' "$commit_sha" >"$STATE_DIR/last-deployed-commit"
+printf '%s\n' "$package_version" >"$STATE_DIR/last-deployed-package"
+echo "[$(date -Is)] deployed package=${package_version} runtime=${source_version} commit=${commit_sha} health=ok"
