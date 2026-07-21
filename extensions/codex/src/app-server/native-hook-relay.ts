@@ -318,7 +318,10 @@ export function buildCodexNativeHookRelayConfig(params: {
     });
     config[`hooks.${codexEvent}`] = [
       {
-        ...((event === "pre_tool_use" || event === "post_tool_use") && toolMatcher
+        ...((event === "pre_tool_use" ||
+          event === "post_tool_use" ||
+          event === "permission_request") &&
+        toolMatcher
           ? { matcher: toolMatcher }
           : {}),
         hooks: [
@@ -336,7 +339,10 @@ export function buildCodexNativeHookRelayConfig(params: {
       enabled: true,
       trusted_hash: codexCommandHookTrustedHash({
         event,
-        ...((event === "pre_tool_use" || event === "post_tool_use") && toolMatcher
+        ...((event === "pre_tool_use" ||
+          event === "post_tool_use" ||
+          event === "permission_request") &&
+        toolMatcher
           ? { matcher: toolMatcher }
           : {}),
         command,

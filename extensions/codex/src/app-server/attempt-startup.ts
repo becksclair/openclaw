@@ -21,13 +21,11 @@ import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagno
 import { withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
-import { ensureCodexComputerUse } from "./computer-use.js";
 import {
   resolveCodexPluginsPolicy,
   withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
-  type CodexComputerUseConfig,
 } from "./config.js";
 import {
   disableCodexPluginThreadConfig,
@@ -36,6 +34,10 @@ import {
   resolveCodexSandboxEnvironmentSelection,
   shouldRequireCodexSandboxExecServerEnvironment,
 } from "./dynamic-tool-build.js";
+import {
+  buildManagedNativeMcpDisableConfig,
+  ensureManagedNativePlugins,
+} from "./managed-native-plugins.js";
 import {
   buildCodexAppServerRuntimeFingerprint,
   buildCodexPluginAppCacheKey,
@@ -103,7 +105,6 @@ export async function startCodexAttemptThread(params: {
   bindingStore: CodexAppServerBindingStore;
   appServer: CodexAppServerRuntimeOptions;
   pluginConfig: CodexPluginConfig;
-  computerUseConfig: CodexComputerUseConfig;
   startupAuthProfileId: string | undefined;
   startupAuthAccountCacheKey: string | undefined;
   startupEnvApiKeyCacheKey: string | undefined;
@@ -136,6 +137,7 @@ export async function startCodexAttemptThread(params: {
   signal: AbortSignal;
   onStartupTimeout: () => void | Promise<void>;
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
+  managedNativePluginsReconciler?: typeof ensureManagedNativePlugins;
 }): Promise<StartCodexAttemptThreadResult> {
   let pluginAppServer = params.appServer;
   let releaseSharedClientLease: (() => void) | undefined;
@@ -162,6 +164,9 @@ export async function startCodexAttemptThread(params: {
       operation: async () => {
         const threadConfig = mergeCodexThreadConfigs(
           params.bundleMcpThreadConfig?.configPatch as JsonObject | undefined,
+          params.userMcpServersEnabled
+            ? undefined
+            : (buildManagedNativeMcpDisableConfig() as JsonObject),
         );
         const nativeToolSurfaceRestricted = !params.nativeToolSurfaceEnabled;
         const pluginThreadConfigRequired =
@@ -174,21 +179,16 @@ export async function startCodexAttemptThread(params: {
         const resolvedPluginPolicy = pluginThreadConfigRequired
           ? resolveCodexPluginsPolicy(pluginThreadConfigPluginConfig)
           : undefined;
-        const computerUseMcpElicitationDelegationRequired = params.computerUseConfig.enabled;
-        const mcpElicitationDelegationRequired =
-          resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
         const enabledPluginConfigKeys = resolvedPluginPolicy
           ? resolvedPluginPolicy.pluginPolicies
               .filter((plugin) => plugin.enabled)
               .map((plugin) => plugin.configKey)
               .toSorted()
           : undefined;
-        pluginAppServer = mcpElicitationDelegationRequired
-          ? {
-              ...params.appServer,
-              approvalPolicy: withMcpElicitationsApprovalPolicy(params.appServer.approvalPolicy),
-            }
-          : params.appServer;
+        pluginAppServer = {
+          ...params.appServer,
+          approvalPolicy: withMcpElicitationsApprovalPolicy(params.appServer.approvalPolicy),
+        };
 
         let attemptedClient: CodexAppServerClient | undefined;
         const startupAttempt = async () => {
@@ -236,14 +236,6 @@ export async function startCodexAttemptThread(params: {
               config: params.config,
             });
             const turnRouter = getCodexAppServerTurnRouter(activeStartupClient);
-            if (params.computerUseConfig.enabled === true) {
-              await ensureCodexComputerUse({
-                client: activeStartupClient,
-                pluginConfig: params.pluginConfig,
-                timeoutMs: params.appServer.requestTimeoutMs,
-                signal: startupAbandonController.signal,
-              });
-            }
             const startupRuntimeIdentity = activeStartupClient.getRuntimeIdentity();
             const pluginAppCacheKey = buildCodexPluginAppCacheKey({
               appServer: params.appServer,
@@ -331,6 +323,14 @@ export async function startCodexAttemptThread(params: {
               environment: startupSandboxEnvironment,
               nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
               remoteWorkspaceRoot: params.appServer.remoteWorkspaceRoot,
+            });
+            await (params.managedNativePluginsReconciler ?? ensureManagedNativePlugins)({
+              client: activeStartupClient,
+              agentDir: params.agentDir,
+              timeoutMs: params.appServer.requestTimeoutMs,
+              signal: startupAbandonController.signal,
+              cwd: startupExecutionCwd,
+              bundleMcpThreadConfig: params.bundleMcpThreadConfig.configPatch,
             });
             const startupSandboxPolicy = startupSandboxEnvironment
               ? resolveCodexExternalSandboxPolicyForOpenClawSandbox(params.sandbox)

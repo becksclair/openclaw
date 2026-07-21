@@ -26,6 +26,7 @@ import {
   type CodexAppServerSandboxMode,
   type OpenClawExecPolicyForCodexAppServer,
 } from "./app-server/config.js";
+import { ensureManagedNativePlugins } from "./app-server/managed-native-plugins.js";
 import { assertCodexThreadStartResponse } from "./app-server/protocol-validators.js";
 import type {
   CodexServiceTier,
@@ -450,6 +451,18 @@ async function resolveThreadBindingRuntime(
     authProfileId: params.authProfileId,
     ...agentLookup,
   });
+  try {
+    await ensureManagedNativePlugins({
+      client,
+      agentDir: params.agentDir,
+      timeoutMs: runtime.requestTimeoutMs,
+      signal: AbortSignal.timeout(runtime.requestTimeoutMs),
+      cwd: params.workspaceDir,
+    });
+  } catch (error) {
+    releaseLeasedSharedCodexAppServerClient(client);
+    throw error;
+  }
   return {
     execPolicy,
     runtime: modelScopedRuntime,
@@ -721,6 +734,13 @@ async function runBoundTurn(params: {
   let requestCleanup: () => void = () => undefined;
   try {
     if (networkProxyBindingChanged) {
+      await ensureManagedNativePlugins({
+        client,
+        agentDir: params.data.agentDir,
+        timeoutMs: runtime.requestTimeoutMs,
+        signal: AbortSignal.timeout(runtime.requestTimeoutMs),
+        cwd: workspaceDir,
+      });
       const response = assertCodexThreadStartResponse(
         await client.request(
           "thread/start",

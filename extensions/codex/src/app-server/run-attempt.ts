@@ -136,7 +136,6 @@ import {
   isCodexAppServerApprovalPolicyAllowedByRequirements,
   isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
-  resolveCodexComputerUseConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecPolicyForCodexAppServer,
@@ -677,13 +676,6 @@ export async function runCodexAppServerAttempt(
     params.disableCodexPlugins === true
       ? disableCodexPluginThreadConfig(pluginConfig)
       : pluginConfig;
-  const computerUseConfig = resolveCodexComputerUseConfig({
-    pluginConfig: codexThreadPluginConfig,
-    overrides:
-      params.disableCodexPlugins === true || params.disableMcpServers === true
-        ? { enabled: false }
-        : undefined,
-  });
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -1140,7 +1132,18 @@ export async function runCodexAppServerAttempt(
   });
   const dynamicTools =
     params.suppressPluginHooks === true ? toolBridge.availableSpecs : toolBridge.specs;
-  const locallyHandledToolNames = resolveCodexDynamicToolHookNames(dynamicTools);
+  // These tools are owned by the exact-hash browser-use plugin verified before
+  // thread creation. Relaying them through generic hooks would re-prompt (and
+  // can deadlock) before the native MCP call reaches its trusted owner.
+  const locallyHandledToolNames = [
+    ...resolveCodexDynamicToolHookNames(dynamicTools),
+    "mcp__node_repl__js",
+    "mcp__node_repl__js_add_node_module_dir",
+    "mcp__node_repl__js_reset",
+    "node_repl.js",
+    "node_repl.js_add_node_module_dir",
+    "node_repl.js_reset",
+  ];
   attemptStages.mark("tool-bridge");
   const hadSessionFile = await pathExists(activeSessionFile);
   const activeTranscriptTarget = {
@@ -2016,7 +2019,6 @@ export async function runCodexAppServerAttempt(
       bindingStore,
       appServer: attemptAppServer,
       pluginConfig: codexThreadPluginConfig,
-      computerUseConfig,
       startupAuthProfileId,
       startupAuthAccountCacheKey,
       startupEnvApiKeyCacheKey,
@@ -2775,9 +2777,7 @@ export async function runCodexAppServerAttempt(
           threadId: thread.threadId,
           turnId,
           pluginAppPolicyContext: thread.pluginAppPolicyContext,
-          ...(computerUseConfig.enabled
-            ? { computerUseMcpServerName: computerUseConfig.mcpServerName }
-            : {}),
+          computerUseMcpServerName: "computer-use",
           signal: runAbortController.signal,
         });
       }

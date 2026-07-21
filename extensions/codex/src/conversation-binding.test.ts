@@ -61,6 +61,9 @@ vi.mock("./app-server/shared-client.js", () => ({
   getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
 }));
+vi.mock("./app-server/managed-native-plugins.js", () => ({
+  ensureManagedNativePlugins: vi.fn(async () => undefined),
+}));
 vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/exec-approvals-runtime")>();

@@ -33,7 +33,11 @@ import {
 } from "./attempt-context.js";
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
-import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import {
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+  withMcpElicitationsApprovalPolicy,
+} from "./config.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
@@ -3957,7 +3961,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as Record<string, unknown> | undefined;
-    expect(startParams?.approvalPolicy).toBe("untrusted");
+    expect(startParams?.approvalPolicy).toEqual(withMcpElicitationsApprovalPolicy("untrusted"));
     expect(startParams?.sandbox).toBe("danger-full-access");
     expect(info).toHaveBeenCalledWith(
       "codex app-server approval policy promoted for OpenClaw tool policy",
@@ -3987,7 +3991,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as Record<string, unknown> | undefined;
-    expect(startParams?.approvalPolicy).toBe("never");
+    expect(startParams?.approvalPolicy).toEqual(withMcpElicitationsApprovalPolicy("never"));
     expect(startParams?.sandbox).toBe("danger-full-access");
   });
 
@@ -4008,7 +4012,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as Record<string, unknown> | undefined;
-    expect(startParams?.approvalPolicy).toBe("never");
+    expect(startParams?.approvalPolicy).toEqual(withMcpElicitationsApprovalPolicy("never"));
     expect(startParams?.sandbox).toBe("danger-full-access");
   });
 
@@ -4029,7 +4033,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as Record<string, unknown> | undefined;
-    expect(startParams?.approvalPolicy).toBe("untrusted");
+    expect(startParams?.approvalPolicy).toEqual(withMcpElicitationsApprovalPolicy("untrusted"));
   });
 
   it("preserves a healthy binding when invalid image cleanup hits a transient thread", async () => {
@@ -4711,7 +4715,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(bridgeCall.threadId).toBe("thread-1");
     expect(bridgeCall.turnId).toBe("turn-1");
     expect(bridgeCall.requestParams?.serverName).toBe("desktop-control");
-    expect(bridgeCall.computerUseMcpServerName).toBe("desktop-control");
+    expect(bridgeCall.computerUseMcpServerName).toBe("computer-use");
     const requestCalls = request.mock.calls as unknown as Array<[string, unknown, unknown?]>;
     const threadStart = requestCalls.find(([method]) => method === "thread/start");
     const threadStartParams = threadStart?.[1] as
@@ -5511,7 +5515,7 @@ describe("runCodexAppServerAttempt", () => {
     expectResumeRequest(requests, {
       threadId: "thread-existing",
       model: "gpt-5.4-codex",
-      approvalPolicy: "never",
+      approvalPolicy: withMcpElicitationsApprovalPolicy("never"),
       approvalsReviewer: "user",
       sandbox: "danger-full-access",
     });
@@ -6056,7 +6060,7 @@ describe("runCodexAppServerAttempt", () => {
     expectResumeRequest(requests, {
       threadId: "thread-existing",
       model: "gpt-5.4-codex",
-      approvalPolicy: "on-request",
+      approvalPolicy: withMcpElicitationsApprovalPolicy("on-request"),
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
       serviceTier: "priority",
@@ -6071,7 +6075,9 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnRequest = requests.find((request) => request.method === "turn/start");
     const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
-    expect(turnRequestParams?.approvalPolicy).toBe("on-request");
+    expect(turnRequestParams?.approvalPolicy).toEqual(
+      withMcpElicitationsApprovalPolicy("on-request"),
+    );
     expect(turnRequestParams?.approvalsReviewer).toBe("guardian_subagent");
     expect(turnRequestParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
     expect(turnRequestParams?.serviceTier).toBe("priority");
@@ -6131,13 +6137,17 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = requests.find((request) => request.method === "thread/start");
     const startRequestParams = startRequest?.params as Record<string, unknown> | undefined;
     expect(startRequestParams?.modelProvider).toBe("lmstudio");
-    expect(startRequestParams?.approvalPolicy).toBe("on-request");
+    expect(startRequestParams?.approvalPolicy).toEqual(
+      withMcpElicitationsApprovalPolicy("on-request"),
+    );
     expect(startRequestParams?.approvalsReviewer).toBe("user");
     expect(startRequestParams?.sandbox).toBe("workspace-write");
 
     const turnRequest = requests.find((request) => request.method === "turn/start");
     const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
-    expect(turnRequestParams?.approvalPolicy).toBe("on-request");
+    expect(turnRequestParams?.approvalPolicy).toEqual(
+      withMcpElicitationsApprovalPolicy("on-request"),
+    );
     expect(turnRequestParams?.approvalsReviewer).toBe("user");
   });
 
@@ -6200,7 +6210,9 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = requests.find((request) => request.method === "thread/start");
     const startRequestParams = startRequest?.params as Record<string, unknown> | undefined;
     expect(startRequestParams?.modelProvider).toBe("openai");
-    expect(startRequestParams?.approvalPolicy).toBe("on-request");
+    expect(startRequestParams?.approvalPolicy).toEqual(
+      withMcpElicitationsApprovalPolicy("on-request"),
+    );
     expect(startRequestParams?.approvalsReviewer).toBe("user");
 
     const turnRequest = requests.find((request) => request.method === "turn/start");
@@ -6255,7 +6267,9 @@ describe("runCodexAppServerAttempt", () => {
     const startConfig = startRequestParams?.config as Record<string, unknown> | undefined;
     expect(startRequestParams?.model).toBe("local-model");
     expect(startRequestParams?.modelProvider).toBe("lmstudio");
-    expect(startRequestParams?.approvalPolicy).toBe("on-request");
+    expect(startRequestParams?.approvalPolicy).toEqual(
+      withMcpElicitationsApprovalPolicy("on-request"),
+    );
     expect(startRequestParams?.approvalsReviewer).toBe("user");
     expect(startConfig?.["features.code_mode"]).toBe(true);
     expect(startConfig?.["features.code_mode_only"]).toBe(true);

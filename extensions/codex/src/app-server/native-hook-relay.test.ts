@@ -311,6 +311,9 @@ describe("Codex native hook relay config", () => {
     const preMatcher = (config["hooks.PreToolUse"] as Array<{ matcher?: string }>)[0]?.matcher;
     const postMatcher = (config["hooks.PostToolUse"] as Array<{ matcher?: string }>)[0]?.matcher;
     expect(preMatcher).toBe(postMatcher);
+    expect((config["hooks.PermissionRequest"] as Array<{ matcher?: string }>)[0]?.matcher).toBe(
+      preMatcher,
+    );
     const matcher = new RegExp(preMatcher ?? "");
     for (const toolName of ["openclawlcm_describe", "sessions_spawn", "a-b"]) {
       expect(matcher.test(toolName)).toBe(false);
@@ -324,9 +327,6 @@ describe("Codex native hook relay config", () => {
     ]) {
       expect(matcher.test(toolName)).toBe(true);
     }
-    expect(
-      (config["hooks.PermissionRequest"] as Array<{ matcher?: unknown }>)[0],
-    ).not.toHaveProperty("matcher");
   });
 
   it("builds deterministic clearing config when the relay is disabled", () => {

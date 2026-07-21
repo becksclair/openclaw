@@ -27,6 +27,20 @@ type CodexUserMcpServersProjectionOptions = {
   agentId?: string;
 };
 
+const MANAGED_CODEX_PLUGIN_MCP_SERVERS = new Set(["computer-use"]);
+const CODEX_PLUGIN_OWNED_GLOBAL_MCP_SERVERS = new Set(["node_repl"]);
+
+function assertNoManagedCodexPluginMcpCollisions(serverNames: Iterable<string>): void {
+  const collisions = [...serverNames]
+    .filter((name) => MANAGED_CODEX_PLUGIN_MCP_SERVERS.has(name))
+    .toSorted();
+  if (collisions.length > 0) {
+    throw new Error(
+      `Codex MCP config collides with managed native plugins: remove ${collisions.join(", ")} from standalone MCP configuration`,
+    );
+  }
+}
+
 function normalizeAgentIds(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -62,7 +76,17 @@ export function injectCodexMcpConfigArgs(
   args: string[] | undefined,
   config: BundleMcpConfig,
 ): string[] {
-  const overrides = serializeTomlInlineValue(buildCodexMcpServersConfig(config));
+  assertNoManagedCodexPluginMcpCollisions(Object.keys(config.mcpServers));
+  // node_repl remains a global OpenClaw MCP, but browser-use owns the sole
+  // Codex instance. Projecting the global entry would create two MCP owners.
+  const codexConfig = {
+    mcpServers: Object.fromEntries(
+      Object.entries(config.mcpServers).filter(
+        ([name]) => !CODEX_PLUGIN_OWNED_GLOBAL_MCP_SERVERS.has(name),
+      ),
+    ),
+  };
+  const overrides = serializeTomlInlineValue(buildCodexMcpServersConfig(codexConfig));
   return [...(args ?? []), "-c", `mcp_servers=${overrides}`];
 }
 
@@ -84,12 +108,18 @@ export function buildCodexUserMcpServersThreadConfigPatch(
 ): { mcp_servers: CodexThreadConfigObject } | undefined {
   const userServers = normalizeConfiguredMcpServers(cfg?.mcp?.servers);
   const entries = Object.entries(userServers);
+  assertNoManagedCodexPluginMcpCollisions(
+    entries.filter(([, server]) => server.enabled !== false).map(([name]) => name),
+  );
   if (entries.length === 0) {
     return undefined;
   }
   const mcp_servers: CodexThreadConfigObject = {};
   for (const [name, server] of entries) {
     if (server.enabled === false) {
+      continue;
+    }
+    if (CODEX_PLUGIN_OWNED_GLOBAL_MCP_SERVERS.has(name)) {
       continue;
     }
     if (!isCodexMcpServerAllowedForAgent(server as BundleMcpServerConfig, options)) {

@@ -35,6 +35,20 @@ import {
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
 
+vi.mock("./managed-native-plugins.js", () => ({
+  buildManagedNativeMcpDisableConfig: vi.fn(() => ({
+    plugins: {
+      "computer-use@openai-bundled": {
+        mcp_servers: { "computer-use": { enabled: false } },
+      },
+      "browser-use@openai-bundled": {
+        mcp_servers: { node_repl: { enabled: false } },
+      },
+    },
+  })),
+  ensureManagedNativePlugins: vi.fn(async () => undefined),
+}));
+
 export let tempDir: string;
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
 const multiplexedTestClients = new WeakSet<CodexAppServerClient>();

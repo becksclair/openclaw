@@ -91,6 +91,10 @@ function startThreadWithHarness(
     harness?: ClientHarness;
     paths?: AttemptPaths;
     skipStartSpy?: boolean;
+    managedNativePluginsReconciler?: Parameters<
+      typeof startCodexAttemptThread
+    >[0]["managedNativePluginsReconciler"];
+    userMcpServersEnabled?: boolean;
   },
 ) {
   const harness = overrides?.harness ?? createClientHarness();
@@ -106,7 +110,6 @@ function startThreadWithHarness(
       overrides?.attemptClientFactory?.(harness) ?? getLeasedSharedCodexAppServerClient,
     appServer: resolveCodexAppServerRuntimeOptions({ pluginConfig: effectivePluginConfig }),
     pluginConfig: effectivePluginConfig,
-    computerUseConfig: effectivePluginConfig.computerUse ?? { enabled: false },
     startupAuthProfileId: undefined,
     startupAuthAccountCacheKey: undefined,
     startupEnvApiKeyCacheKey: undefined,
@@ -122,7 +125,7 @@ function startThreadWithHarness(
     finalConfigPatch: undefined,
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled: true,
-    userMcpServersEnabled: true,
+    userMcpServersEnabled: overrides?.userMcpServersEnabled ?? true,
     nativeProviderWebSearchSupport: "supported",
     sandboxExecServerEnabled: false,
     sandbox: null,
@@ -131,6 +134,8 @@ function startThreadWithHarness(
     signal,
     onStartupTimeout: vi.fn(),
     spawnedBy: undefined,
+    managedNativePluginsReconciler:
+      overrides?.managedNativePluginsReconciler ?? (async () => undefined),
   });
 
   return { harness, run };
@@ -371,25 +376,49 @@ describe("startCodexAttemptThread", () => {
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 
-  it("clears the shared app-server when a startup RPC times out", async () => {
-    const perRpcTimeoutPluginConfig = {
-      ...pluginConfig,
-      appServer: { command: "codex", requestTimeoutMs: 100 },
-      computerUse: { enabled: true, marketplaceDiscoveryTimeoutMs: 1 },
-    } satisfies CodexPluginConfig;
-    const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
-      pluginConfig: perRpcTimeoutPluginConfig,
+  it("does not send thread/start until managed native plugins reconcile", async () => {
+    const abortController = new AbortController();
+    let releaseReconciliation: (() => void) | undefined;
+    const reconciliation = new Promise<void>((resolve) => {
+      releaseReconciliation = resolve;
     });
-    const runError = run.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const { harness, run } = startThreadWithHarness(5_000, abortController.signal, {
+      managedNativePluginsReconciler: async () => await reconciliation,
+    });
     await answerInitialize(harness);
-    await waitForRequest(harness, "plugin/list");
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    expect(
+      readHarnessMessages(harness.writes).some((write) => write.method === "thread/start"),
+    ).toBe(false);
+    releaseReconciliation?.();
+    await waitForThreadStart(harness);
+    abortController.abort();
+    await expect(run).rejects.toThrow("codex app-server startup aborted");
+  });
 
-    const error = await runError;
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe("plugin/list timed out");
-    expect(harness.process.stdin.destroyed).toBe(true);
+  it("disables managed plugin MCPs for MCP-restricted threads", async () => {
+    const abortController = new AbortController();
+    const { harness, run } = startThreadWithHarness(5_000, abortController.signal, {
+      userMcpServersEnabled: false,
+    });
+    await answerInitialize(harness);
+    await waitForThreadStart(harness);
+    const request = harness.writes
+      .map((write) => JSON.parse(write) as { method?: string; params?: Record<string, unknown> })
+      .find((write) => write.method === "thread/start");
+    expect(request?.params?.config).toMatchObject({
+      plugins: {
+        "computer-use@openai-bundled": {
+          mcp_servers: { "computer-use": { enabled: false } },
+        },
+        "browser-use@openai-bundled": {
+          mcp_servers: { node_repl: { enabled: false } },
+        },
+      },
+    });
+    abortController.abort();
+    await expect(run).rejects.toThrow("codex app-server startup aborted");
   });
 });

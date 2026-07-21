@@ -83,6 +83,16 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     for (const toolName of resolveCodexDynamicToolHookNames(startParams?.dynamicTools)) {
       expect(matcher.test(toolName)).toBe(false);
     }
+    for (const toolName of [
+      "mcp__node_repl__js",
+      "mcp__node_repl__js_add_node_module_dir",
+      "mcp__node_repl__js_reset",
+      "node_repl.js",
+      "node_repl.js_add_node_module_dir",
+      "node_repl.js_reset",
+    ]) {
+      expect(matcher.test(toolName)).toBe(false);
+    }
     expect(matcher.test("exec")).toBe(true);
     expect(matcher.test("mcp__filesystem__read_file")).toBe(true);
     const preToolUseCommand = preToolUseHooks?.[0]?.hooks?.[0];
@@ -372,6 +382,12 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       ?.config;
     expect(startConfig?.["features.hooks"]).toBe(true);
     expect(Array.isArray(startConfig?.["hooks.PermissionRequest"])).toBe(true);
+    const permissionMatcher = new RegExp(
+      (startConfig?.["hooks.PermissionRequest"] as Array<{ matcher?: string }> | undefined)?.[0]
+        ?.matcher ?? "",
+    );
+    expect(permissionMatcher.test("mcp__node_repl__js")).toBe(false);
+    expect(permissionMatcher.test("exec")).toBe(true);
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(
       nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.allowedEvents,

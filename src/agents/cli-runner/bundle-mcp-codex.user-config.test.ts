@@ -1,9 +1,51 @@
 /** Tests projecting OpenClaw user MCP servers into Codex app-server config. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildCodexUserMcpServersThreadConfigPatch } from "./bundle-mcp-codex.js";
+import {
+  buildCodexUserMcpServersThreadConfigPatch,
+  injectCodexMcpConfigArgs,
+} from "./bundle-mcp-codex.js";
 
 describe("buildCodexUserMcpServersThreadConfigPatch", () => {
+  it("rejects standalone computer-use config owned by a managed native plugin", () => {
+    expect(() =>
+      buildCodexUserMcpServersThreadConfigPatch({
+        mcp: {
+          servers: {
+            "computer-use": { transport: "stdio", command: "computer-use" },
+          },
+        },
+      } as unknown as OpenClawConfig),
+    ).toThrow("Codex MCP config collides with managed native plugins");
+  });
+
+  it("filters global node_repl while preserving other app-server MCP servers", () => {
+    const patch = buildCodexUserMcpServersThreadConfigPatch({
+      mcp: {
+        servers: {
+          node_repl: { transport: "stdio", command: "node-repl" },
+          outlook: { transport: "stdio", command: "outlook-mcp" },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(patch).toStrictEqual({
+      mcp_servers: { outlook: { command: "outlook-mcp" } },
+    });
+  });
+
+  it("filters global node_repl from Codex CLI MCP overrides", () => {
+    const args = injectCodexMcpConfigArgs([], {
+      mcpServers: {
+        node_repl: { command: "node-repl" },
+        outlook: { command: "outlook-mcp" },
+      },
+    });
+
+    expect(args.join(" ")).not.toContain("node_repl");
+    expect(args.join(" ")).toContain("outlook");
+  });
+
   it("returns undefined when cfg has no mcp.servers (regression: #80814)", () => {
     expect(buildCodexUserMcpServersThreadConfigPatch(undefined)).toBeUndefined();
     expect(buildCodexUserMcpServersThreadConfigPatch({} as OpenClawConfig)).toBeUndefined();
