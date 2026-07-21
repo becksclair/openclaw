@@ -56,7 +56,7 @@ jobs:
             echo "Expected exactly one packed tarball, found ${#TARBALLS[@]}." >&2
             exit 1
           fi
-          TARBALL="${TARBALLS[0]}"
+          TARBALL="$PWD/${TARBALLS[0]}"
           PACKED_VERSION="$(tar -xOf "$TARBALL" package/package.json | node -e 'let s=""; process.stdin.on("data", c => s += c); process.stdin.on("end", () => process.stdout.write(JSON.parse(s).version));')"
           test "$PACKED_VERSION" = "${{ steps.version.outputs.version }}"
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
