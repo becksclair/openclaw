@@ -50,21 +50,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ci-artifacts
-          PACK_OUTPUT="$RUNNER_TEMP/npm-pack-output.json"
-          pnpm pack --pack-destination ci-artifacts --json > "$PACK_OUTPUT"
-          TARBALL="$(node - "$PACK_OUTPUT" <<'NODE'
-          const fs = require("node:fs");
-          const path = require("node:path");
-          const parsed = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-          const item = Array.isArray(parsed) ? parsed[0] : parsed;
-          const filename = path.basename(item?.filename ?? "");
-          if (!filename.endsWith(".tgz")) {
-            throw new Error("pnpm pack did not report a tarball filename");
-          }
-          process.stdout.write(path.join("ci-artifacts", filename));
-          NODE
-          )"
-          test -f "$TARBALL"
+          pnpm pack --pack-destination ci-artifacts
+          mapfile -t TARBALLS < <(find ci-artifacts -maxdepth 1 -type f -name '*.tgz' -print)
+          if [[ "${#TARBALLS[@]}" -ne 1 ]]; then
+            echo "Expected exactly one packed tarball, found ${#TARBALLS[@]}." >&2
+            exit 1
+          fi
+          TARBALL="${TARBALLS[0]}"
           PACKED_VERSION="$(tar -xOf "$TARBALL" package/package.json | node -e 'let s=""; process.stdin.on("data", c => s += c); process.stdin.on("end", () => process.stdout.write(JSON.parse(s).version));')"
           test "$PACKED_VERSION" = "${{ steps.version.outputs.version }}"
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
