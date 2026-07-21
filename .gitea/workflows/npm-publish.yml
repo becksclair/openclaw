@@ -58,7 +58,7 @@ jobs:
           npm version "${{ steps.version.outputs.package_version }}" \
             --no-git-tag-version \
             --ignore-scripts
-          npm pack --ignore-scripts --pack-destination ci-artifacts
+          pnpm --config.ignore-scripts=true pack --pack-destination ci-artifacts
           mapfile -t TARBALLS < <(find ci-artifacts -maxdepth 1 -type f -name '*.tgz' -print)
           if [[ "${#TARBALLS[@]}" -ne 1 ]]; then
             echo "Expected exactly one packed tarball, found ${#TARBALLS[@]}." >&2
