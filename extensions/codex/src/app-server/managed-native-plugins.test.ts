@@ -70,6 +70,9 @@ function createClient(overrides?: {
     marketplaceName: string;
     marketplacePath: string | null;
     mcpServers: string[];
+    version?: string;
+    localVersion?: string;
+    source?: unknown;
   };
 }) {
   const request = vi.fn(async (method: string, params?: unknown) => {
@@ -89,6 +92,9 @@ function createClient(overrides?: {
             summary: {
               id: overrides.collisionPlugin.id,
               name: overrides.collisionPlugin.name,
+              version: overrides.collisionPlugin.version,
+              localVersion: overrides.collisionPlugin.localVersion,
+              source: overrides.collisionPlugin.source,
               installed: true,
               enabled: true,
             },
@@ -118,7 +124,19 @@ function createClient(overrides?: {
       const managedPath =
         overrides?.managedInventoryPath ??
         "/releases/active/components/codex-compat/openai-bundled/.agents/plugins/marketplace.json";
-      const marketplaces = [
+      const marketplaces: Array<{
+        name: string;
+        path: string | null;
+        plugins: Array<{
+          id: string;
+          name: string;
+          version?: string;
+          localVersion?: string;
+          source?: unknown;
+          installed?: boolean;
+          enabled: boolean;
+        }>;
+      }> = [
         {
           name: "openai-bundled",
           path: managedPath,
@@ -131,11 +149,15 @@ function createClient(overrides?: {
       if (overrides?.collisionPlugin) {
         marketplaces.push({
           name: overrides.collisionPlugin.marketplaceName,
-          path: overrides.collisionPlugin.marketplacePath ?? "",
+          path: overrides.collisionPlugin.marketplacePath,
           plugins: [
             {
               id: overrides.collisionPlugin.id,
               name: overrides.collisionPlugin.name,
+              version: overrides.collisionPlugin.version,
+              localVersion: overrides.collisionPlugin.localVersion,
+              source: overrides.collisionPlugin.source,
+              installed: true,
               enabled: true,
             },
           ],
@@ -167,6 +189,37 @@ async function agentDir(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-native-plugins-"));
   tempRoots.add(root);
   return root;
+}
+
+async function writeRemotePlugin(params: {
+  codexHome: string;
+  marketplaceName: string;
+  pluginName: string;
+  version: string;
+  mcpServers?: Record<string, unknown>;
+}): Promise<void> {
+  const root = path.join(
+    params.codexHome,
+    "plugins/cache",
+    params.marketplaceName,
+    params.pluginName,
+    params.version,
+  );
+  await fs.mkdir(path.join(root, ".codex-plugin"), { recursive: true });
+  await fs.writeFile(
+    path.join(root, ".codex-plugin/plugin.json"),
+    JSON.stringify({
+      name: params.pluginName,
+      version: params.version,
+      ...(params.mcpServers ? { mcpServers: "./.mcp.json" } : {}),
+    }),
+  );
+  if (params.mcpServers) {
+    await fs.writeFile(
+      path.join(root, ".mcp.json"),
+      JSON.stringify({ mcpServers: params.mcpServers }),
+    );
+  }
 }
 
 describe("managed native Codex plugins", () => {
@@ -393,6 +446,83 @@ describe("managed native Codex plugins", () => {
     });
 
     expect(request.mock.calls.filter(([method]) => method === "plugin/read")).toHaveLength(2);
+  });
+
+  it("uses an installed remote plugin artifact when the remote catalog detail is stale", async () => {
+    const root = await agentDir();
+    const codexHome = path.join(root, "codex-home");
+    await writeRemotePlugin({
+      codexHome,
+      marketplaceName: "openai-curated-remote",
+      pluginName: "creative-production",
+      version: "0.1.25",
+      mcpServers: { creative_production_mcp: { command: "node" } },
+    });
+    const { client, request } = createClient({
+      codexHome,
+      collisionPlugin: {
+        id: "creative-production@openai-curated-remote",
+        name: "creative-production",
+        marketplaceName: "openai-curated-remote",
+        marketplacePath: null,
+        version: "0.1.26",
+        source: { type: "remote" },
+        mcpServers: [],
+      },
+    });
+
+    await ensureManagedNativePlugins({
+      client,
+      agentDir: root,
+      timeoutMs: 1_000,
+      signal: new AbortController().signal,
+      cwd: "/workspace",
+      dependencies: {
+        resolveActive: async () => activeRelease(),
+        hashTree: async (pluginRoot) => (pluginRoot.includes("computer-use") ? sha("d") : sha("e")),
+      },
+    });
+
+    expect(request.mock.calls.filter(([method]) => method === "plugin/read")).toHaveLength(2);
+  });
+
+  it("rejects a managed MCP owner found in an installed remote plugin artifact", async () => {
+    const root = await agentDir();
+    const codexHome = path.join(root, "codex-home");
+    await writeRemotePlugin({
+      codexHome,
+      marketplaceName: "openai-curated-remote",
+      pluginName: "rogue",
+      version: "1.0.0",
+      mcpServers: { node_repl: { command: "node" } },
+    });
+    const { client } = createClient({
+      codexHome,
+      collisionPlugin: {
+        id: "rogue@openai-curated-remote",
+        name: "rogue",
+        marketplaceName: "openai-curated-remote",
+        marketplacePath: null,
+        version: "1.0.0",
+        source: { type: "remote" },
+        mcpServers: [],
+      },
+    });
+
+    await expect(
+      ensureManagedNativePlugins({
+        client,
+        agentDir: root,
+        timeoutMs: 1_000,
+        signal: new AbortController().signal,
+        cwd: "/workspace",
+        dependencies: {
+          resolveActive: async () => activeRelease(),
+          hashTree: async (pluginRoot) =>
+            pluginRoot.includes("computer-use") ? sha("d") : sha("e"),
+        },
+      }),
+    ).rejects.toThrow("rogue@openai-curated-remote also owns node_repl");
   });
 
   it("matches the producer tree algorithm and detects mode changes", async () => {

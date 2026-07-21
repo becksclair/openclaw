@@ -91,6 +91,10 @@ type PluginInstalledResponse = {
     plugins?: Array<{
       id?: unknown;
       name?: unknown;
+      version?: unknown;
+      localVersion?: unknown;
+      source?: unknown;
+      installed?: unknown;
       enabled?: unknown;
     }>;
   }>;
@@ -337,19 +341,19 @@ async function assertNoEnabledPluginMcpCollisions(params: {
       if (isManagedPlugin) {
         continue;
       }
-      const readParams =
+      const mcpServers =
         typeof marketplace.path === "string"
-          ? { marketplacePath: marketplace.path, pluginName: summary.name }
-          : { remoteMarketplaceName: marketplace.name, pluginName: summary.name };
-      const pluginResponse = await params.client.request<PluginReadResponse>(
-        "plugin/read",
-        readParams,
-        { timeoutMs: params.timeoutMs, signal: params.signal },
-      );
-      const mcpServers = pluginResponse.plugin?.mcpServers;
-      if (!Array.isArray(mcpServers) || !mcpServers.every((name) => typeof name === "string")) {
-        throw new Error(`managed Codex plugin MCP inventory is invalid: ${summary.id}`);
-      }
+          ? await readMarketplacePluginMcpServers(
+              params,
+              marketplace.path,
+              summary.name,
+              summary.id,
+            )
+          : await readRemotePluginMcpServers(
+              resolveManagedCodexHome(params.client, undefined),
+              marketplace.name,
+              summary,
+            );
       const collisions = expectedPlugins
         .flatMap((plugin) => plugin.mcpServers)
         .filter((serverName) => mcpServers.includes(serverName));
@@ -360,6 +364,175 @@ async function assertNoEnabledPluginMcpCollisions(params: {
       }
     }
   }
+}
+
+async function readMarketplacePluginMcpServers(
+  params: {
+    client: CodexAppServerClient;
+    timeoutMs: number;
+    signal: AbortSignal;
+  },
+  marketplacePath: string,
+  pluginName: string,
+  pluginId: string,
+): Promise<string[]> {
+  const pluginResponse = await params.client.request<PluginReadResponse>(
+    "plugin/read",
+    { marketplacePath, pluginName },
+    { timeoutMs: params.timeoutMs, signal: params.signal },
+  );
+  const mcpServers = pluginResponse.plugin?.mcpServers;
+  if (!Array.isArray(mcpServers) || !mcpServers.every((name) => typeof name === "string")) {
+    throw new Error(`managed Codex plugin MCP inventory is invalid: ${pluginId}`);
+  }
+  return mcpServers;
+}
+
+async function readRemotePluginMcpServers(
+  codexHome: string,
+  marketplaceName: string,
+  summary: {
+    id?: unknown;
+    name?: unknown;
+    version?: unknown;
+    localVersion?: unknown;
+    source?: unknown;
+    installed?: unknown;
+  },
+): Promise<string[]> {
+  if (
+    typeof summary.id !== "string" ||
+    typeof summary.name !== "string" ||
+    summary.id !== `${summary.name}@${marketplaceName}` ||
+    summary.installed !== true ||
+    !isPathSegment(marketplaceName) ||
+    !isPathSegment(summary.name) ||
+    !isRemotePluginSource(summary.source)
+  ) {
+    throw new Error(`managed Codex remote plugin inventory is invalid: ${summary.id}`);
+  }
+  const pluginBaseRoot = path.join(codexHome, "plugins", "cache", marketplaceName, summary.name);
+  const { pluginRoot, version } = await resolveOnlyRemoteVersionRoot(pluginBaseRoot, summary.id);
+  const manifest = await readPluginManifest(pluginRoot, summary.id);
+  if (manifest.name !== summary.name || manifest.version !== version) {
+    throw new Error(`managed Codex remote plugin manifest identity is invalid: ${summary.id}`);
+  }
+  const declaredMcpServers = manifest.mcpServers;
+  if (
+    declaredMcpServers &&
+    typeof declaredMcpServers === "object" &&
+    !Array.isArray(declaredMcpServers)
+  ) {
+    return Object.keys(declaredMcpServers);
+  }
+  const configPath =
+    typeof declaredMcpServers === "string"
+      ? resolvePluginPath(pluginRoot, declaredMcpServers, summary.id)
+      : path.join(pluginRoot, ".mcp.json");
+  if (declaredMcpServers == null) {
+    try {
+      await fs.access(configPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    }
+  } else if (typeof declaredMcpServers !== "string") {
+    throw new Error(`managed Codex remote plugin manifest is invalid: ${summary.id}`);
+  }
+  const config = await readJsonObject(configPath, `remote plugin MCP config: ${summary.id}`);
+  const servers = config.mcpServers;
+  if (!servers || typeof servers !== "object" || Array.isArray(servers)) {
+    throw new Error(`managed Codex remote plugin MCP inventory is invalid: ${summary.id}`);
+  }
+  return Object.keys(servers);
+}
+
+async function resolveOnlyRemoteVersionRoot(
+  pluginBaseRoot: string,
+  pluginId: string,
+): Promise<{ pluginRoot: string; version: string }> {
+  let versions: string[];
+  try {
+    versions = (await fs.readdir(pluginBaseRoot, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch (error) {
+    throw new Error(`managed Codex remote plugin cache is unreadable: ${pluginId}`, {
+      cause: error,
+    });
+  }
+  // Codex atomically replaces the entire plugin base root on install. The sole
+  // version directory is authoritative when remote inventory versions drift.
+  const version = versions[0];
+  if (versions.length !== 1 || !version || !isPathSegment(version)) {
+    throw new Error(`managed Codex remote plugin cache version is ambiguous: ${pluginId}`);
+  }
+  return { pluginRoot: path.join(pluginBaseRoot, version), version };
+}
+
+async function readPluginManifest(
+  pluginRoot: string,
+  pluginId: string,
+): Promise<Record<string, unknown>> {
+  for (const relativePath of [
+    ".codex-plugin/plugin.json",
+    ".claude-plugin/plugin.json",
+    ".cursor-plugin/plugin.json",
+  ]) {
+    try {
+      return await readJsonObject(
+        path.join(pluginRoot, relativePath),
+        `remote plugin manifest: ${pluginId}`,
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  throw new Error(`managed Codex remote plugin manifest is missing: ${pluginId}`);
+}
+
+async function readJsonObject(filePath: string, label: string): Promise<Record<string, unknown>> {
+  let value: unknown;
+  try {
+    value = JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw error;
+    }
+    throw new Error(`managed Codex ${label} is unreadable`, { cause: error });
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`managed Codex ${label} is invalid`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function resolvePluginPath(pluginRoot: string, relativePath: string, pluginId: string): string {
+  if (!relativePath.startsWith("./")) {
+    throw new Error(`managed Codex remote plugin MCP path is invalid: ${pluginId}`);
+  }
+  const resolved = path.resolve(pluginRoot, relativePath);
+  if (!resolved.startsWith(`${pluginRoot}${path.sep}`)) {
+    throw new Error(`managed Codex remote plugin MCP path escapes its root: ${pluginId}`);
+  }
+  return resolved;
+}
+
+function isPathSegment(value: string): boolean {
+  return value !== "." && value !== ".." && path.basename(value) === value;
+}
+
+function isRemotePluginSource(value: unknown): boolean {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>).type === "remote",
+  );
 }
 
 function assertNoEffectiveMcpCollisions(config: unknown): void {
