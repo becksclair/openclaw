@@ -34,15 +34,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Assign immutable private build version
+      - name: Read release version
         id: version
         run: |
           set -euo pipefail
-          SOURCE_VERSION="$(node -p "require('./package.json').version")"
-          BASE_VERSION="${SOURCE_VERSION%%-*}"
-          BUILD_STAMP="$(date -u +%Y%m%d%H%M%S)"
-          PACKAGE_VERSION="${BASE_VERSION}-beta.${BUILD_STAMP}"
-          npm version "$PACKAGE_VERSION" --no-git-tag-version --ignore-scripts
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Build and pack OpenClaw
