@@ -140,7 +140,7 @@ export async function ensureManagedNativePlugins(params: {
   const current = clientStates.get(codexHome);
   if (current?.key === key) {
     await current.promise;
-    await assertNoEnabledPluginMcpCollisions(params, runtime);
+    await assertNoEnabledPluginMcpCollisions(params);
     await requireManagedMcpServers(params);
     return;
   }
@@ -158,7 +158,7 @@ export async function ensureManagedNativePlugins(params: {
       signal: params.signal,
       hashTree: params.dependencies?.hashTree ?? canonicalTreeSha256,
     });
-    await assertNoEnabledPluginMcpCollisions(params, runtime);
+    await assertNoEnabledPluginMcpCollisions(params);
     await requireManagedMcpServers(params);
   });
   clientStates.set(codexHome, { key, promise });
@@ -295,15 +295,12 @@ async function assertNoClientMcpCollisions(params: {
   assertNoEffectiveMcpCollisions(configResponse.config);
 }
 
-async function assertNoEnabledPluginMcpCollisions(
-  params: {
-    client: CodexAppServerClient;
-    cwd: string;
-    timeoutMs: number;
-    signal: AbortSignal;
-  },
-  runtime: ActiveRuntime,
-): Promise<void> {
+async function assertNoEnabledPluginMcpCollisions(params: {
+  client: CodexAppServerClient;
+  cwd: string;
+  timeoutMs: number;
+  signal: AbortSignal;
+}): Promise<void> {
   const response = await params.client.request<PluginInstalledResponse>(
     "plugin/installed",
     { cwds: [params.cwd] },
@@ -317,7 +314,6 @@ async function assertNoEnabledPluginMcpCollisions(
     throw new Error("managed Codex installed plugin inventory is incomplete");
   }
 
-  const managedManifestPath = runtime.codex_marketplace.manifest_path;
   for (const marketplace of response.marketplaces) {
     if (
       typeof marketplace.name !== "string" ||
@@ -333,9 +329,10 @@ async function assertNoEnabledPluginMcpCollisions(
       if (typeof summary.id !== "string" || typeof summary.name !== "string") {
         throw new Error("managed Codex installed plugin summary is invalid");
       }
+      // Inventory may retain its configured marketplace path after direct read/hash
+      // verifies the active source, so logical marketplace/id/name identify self here.
       const isManagedPlugin =
         marketplace.name === MARKETPLACE_NAME &&
-        marketplace.path === managedManifestPath &&
         expectedPlugins.some((plugin) => plugin.id === summary.id && plugin.name === summary.name);
       if (isManagedPlugin) {
         continue;

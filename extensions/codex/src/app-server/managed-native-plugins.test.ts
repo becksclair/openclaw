@@ -63,6 +63,7 @@ function createClient(overrides?: {
   effectiveMcpServers?: Record<string, unknown>;
   readMutation?: (pluginName: string, response: Record<string, unknown>) => void;
   codexHome?: string;
+  managedInventoryPath?: string;
   collisionPlugin?: {
     id: string;
     name: string;
@@ -115,6 +116,7 @@ function createClient(overrides?: {
     }
     if (method === "plugin/installed") {
       const managedPath =
+        overrides?.managedInventoryPath ??
         "/releases/active/components/codex-compat/openai-bundled/.agents/plugins/marketplace.json";
       const marketplaces = [
         {
@@ -372,6 +374,25 @@ describe("managed native Codex plugins", () => {
         },
       }),
     ).rejects.toThrow("rogue@personal also owns node_repl");
+  });
+
+  it("does not treat managed plugins from a persisted marketplace path as collisions", async () => {
+    const { client, request } = createClient({
+      managedInventoryPath: "/persisted/openai-bundled/.agents/plugins/marketplace.json",
+    });
+    await ensureManagedNativePlugins({
+      client,
+      agentDir: await agentDir(),
+      timeoutMs: 1_000,
+      signal: new AbortController().signal,
+      cwd: "/workspace",
+      dependencies: {
+        resolveActive: async () => activeRelease(),
+        hashTree: async (root) => (root.includes("computer-use") ? sha("d") : sha("e")),
+      },
+    });
+
+    expect(request.mock.calls.filter(([method]) => method === "plugin/read")).toHaveLength(2);
   });
 
   it("matches the producer tree algorithm and detects mode changes", async () => {
