@@ -46,12 +46,54 @@ jobs:
           echo "source_version=$SOURCE_VERSION" >> "$GITHUB_OUTPUT"
           echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Build and pack OpenClaw
+      - name: Build and pack private OpenClaw dependencies
+        run: |
+          set -euo pipefail
+          mkdir -p ci-artifacts/private-dependencies
+          pnpm run prepack
+          node scripts/pack-private-npm-dependencies.mjs pack \
+            "$PWD/ci-artifacts/private-dependencies" \
+            "$GITHUB_RUN_ID" \
+            > ci-artifacts/private-dependencies.json
+
+      - name: Publish private OpenClaw dependencies
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            "registry=${NPM_REGISTRY}" \
+            "//git.heliasar.com/api/packages/bex/npm/:_authToken=\${NODE_AUTH_TOKEN}" \
+            "always-auth=true" > "$RUNNER_TEMP/npmrc"
+          while IFS= read -r dependency; do
+            name="$(jq -r '.name' <<<"$dependency")"
+            version="$(jq -r '.version' <<<"$dependency")"
+            integrity="$(jq -r '.integrity' <<<"$dependency")"
+            tarball="$(jq -r '.tarball' <<<"$dependency")"
+            if published="$(npm view "$name@$version" version dist.integrity --json \
+              --userconfig "$RUNNER_TEMP/npmrc" \
+              --registry "$NPM_REGISTRY" 2>/dev/null)"; then
+              test "$(jq -r '.version' <<<"$published")" = "$version"
+              test "$(jq -r '."dist.integrity"' <<<"$published")" = "$integrity"
+              echo "$name@$version already published"
+              continue
+            fi
+            npm publish "$tarball" \
+              --userconfig "$RUNNER_TEMP/npmrc" \
+              --registry "$NPM_REGISTRY" \
+              --tag latest
+            test "$(npm view "$name@$version" dist.integrity \
+              --userconfig "$RUNNER_TEMP/npmrc" \
+              --registry "$NPM_REGISTRY")" = "$integrity"
+          done < <(jq -c '.[]' ci-artifacts/private-dependencies.json)
+
+      - name: Pack OpenClaw
         id: pack
         run: |
           set -euo pipefail
-          mkdir -p ci-artifacts
-          pnpm run prepack
+          node scripts/pack-private-npm-dependencies.mjs \
+            rewrite-root \
+            ci-artifacts/private-dependencies.json
           npm version "${{ steps.version.outputs.package_version }}" \
             --no-git-tag-version \
             --ignore-scripts
@@ -108,6 +150,7 @@ jobs:
             echo "- Package: \`openclaw@${{ steps.version.outputs.package_version }}\`"
             echo "- Runtime release: \`${{ steps.version.outputs.source_version }}\`"
             echo "- Registry tag: \`latest\`"
+            echo "- Scoped dependencies: published before root package"
             echo "- Commit: \`${GITHUB_SHA}\`"
             echo "- Saga-Sky: deployed and healthy"
           } >> "$GITHUB_STEP_SUMMARY"
