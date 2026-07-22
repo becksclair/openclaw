@@ -35,6 +35,7 @@ const FS_SAFE_RUNTIME_ENTRIES = {
   "dist/file-lock.js": "export {};\n",
   "dist/index.js": "export {};\n",
   "dist/json.js": "export {};\n",
+  "dist/output.js": "export {};\n",
   "dist/path.js": "export {};\n",
   "dist/permissions-public.js": "export {};\n",
   "dist/pinned-python.js": "export {};\n",
@@ -45,6 +46,7 @@ const FS_SAFE_RUNTIME_ENTRIES = {
   "dist/store.js": "export {};\n",
   "dist/temp.js": "export {};\n",
   "dist/test-hooks.js": "export {};\n",
+  "dist/types.js": "export {};\n",
   "dist/walk.js": "export {};\n",
 };
 const FS_SAFE_RUNTIME_PACKAGE_JSON = JSON.stringify({
@@ -59,6 +61,7 @@ const FS_SAFE_RUNTIME_PACKAGE_JSON = JSON.stringify({
     "./errors": "./dist/errors.js",
     "./file-lock": "./dist/file-lock.js",
     "./json": "./dist/json.js",
+    "./output": "./dist/output.js",
     "./path": "./dist/path.js",
     "./permissions": "./dist/permissions-public.js",
     "./root": "./dist/root.js",
@@ -67,6 +70,7 @@ const FS_SAFE_RUNTIME_PACKAGE_JSON = JSON.stringify({
     "./store": "./dist/store.js",
     "./temp": "./dist/temp.js",
     "./test-hooks": "./dist/test-hooks.js",
+    "./types": "./dist/types.js",
     "./walk": "./dist/walk.js",
   },
 });
@@ -102,6 +106,9 @@ function withTarball(
             "": {
               name: "openclaw",
               version,
+              ...((options.packageJson?.dependencies as Record<string, string> | undefined)
+                ? { dependencies: options.packageJson.dependencies }
+                : {}),
               ...options.shrinkwrapRootPackage,
             },
           },
@@ -540,6 +547,37 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+  it.each([
+    ["missing", undefined],
+    ["mismatched", { dependencies: { "@openclaw/ai": "2026.7.2" } }],
+    [
+      "extra",
+      {
+        dependencies: {
+          "@openclaw/ai": "2026.7.1",
+          "@openclaw/stale": "1.0.0",
+        },
+      },
+    ],
+  ])("rejects %s shrinkwrap root dependency metadata", (_label, shrinkwrapRootPackage) => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("must match package.json spec");
+      },
+      "2026.7.1",
+      {
+        packageJson: { dependencies: { "@openclaw/ai": "2026.7.1" } },
+        shrinkwrapRootPackage:
+          shrinkwrapRootPackage === undefined ? { dependencies: {} } : shrinkwrapRootPackage,
+      },
+    );
+  });
+
   it("accepts separately published private workspace dependencies by default", () => {
     withTarball(
       ["dist/index.js"],
@@ -663,6 +701,40 @@ describe("check-openclaw-package-tarball", () => {
       },
     );
   });
+
+  it.each(["dist/output.js", "dist/types.js"])(
+    "rejects a missing exported fs-safe runtime entry %s",
+    (missingEntry) => {
+      const runtimeEntries = Object.fromEntries(
+        Object.entries(FS_SAFE_RUNTIME_ENTRIES)
+          .filter(([entry]) => entry !== missingEntry)
+          .map(([entry, body]) => [`node_modules/@openclaw/fs-safe/${entry}`, body]),
+      );
+      withTarball(
+        ["dist/index.js"],
+        {
+          "dist/index.js": "export {};\n",
+          "node_modules/@openclaw/fs-safe/package.json": FS_SAFE_RUNTIME_PACKAGE_JSON,
+          ...runtimeEntries,
+        },
+        (tarball) => {
+          const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain(
+            `bundled @openclaw/fs-safe is missing required runtime entry ${missingEntry}`,
+          );
+        },
+        "2026.7.1",
+        {
+          packageJson: {
+            dependencies: { "@openclaw/fs-safe": "0.4.1" },
+            bundleDependencies: ["@openclaw/fs-safe"],
+          },
+        },
+      );
+    },
+  );
 
   it("rejects private workspace dependencies that are not bundled when strict packaging requires it", () => {
     withTarball(

@@ -6,6 +6,7 @@ import {
   collectPrivateDependencyPlan,
   PRIVATE_DEPENDENCY_SOURCES,
   readPrivateDependencyPlan,
+  readPrivatePackagePlan,
   resolvePrivateDependencyVersion,
   rewriteRootPrivateDependencyVersions,
 } from "../../scripts/pack-private-npm-dependencies.mjs";
@@ -21,6 +22,10 @@ describe("pack-private-npm-dependencies", () => {
 
     expect(readPrivateDependencyPlan().map(({ name }) => name)).toEqual(expectedNames);
     expect(Object.keys(PRIVATE_DEPENDENCY_SOURCES).sort()).toEqual(expectedNames);
+  });
+
+  it("includes changed external managed plugins in the publication closure", () => {
+    expect(readPrivatePackagePlan().map(({ name }) => name)).toContain("@openclaw/codex");
   });
 
   it("rejects an unaccounted private dependency", () => {
@@ -56,7 +61,10 @@ describe("pack-private-npm-dependencies", () => {
     try {
       writeFileSync(
         join(rootDir, "package.json"),
-        JSON.stringify({ dependencies: { "@openclaw/ai": "workspace:*" } }),
+        JSON.stringify({
+          dependencies: { "@openclaw/ai": "workspace:*" },
+          bundleDependencies: ["@openclaw/ai"],
+        }),
       );
       writeFileSync(
         join(rootDir, "npm-shrinkwrap.json"),
@@ -67,13 +75,32 @@ describe("pack-private-npm-dependencies", () => {
 
       rewriteRootPrivateDependencyVersions({
         rootDir,
-        dependencies: [{ name: "@openclaw/ai", version: "2026.7.1-private.2954" }],
+        dependencies: [
+          {
+            name: "@openclaw/ai",
+            version: "2026.7.1-private.2954",
+            integrity: "sha512-test",
+            packedManifest: {
+              name: "@openclaw/ai",
+              version: "2026.7.1-private.2954",
+              dependencies: { zod: "4.4.3" },
+              engines: { node: ">=22" },
+            },
+          },
+        ],
       });
 
       const packageManifest = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8"));
       const shrinkwrap = JSON.parse(readFileSync(join(rootDir, "npm-shrinkwrap.json"), "utf8"));
       expect(packageManifest.dependencies["@openclaw/ai"]).toBe("2026.7.1-private.2954");
       expect(shrinkwrap.packages[""].dependencies["@openclaw/ai"]).toBe("2026.7.1-private.2954");
+      expect(shrinkwrap.packages["node_modules/@openclaw/ai"]).toEqual({
+        version: "2026.7.1-private.2954",
+        integrity: "sha512-test",
+        inBundle: true,
+        dependencies: { zod: "4.4.3" },
+        engines: { node: ">=22" },
+      });
     } finally {
       rmSync(rootDir, { recursive: true, force: true });
     }

@@ -454,6 +454,7 @@ async function resolveThreadBindingRuntime(
   try {
     await ensureManagedNativePlugins({
       client,
+      cwd: params.workspaceDir,
       timeoutMs: runtime.requestTimeoutMs,
       signal: AbortSignal.timeout(runtime.requestTimeoutMs),
     });
@@ -734,6 +735,7 @@ async function runBoundTurn(params: {
     if (networkProxyBindingChanged) {
       await ensureManagedNativePlugins({
         client,
+        cwd: workspaceDir,
         timeoutMs: runtime.requestTimeoutMs,
         signal: AbortSignal.timeout(runtime.requestTimeoutMs),
       });

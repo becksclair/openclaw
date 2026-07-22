@@ -1,133 +1,47 @@
-name: Build and publish private npm package
+name: Deploy published private npm package
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      package_version:
+        description: Immutable openclaw package version already published from the development machine
+        required: true
+        type: string
+      source_version:
+        description: OpenClaw source release version embedded in the package
+        required: true
+        type: string
+      commit_sha:
+        description: Full source commit SHA represented by the package
+        required: true
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Build and publish OpenClaw
+  deploy:
+    name: Install and verify OpenClaw on Saga
     runs-on:
       - pacman-build
     env:
-      NPM_REGISTRY: https://git.heliasar.com/api/packages/bex/npm/
       SAGA_DEPLOY_HOST: 172.17.0.1
     steps:
-      - name: Check out source
+      - name: Check out deployment trust material
         uses: actions/checkout@v4
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          run_install: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22.22.3"
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Assign immutable private package version
-        id: version
-        run: |
-          set -euo pipefail
-          SOURCE_VERSION="$(node -p "require('./package.json').version")"
-          RUN_ID="${GITHUB_RUN_ID:?GITHUB_RUN_ID is required}"
-          BASE_VERSION="${SOURCE_VERSION%%-*}"
-          PACKAGE_VERSION="${BASE_VERSION}-${RUN_ID}"
-          echo "source_version=$SOURCE_VERSION" >> "$GITHUB_OUTPUT"
-          echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Build and pack private OpenClaw dependencies
-        run: |
-          set -euo pipefail
-          mkdir -p ci-artifacts/private-dependencies
-          pnpm run prepack
-          node scripts/pack-private-npm-dependencies.mjs pack \
-            "$PWD/ci-artifacts/private-dependencies" \
-            "$GITHUB_RUN_ID" \
-            > ci-artifacts/private-dependencies.json
-
-      - name: Publish private OpenClaw dependencies
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-        run: |
-          set -euo pipefail
-          printf '%s\n' \
-            "registry=${NPM_REGISTRY}" \
-            "//git.heliasar.com/api/packages/bex/npm/:_authToken=\${NODE_AUTH_TOKEN}" \
-            "always-auth=true" > "$RUNNER_TEMP/npmrc"
-          while IFS= read -r dependency; do
-            name="$(jq -r '.name' <<<"$dependency")"
-            version="$(jq -r '.version' <<<"$dependency")"
-            integrity="$(jq -r '.integrity' <<<"$dependency")"
-            tarball="$(jq -r '.tarball' <<<"$dependency")"
-            if published="$(npm view "$name@$version" version dist.integrity --json \
-              --userconfig "$RUNNER_TEMP/npmrc" \
-              --registry "$NPM_REGISTRY" 2>/dev/null)"; then
-              test "$(jq -r '.version' <<<"$published")" = "$version"
-              test "$(jq -r '."dist.integrity"' <<<"$published")" = "$integrity"
-              echo "$name@$version already published"
-              continue
-            fi
-            npm publish "$tarball" \
-              --userconfig "$RUNNER_TEMP/npmrc" \
-              --registry "$NPM_REGISTRY" \
-              --tag latest
-            test "$(npm view "$name@$version" dist.integrity \
-              --userconfig "$RUNNER_TEMP/npmrc" \
-              --registry "$NPM_REGISTRY")" = "$integrity"
-          done < <(jq -c '.[]' ci-artifacts/private-dependencies.json)
-
-      - name: Pack OpenClaw
-        id: pack
-        run: |
-          set -euo pipefail
-          node scripts/pack-private-npm-dependencies.mjs \
-            rewrite-root \
-            ci-artifacts/private-dependencies.json
-          npm version "${{ steps.version.outputs.package_version }}" \
-            --no-git-tag-version \
-            --ignore-scripts
-          pnpm --config.ignore-scripts=true pack --pack-destination ci-artifacts
-          mapfile -t TARBALLS < <(find ci-artifacts -maxdepth 1 -type f -name '*.tgz' -print)
-          if [[ "${#TARBALLS[@]}" -ne 1 ]]; then
-            echo "Expected exactly one packed tarball, found ${#TARBALLS[@]}." >&2
-            exit 1
-          fi
-          TARBALL="$PWD/${TARBALLS[0]}"
-          PACKED_VERSION="$(tar -xOf "$TARBALL" package/package.json | node -e 'let s=""; process.stdin.on("data", c => s += c); process.stdin.on("end", () => process.stdout.write(JSON.parse(s).version));')"
-          test "$PACKED_VERSION" = "${{ steps.version.outputs.package_version }}"
-          node scripts/check-openclaw-package-tarball.mjs "$TARBALL"
-          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
-
-      - name: Publish to private npm registry
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-        run: |
-          set -euo pipefail
-          printf '%s\n' \
-            "registry=${NPM_REGISTRY}" \
-            "//git.heliasar.com/api/packages/bex/npm/:_authToken=\${NODE_AUTH_TOKEN}" \
-            "always-auth=true" > "$RUNNER_TEMP/npmrc"
-          npm publish "${{ steps.pack.outputs.tarball }}" \
-            --userconfig "$RUNNER_TEMP/npmrc" \
-            --registry "$NPM_REGISTRY" \
-            --tag latest
 
       - name: Deploy and verify Saga-Sky
         env:
+          PACKAGE_VERSION: ${{ inputs.package_version }}
           SAGA_DEPLOY_SSH_KEY_B64: ${{ secrets.SAGA_DEPLOY_SSH_KEY_B64 }}
+          SOURCE_COMMIT_SHA: ${{ inputs.commit_sha }}
+          SOURCE_VERSION: ${{ inputs.source_version }}
         run: |
           set -euo pipefail
+          [[ "$PACKAGE_VERSION" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}[-.][0-9A-Za-z.-]+$ ]]
+          [[ "$SOURCE_VERSION" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(-[0-9A-Za-z.-]+)?$ ]]
+          [[ "$SOURCE_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
           SSH_DIR="$RUNNER_TEMP/saga-deploy-ssh"
           install -d -m 0700 "$SSH_DIR"
           printf '%s' "$SAGA_DEPLOY_SSH_KEY_B64" | base64 --decode > "$SSH_DIR/id_ed25519"
@@ -140,17 +54,15 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$SSH_DIR/known_hosts" \
             "ubuntu@$SAGA_DEPLOY_HOST" \
-            "deploy-openclaw ${{ steps.version.outputs.package_version }} ${{ steps.version.outputs.source_version }} $GITHUB_SHA"
+            "deploy-openclaw $PACKAGE_VERSION $SOURCE_VERSION $SOURCE_COMMIT_SHA"
 
-      - name: Report published package
+      - name: Report deployed package
         run: |
           {
-            echo "### Private OpenClaw package published"
+            echo "### Published OpenClaw package deployed"
             echo
-            echo "- Package: \`openclaw@${{ steps.version.outputs.package_version }}\`"
-            echo "- Runtime release: \`${{ steps.version.outputs.source_version }}\`"
-            echo "- Registry tag: \`latest\`"
-            echo "- Scoped dependencies: published before root package"
-            echo "- Commit: \`${GITHUB_SHA}\`"
-            echo "- Saga-Sky: deployed and healthy"
+            echo "- Package: \`openclaw@${{ inputs.package_version }}\`"
+            echo "- Runtime release: \`${{ inputs.source_version }}\`"
+            echo "- Commit: \`${{ inputs.commit_sha }}\`"
+            echo "- Saga-Sky: installed and healthy"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -16,6 +16,7 @@ const MARKETPLACE_MANIFEST_RELATIVE_PATH = path.join(
 
 type ManagedNativePluginInstallState = {
   installByClient: WeakMap<CodexAppServerClient, Promise<void>>;
+  validationByClient: WeakMap<CodexAppServerClient, Map<string, Promise<void>>>;
 };
 
 const MANAGED_NATIVE_PLUGIN_INSTALL_STATE = Symbol.for(
@@ -28,6 +29,7 @@ function getManagedNativePluginInstallState(): ManagedNativePluginInstallState {
   };
   globalState[MANAGED_NATIVE_PLUGIN_INSTALL_STATE] ??= {
     installByClient: new WeakMap(),
+    validationByClient: new WeakMap(),
   };
   return globalState[MANAGED_NATIVE_PLUGIN_INSTALL_STATE];
 }
@@ -35,25 +37,29 @@ function getManagedNativePluginInstallState(): ManagedNativePluginInstallState {
 /** Installs the fixed sky-cua marketplace plugins before the client's first thread. */
 export async function ensureManagedNativePlugins(params: {
   client: CodexAppServerClient;
+  cwd: string;
   timeoutMs: number;
   signal: AbortSignal;
 }): Promise<void> {
-  const { installByClient } = getManagedNativePluginInstallState();
-  const current = installByClient.get(params.client);
+  const { validationByClient } = getManagedNativePluginInstallState();
+  const validationsByCwd =
+    validationByClient.get(params.client) ?? new Map<string, Promise<void>>();
+  validationByClient.set(params.client, validationsByCwd);
+  const current = validationsByCwd.get(params.cwd);
   if (current) {
     await current;
     return;
   }
 
-  // One app-server client can race several first-thread starts. Codex mutates
-  // one plugin cache/config, so share the install sequence for that client.
-  const install = installManagedNativePlugins(params);
-  installByClient.set(params.client, install);
+  // Project layers can differ by cwd, so each project gets its own ownership
+  // check even though the underlying cache install is shared by the client.
+  const reconciliation = reconcileManagedNativePlugins(params);
+  validationsByCwd.set(params.cwd, reconciliation);
   try {
-    await install;
+    await reconciliation;
   } catch (error) {
-    if (installByClient.get(params.client) === install) {
-      installByClient.delete(params.client);
+    if (validationsByCwd.get(params.cwd) === reconciliation) {
+      validationsByCwd.delete(params.cwd);
     }
     throw error;
   }
@@ -73,23 +79,52 @@ export function buildManagedNativeMcpDisableConfig(): Record<string, unknown> {
   };
 }
 
-async function installManagedNativePlugins(params: {
+async function ensureManagedNativePluginsInstalled(params: {
   client: CodexAppServerClient;
   timeoutMs: number;
   signal: AbortSignal;
 }): Promise<void> {
-  const marketplacePath = resolveSkyCuaMarketplaceManifestPath();
-  for (const pluginName of MANAGED_PLUGIN_NAMES) {
-    await params.client.request(
-      "plugin/install",
-      { marketplacePath, pluginName },
-      { timeoutMs: params.timeoutMs, signal: params.signal },
-    );
+  const { installByClient } = getManagedNativePluginInstallState();
+  const current = installByClient.get(params.client);
+  if (current) {
+    await current;
+    return;
   }
+
+  // Codex mutates one plugin cache per app-server client. Serialize the two
+  // installs across concurrent project starts to avoid overlapping writes.
+  const marketplacePath = resolveSkyCuaMarketplaceManifestPath();
+  const install = (async () => {
+    for (const pluginName of MANAGED_PLUGIN_NAMES) {
+      await params.client.request(
+        "plugin/install",
+        { marketplacePath, pluginName },
+        { timeoutMs: params.timeoutMs, signal: params.signal },
+      );
+    }
+  })();
+  installByClient.set(params.client, install);
+  try {
+    await install;
+  } catch (error) {
+    if (installByClient.get(params.client) === install) {
+      installByClient.delete(params.client);
+    }
+    throw error;
+  }
+}
+
+async function reconcileManagedNativePlugins(params: {
+  client: CodexAppServerClient;
+  cwd: string;
+  timeoutMs: number;
+  signal: AbortSignal;
+}): Promise<void> {
+  await ensureManagedNativePluginsInstalled(params);
 
   const configRead = await params.client.request(
     "config/read",
-    { includeLayers: false },
+    { cwd: params.cwd, includeLayers: false },
     { timeoutMs: params.timeoutMs, signal: params.signal },
   );
   const config =

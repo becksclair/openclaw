@@ -15,6 +15,10 @@ export const PRIVATE_DEPENDENCY_SOURCES = Object.freeze({
   "@openclaw/proxyline": "node_modules/@openclaw/proxyline",
 });
 
+export const MANAGED_PLUGIN_SOURCES = Object.freeze({
+  "@openclaw/codex": "extensions/codex",
+});
+
 function fail(message) {
   throw new Error(message);
 }
@@ -71,6 +75,23 @@ export function readPrivateDependencyPlan(rootDir = ROOT_DIR) {
   });
 }
 
+export function readPrivatePackagePlan(rootDir = ROOT_DIR) {
+  const dependencies = readPrivateDependencyPlan(rootDir);
+  const plugins = Object.entries(MANAGED_PLUGIN_SOURCES).map(([name, source]) => {
+    const manifest = readJson(path.join(rootDir, source, "package.json"));
+    if (manifest?.name !== name) {
+      fail(`managed plugin source ${source} names ${String(manifest?.name)} instead of ${name}`);
+    }
+    if (typeof manifest.version !== "string" || !EXACT_VERSION_PATTERN.test(manifest.version)) {
+      fail(`managed plugin ${name} has invalid source version ${String(manifest.version)}`);
+    }
+    return { name, sourceVersion: manifest.version, source, workspace: true };
+  });
+  return [...dependencies, ...plugins].toSorted((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
+
 function readPackedManifest(tarball) {
   const result = spawnSync("tar", ["-xOf", tarball, "package/package.json"], {
     encoding: "utf8",
@@ -125,7 +146,7 @@ function preparePackageSource({ rootDir, source, version, sourceVersion }) {
 
 export function packPrivateDependencies({ rootDir = ROOT_DIR, outputDir, runId }) {
   fs.mkdirSync(outputDir, { recursive: true });
-  const plan = readPrivateDependencyPlan(rootDir);
+  const plan = readPrivatePackagePlan(rootDir);
   return plan.map(({ name, sourceVersion, source, workspace }) => {
     const version = resolvePrivateDependencyVersion(sourceVersion, workspace, runId);
     const prepared = preparePackageSource({ rootDir, source, version, sourceVersion });
@@ -157,7 +178,7 @@ export function packPrivateDependencies({ rootDir = ROOT_DIR, outputDir, runId }
       );
     }
     const integrity = `sha512-${createHash("sha512").update(fs.readFileSync(tarball)).digest("base64")}`;
-    return { name, sourceVersion, version, integrity, tarball };
+    return { name, sourceVersion, version, integrity, packedManifest, tarball };
   });
 }
 
@@ -166,14 +187,37 @@ export function rewriteRootPrivateDependencyVersions({ rootDir = ROOT_DIR, depen
   const shrinkwrapPath = path.join(rootDir, "npm-shrinkwrap.json");
   const packageManifest = readJson(packagePath);
   const shrinkwrap = readJson(shrinkwrapPath);
-  for (const { name, version } of dependencies) {
+  for (const dependency of dependencies) {
+    const { name, version } = dependency;
     if (typeof packageManifest.dependencies?.[name] !== "string") {
-      fail(`root package.json no longer declares private dependency ${name}`);
+      continue;
     }
     packageManifest.dependencies[name] = version;
-    if (typeof shrinkwrap.packages?.[""]?.dependencies?.[name] === "string") {
-      shrinkwrap.packages[""].dependencies[name] = version;
+    const rootDependencies = shrinkwrap.packages?.[""]?.dependencies;
+    if (!rootDependencies || typeof rootDependencies !== "object") {
+      fail("npm shrinkwrap is missing root dependencies");
     }
+    rootDependencies[name] = version;
+
+    const packedManifest = dependency.packedManifest;
+    if (!packedManifest || packedManifest.name !== name || packedManifest.version !== version) {
+      fail(`packed manifest is missing or does not match ${name}@${version}`);
+    }
+    const lockEntry = {
+      version,
+      integrity: dependency.integrity,
+      ...(packageManifest.bundleDependencies?.includes(name) ? { inBundle: true } : {}),
+      ...(packedManifest.license ? { license: packedManifest.license } : {}),
+      ...(packedManifest.dependencies ? { dependencies: packedManifest.dependencies } : {}),
+      ...(packedManifest.optionalDependencies
+        ? { optionalDependencies: packedManifest.optionalDependencies }
+        : {}),
+      ...(packedManifest.peerDependencies
+        ? { peerDependencies: packedManifest.peerDependencies }
+        : {}),
+      ...(packedManifest.engines ? { engines: packedManifest.engines } : {}),
+    };
+    shrinkwrap.packages[`node_modules/${name}`] = lockEntry;
   }
   fs.writeFileSync(packagePath, `${JSON.stringify(packageManifest, null, 2)}\n`);
   fs.writeFileSync(shrinkwrapPath, `${JSON.stringify(shrinkwrap, null, 2)}\n`);

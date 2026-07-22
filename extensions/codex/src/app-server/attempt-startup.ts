@@ -326,6 +326,7 @@ export async function startCodexAttemptThread(params: {
             });
             await (params.managedNativePluginsReconciler ?? ensureManagedNativePlugins)({
               client: activeStartupClient,
+              cwd: startupExecutionCwd,
               timeoutMs: params.appServer.requestTimeoutMs,
               signal: startupAbandonController.signal,
             });

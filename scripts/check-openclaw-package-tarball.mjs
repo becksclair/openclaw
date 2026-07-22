@@ -74,9 +74,9 @@ const PACKAGE_DEPENDENCY_SECTIONS = [
   "devDependencies",
 ];
 const REQUIRED_BUNDLED_WORKSPACE_DEPENDENCIES = ["@openclaw/ai"];
-// Strict Docker artifacts bundle this private runtime rather than resolving it
-// from npm. Keep the concrete load-bearing entries explicit instead of
-// reimplementing Node's conditional package-exports resolver here.
+// Strict Docker artifacts bundle these private runtimes rather than resolving
+// them from npm. Exported runtime entries are derived from each package's own
+// manifest below; this map contains only additional private load-bearing files.
 const REQUIRED_BUNDLED_RUNTIME_ENTRIES = new Map([
   [
     "@openclaw/ai",
@@ -89,30 +89,7 @@ const REQUIRED_BUNDLED_RUNTIME_ENTRIES = new Map([
       },
     ],
   ],
-  [
-    "@openclaw/fs-safe",
-    [
-      { specifier: "@openclaw/fs-safe", entry: "dist/index.js" },
-      { specifier: "@openclaw/fs-safe/advanced", entry: "dist/advanced.js" },
-      { specifier: "@openclaw/fs-safe/archive", entry: "dist/archive.js" },
-      { specifier: "@openclaw/fs-safe/atomic", entry: "dist/atomic.js" },
-      { specifier: "@openclaw/fs-safe/config", entry: "dist/config.js" },
-      { specifier: "@openclaw/fs-safe/errors", entry: "dist/errors.js" },
-      { specifier: "@openclaw/fs-safe/file-lock", entry: "dist/file-lock.js" },
-      { specifier: "@openclaw/fs-safe/json", entry: "dist/json.js" },
-      { specifier: "@openclaw/fs-safe/path", entry: "dist/path.js" },
-      { specifier: "@openclaw/fs-safe/permissions", entry: "dist/permissions-public.js" },
-      { specifier: "@openclaw/fs-safe/root", entry: "dist/root.js" },
-      { specifier: "@openclaw/fs-safe/secret", entry: "dist/secret.js" },
-      { specifier: "@openclaw/fs-safe/secure-file", entry: "dist/secure-file.js" },
-      { specifier: "@openclaw/fs-safe/store", entry: "dist/store.js" },
-      { specifier: "@openclaw/fs-safe/temp", entry: "dist/temp.js" },
-      { specifier: "@openclaw/fs-safe/test-hooks", entry: "dist/test-hooks.js" },
-      { specifier: "@openclaw/fs-safe/walk", entry: "dist/walk.js" },
-      { entry: "dist/pinned-python.js" },
-      { entry: "dist/pinned-write.js" },
-    ],
-  ],
+  ["@openclaw/fs-safe", [{ entry: "dist/pinned-python.js" }, { entry: "dist/pinned-write.js" }]],
 ]);
 
 function collectWorkspaceProtocolDependencyErrors(packageJson, label) {
@@ -242,7 +219,20 @@ function collectBundledPackageRuntimeErrors({
       `bundled ${name} version ${bundledPackageJson.version ?? "<missing>"} does not match dependency ${expectedVersion}`,
     );
   }
-  const runtimeEntries = REQUIRED_BUNDLED_RUNTIME_ENTRIES.get(name) ?? [];
+  const exportedRuntimeEntries = Object.entries(bundledPackageJson.exports ?? {}).flatMap(
+    ([subpath, target]) => {
+      const runtimeTarget = typeof target === "string" ? target : target?.default;
+      if (typeof runtimeTarget !== "string" || !/\.(?:c|m)?js$/u.test(runtimeTarget)) {
+        return [];
+      }
+      const specifier = subpath === "." ? name : `${name}/${subpath.replace(/^\.\//u, "")}`;
+      return [{ specifier, entry: runtimeTarget.replace(/^\.\//u, "") }];
+    },
+  );
+  const runtimeEntries = [
+    ...exportedRuntimeEntries,
+    ...(REQUIRED_BUNDLED_RUNTIME_ENTRIES.get(name) ?? []),
+  ];
   const resolvableEntries = runtimeEntries.filter((entry) => typeof entry.specifier === "string");
   const resolutions = resolveBundledPackageSpecifiers(
     packageRoot,
@@ -480,9 +470,10 @@ for (const requiredPrefix of REQUIRED_TARBALL_ENTRY_PREFIXES) {
   }
 }
 let packageVersion = "";
+let packageJson;
 if (entrySet.has("package.json")) {
   try {
-    const packageJson = JSON.parse(readTarEntry("package.json"));
+    packageJson = JSON.parse(readTarEntry("package.json"));
     packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
     errors.push(...collectWorkspaceProtocolDependencyErrors(packageJson, "package.json"));
     errors.push(
@@ -544,6 +535,20 @@ if (!entrySet.has("npm-shrinkwrap.json")) {
     errors.push(
       ...collectWorkspaceProtocolDependencyErrors(rootPackage, "npm-shrinkwrap.json packages root"),
     );
+    const manifestDependencies = packageJson?.dependencies ?? {};
+    const shrinkwrapDependencies = rootPackage?.dependencies ?? {};
+    for (const name of new Set([
+      ...Object.keys(manifestDependencies),
+      ...Object.keys(shrinkwrapDependencies),
+    ])) {
+      const manifestSpec = manifestDependencies[name];
+      const shrinkwrapSpec = shrinkwrapDependencies[name];
+      if (shrinkwrapSpec !== manifestSpec) {
+        errors.push(
+          `npm-shrinkwrap.json root dependency ${name} spec ${shrinkwrapSpec ?? "<missing>"} must match package.json spec ${manifestSpec ?? "<missing>"}`,
+        );
+      }
+    }
     const devLockedPackages = Object.entries(shrinkwrap.packages ?? {})
       .filter(([, packageMetadata]) => packageMetadata?.dev === true)
       .map(([packagePath]) => packagePath);

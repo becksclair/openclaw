@@ -30,6 +30,7 @@ function managedPluginConfig(extra: Record<string, { enabled: boolean }> = {}) {
 function installParams(client: CodexAppServerClient) {
   return {
     client,
+    cwd: "/workspace",
     timeoutMs: 1_000,
     signal: new AbortController().signal,
   };
@@ -63,7 +64,11 @@ describe("managed native Codex plugins", () => {
         { marketplacePath, pluginName: "browser-use" },
         expect.objectContaining({ timeoutMs: 1_000 }),
       ],
-      ["config/read", { includeLayers: false }, expect.objectContaining({ timeoutMs: 1_000 })],
+      [
+        "config/read",
+        { cwd: "/workspace", includeLayers: false },
+        expect.objectContaining({ timeoutMs: 1_000 }),
+      ],
     ]);
   });
 
@@ -96,6 +101,27 @@ describe("managed native Codex plugins", () => {
 
     expect(first.request).toHaveBeenCalledTimes(3);
     expect(second.request).toHaveBeenCalledTimes(3);
+  });
+
+  it("validates project-layer owners independently for each cwd", async () => {
+    vi.stubEnv("XDG_DATA_HOME", "/data");
+    const { client, request } = createClient();
+
+    await ensureManagedNativePlugins({ ...installParams(client), cwd: "/workspace/one" });
+    await ensureManagedNativePlugins({ ...installParams(client), cwd: "/workspace/two" });
+
+    expect(request.mock.calls.filter(([method]) => method === "config/read")).toEqual([
+      [
+        "config/read",
+        { cwd: "/workspace/one", includeLayers: false },
+        expect.objectContaining({ timeoutMs: 1_000 }),
+      ],
+      [
+        "config/read",
+        { cwd: "/workspace/two", includeLayers: false },
+        expect.objectContaining({ timeoutMs: 1_000 }),
+      ],
+    ]);
   });
 
   it("fails closed when another enabled marketplace can shadow a managed owner", async () => {
