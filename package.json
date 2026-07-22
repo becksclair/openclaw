@@ -1985,6 +1985,9 @@
     "ui:install": "node scripts/ui.js install",
     "verify": "node scripts/verify.mjs"
   },
+  "bundleDependencies": [
+    "@openclaw/fs-safe"
+  ],
   "dependencies": {
     "@agentclientprotocol/sdk": "1.1.0",
     "@anthropic-ai/sdk": "0.109.1",

@@ -64,6 +64,7 @@ jobs:
           TARBALL="$PWD/${TARBALLS[0]}"
           PACKED_VERSION="$(tar -xOf "$TARBALL" package/package.json | node -e 'let s=""; process.stdin.on("data", c => s += c); process.stdin.on("end", () => process.stdout.write(JSON.parse(s).version));')"
           test "$PACKED_VERSION" = "${{ steps.version.outputs.package_version }}"
+          node scripts/check-openclaw-package-tarball.mjs "$TARBALL"
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
 
       - name: Publish to private npm registry

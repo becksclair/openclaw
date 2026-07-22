@@ -26,6 +26,50 @@ const AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
     "./internal/*": { import: "./dist/internal/*.mjs" },
   },
 });
+const FS_SAFE_RUNTIME_ENTRIES = {
+  "dist/advanced.js": "export {};\n",
+  "dist/archive.js": "export {};\n",
+  "dist/atomic.js": "export {};\n",
+  "dist/config.js": "export {};\n",
+  "dist/errors.js": "export {};\n",
+  "dist/file-lock.js": "export {};\n",
+  "dist/index.js": "export {};\n",
+  "dist/json.js": "export {};\n",
+  "dist/path.js": "export {};\n",
+  "dist/permissions-public.js": "export {};\n",
+  "dist/pinned-python.js": "export {};\n",
+  "dist/pinned-write.js": "export {};\n",
+  "dist/root.js": "export {};\n",
+  "dist/secret.js": "export {};\n",
+  "dist/secure-file.js": "export {};\n",
+  "dist/store.js": "export {};\n",
+  "dist/temp.js": "export {};\n",
+  "dist/test-hooks.js": "export {};\n",
+  "dist/walk.js": "export {};\n",
+};
+const FS_SAFE_RUNTIME_PACKAGE_JSON = JSON.stringify({
+  name: "@openclaw/fs-safe",
+  version: "0.4.1",
+  exports: {
+    ".": "./dist/index.js",
+    "./advanced": "./dist/advanced.js",
+    "./archive": "./dist/archive.js",
+    "./atomic": "./dist/atomic.js",
+    "./config": "./dist/config.js",
+    "./errors": "./dist/errors.js",
+    "./file-lock": "./dist/file-lock.js",
+    "./json": "./dist/json.js",
+    "./path": "./dist/path.js",
+    "./permissions": "./dist/permissions-public.js",
+    "./root": "./dist/root.js",
+    "./secret": "./dist/secret.js",
+    "./secure-file": "./dist/secure-file.js",
+    "./store": "./dist/store.js",
+    "./temp": "./dist/temp.js",
+    "./test-hooks": "./dist/test-hooks.js",
+    "./walk": "./dist/walk.js",
+  },
+});
 
 function withTarball(
   inventory: string[],
@@ -94,6 +138,14 @@ function withTarball(
 }
 
 describe("check-openclaw-package-tarball", () => {
+  it("keeps fs-safe bundled in the root package manifest", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      bundleDependencies?: string[];
+    };
+
+    expect(packageJson.bundleDependencies).toContain("@openclaw/fs-safe");
+  });
+
   it("prints help before touching tarball state", () => {
     const result = spawnSync("node", [CHECK_SCRIPT, "--help"], { encoding: "utf8" });
 
@@ -500,6 +552,115 @@ describe("check-openclaw-package-tarball", () => {
       },
       "2026.6.11",
       { packageJson: { dependencies: { "@openclaw/ai": "2026.6.11" } } },
+    );
+  });
+
+  it("rejects declared bundle dependencies missing from the tarball", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "declared bundle dependency @openclaw/fs-safe is missing node_modules/@openclaw/fs-safe/package.json",
+        );
+      },
+      "2026.7.1",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/fs-safe": "0.4.1" },
+          bundleDependencies: ["@openclaw/fs-safe"],
+        },
+      },
+    );
+  });
+
+  it("rejects declared bundle dependencies with incomplete runtime payloads", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/fs-safe/package.json": FS_SAFE_RUNTIME_PACKAGE_JSON,
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "bundled @openclaw/fs-safe is missing required runtime entry dist/index.js",
+        );
+      },
+      "2026.7.1",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/fs-safe": "0.4.1" },
+          bundleDependencies: ["@openclaw/fs-safe"],
+        },
+      },
+    );
+  });
+
+  it("rejects bundled dependency versions that do not match the root manifest", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/fs-safe/package.json": FS_SAFE_RUNTIME_PACKAGE_JSON.replace(
+          '"0.4.1"',
+          '"0.4.0"',
+        ),
+        ...Object.fromEntries(
+          Object.entries(FS_SAFE_RUNTIME_ENTRIES).map(([entry, body]) => [
+            `node_modules/@openclaw/fs-safe/${entry}`,
+            body,
+          ]),
+        ),
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "bundled @openclaw/fs-safe version 0.4.0 does not match dependency 0.4.1",
+        );
+      },
+      "2026.7.1",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/fs-safe": "0.4.1" },
+          bundleDependencies: ["@openclaw/fs-safe"],
+        },
+      },
+    );
+  });
+
+  it("accepts complete declared bundle dependency runtimes", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/fs-safe/package.json": FS_SAFE_RUNTIME_PACKAGE_JSON,
+        ...Object.fromEntries(
+          Object.entries(FS_SAFE_RUNTIME_ENTRIES).map(([entry, body]) => [
+            `node_modules/@openclaw/fs-safe/${entry}`,
+            body,
+          ]),
+        ),
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+      },
+      "2026.7.1",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/fs-safe": "0.4.1" },
+          bundleDependencies: ["@openclaw/fs-safe"],
+        },
+      },
     );
   });
 

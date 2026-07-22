@@ -77,7 +77,7 @@ const REQUIRED_BUNDLED_WORKSPACE_DEPENDENCIES = ["@openclaw/ai"];
 // Strict Docker artifacts bundle this private runtime rather than resolving it
 // from npm. Keep the concrete load-bearing entries explicit instead of
 // reimplementing Node's conditional package-exports resolver here.
-const REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES = new Map([
+const REQUIRED_BUNDLED_RUNTIME_ENTRIES = new Map([
   [
     "@openclaw/ai",
     [
@@ -87,6 +87,30 @@ const REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES = new Map([
         specifier: "@openclaw/ai/internal/runtime",
         entry: "dist/internal/runtime.mjs",
       },
+    ],
+  ],
+  [
+    "@openclaw/fs-safe",
+    [
+      { specifier: "@openclaw/fs-safe", entry: "dist/index.js" },
+      { specifier: "@openclaw/fs-safe/advanced", entry: "dist/advanced.js" },
+      { specifier: "@openclaw/fs-safe/archive", entry: "dist/archive.js" },
+      { specifier: "@openclaw/fs-safe/atomic", entry: "dist/atomic.js" },
+      { specifier: "@openclaw/fs-safe/config", entry: "dist/config.js" },
+      { specifier: "@openclaw/fs-safe/errors", entry: "dist/errors.js" },
+      { specifier: "@openclaw/fs-safe/file-lock", entry: "dist/file-lock.js" },
+      { specifier: "@openclaw/fs-safe/json", entry: "dist/json.js" },
+      { specifier: "@openclaw/fs-safe/path", entry: "dist/path.js" },
+      { specifier: "@openclaw/fs-safe/permissions", entry: "dist/permissions-public.js" },
+      { specifier: "@openclaw/fs-safe/root", entry: "dist/root.js" },
+      { specifier: "@openclaw/fs-safe/secret", entry: "dist/secret.js" },
+      { specifier: "@openclaw/fs-safe/secure-file", entry: "dist/secure-file.js" },
+      { specifier: "@openclaw/fs-safe/store", entry: "dist/store.js" },
+      { specifier: "@openclaw/fs-safe/temp", entry: "dist/temp.js" },
+      { specifier: "@openclaw/fs-safe/test-hooks", entry: "dist/test-hooks.js" },
+      { specifier: "@openclaw/fs-safe/walk", entry: "dist/walk.js" },
+      { entry: "dist/pinned-python.js" },
+      { entry: "dist/pinned-write.js" },
     ],
   ],
 ]);
@@ -128,6 +152,37 @@ function listBundleDependencies(packageJson) {
     : [];
 }
 
+function collectDeclaredBundleDependencyErrors(
+  packageJson,
+  entrySet,
+  files,
+  packageRoot,
+  readText,
+) {
+  const errors = [];
+  for (const name of listBundleDependencies(packageJson)) {
+    if (!entrySet.has(`node_modules/${name}/package.json`)) {
+      errors.push(
+        `declared bundle dependency ${name} is missing node_modules/${name}/package.json`,
+      );
+      continue;
+    }
+    if (REQUIRED_BUNDLED_RUNTIME_ENTRIES.has(name)) {
+      errors.push(
+        ...collectBundledPackageRuntimeErrors({
+          name,
+          expectedVersion: packageJson.dependencies?.[name],
+          entries: entrySet,
+          files,
+          packageRoot,
+          readText,
+        }),
+      );
+    }
+  }
+  return errors;
+}
+
 function resolveBundledPackageSpecifiers(packageRoot, specifiers) {
   const result = spawnSync(
     process.execPath,
@@ -157,7 +212,14 @@ process.stdout.write(JSON.stringify(resolutions));`,
   }
 }
 
-function collectBundledPackageRuntimeErrors({ name, entries, files, packageRoot, readText }) {
+function collectBundledPackageRuntimeErrors({
+  name,
+  expectedVersion,
+  entries,
+  files,
+  packageRoot,
+  readText,
+}) {
   const errors = [];
   const packagePrefix = `node_modules/${name}/`;
   const manifestPath = `${packagePrefix}package.json`;
@@ -175,10 +237,16 @@ function collectBundledPackageRuntimeErrors({ name, entries, files, packageRoot,
   if (bundledPackageJson.name !== name) {
     errors.push(`bundled ${name} package.json must name ${name}`);
   }
-  const runtimeEntries = REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES.get(name) ?? [];
+  if (typeof expectedVersion === "string" && expectedVersion !== bundledPackageJson.version) {
+    errors.push(
+      `bundled ${name} version ${bundledPackageJson.version ?? "<missing>"} does not match dependency ${expectedVersion}`,
+    );
+  }
+  const runtimeEntries = REQUIRED_BUNDLED_RUNTIME_ENTRIES.get(name) ?? [];
+  const resolvableEntries = runtimeEntries.filter((entry) => typeof entry.specifier === "string");
   const resolutions = resolveBundledPackageSpecifiers(
     packageRoot,
-    runtimeEntries.map(({ specifier }) => specifier),
+    resolvableEntries.map(({ specifier }) => specifier),
   );
   if (!resolutions) {
     errors.push(`bundled ${name} runtime specifier resolution failed`);
@@ -186,6 +254,9 @@ function collectBundledPackageRuntimeErrors({ name, entries, files, packageRoot,
   for (const { entry, specifier } of runtimeEntries) {
     if (!entries.has(`${packagePrefix}${entry}`)) {
       errors.push(`bundled ${name} is missing required runtime entry ${entry}`);
+    }
+    if (typeof specifier !== "string") {
+      continue;
     }
     const resolvedUrl = resolutions?.[specifier] ?? "";
     if (!resolvedUrl) {
@@ -242,15 +313,6 @@ function collectRequiredBundledWorkspaceDependencyErrors(
       errors.push(`package.json dependencies.${name} must be bundled in node_modules/${name}`);
       continue;
     }
-    errors.push(
-      ...collectBundledPackageRuntimeErrors({
-        name,
-        entries: entrySet,
-        files,
-        packageRoot,
-        readText,
-      }),
-    );
   }
 
   return errors;
@@ -423,6 +485,15 @@ if (entrySet.has("package.json")) {
     const packageJson = JSON.parse(readTarEntry("package.json"));
     packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
     errors.push(...collectWorkspaceProtocolDependencyErrors(packageJson, "package.json"));
+    errors.push(
+      ...collectDeclaredBundleDependencyErrors(
+        packageJson,
+        entrySet,
+        normalized,
+        extractedPackageRoot,
+        readTarEntry,
+      ),
+    );
     if (cliArgs.requireBundledWorkspaceDeps) {
       errors.push(
         ...collectRequiredBundledWorkspaceDependencyErrors(
