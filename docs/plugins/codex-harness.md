@@ -148,7 +148,6 @@ Forking is the safe coexistence path.
 | Use direct OpenAI API traffic          | Provider or model `agentRuntime.id: "openclaw"` with normal OpenAI auth          | OpenClaw model/provider config     |
 | Tune app-server behavior               | `plugins.entries.codex.config.appServer.*`                                       | Codex plugin config                |
 | Enable native Codex plugin apps        | `plugins.entries.codex.config.codexPlugins.*`                                    | Codex plugin config                |
-| Enable Codex Computer Use              | `plugins.entries.codex.config.computerUse.*`                                     | Codex plugin config                |
 
 Prefer `auth.order.openai` for subscription-first/API-key-backup ordering.
 Existing legacy Codex auth profile ids and legacy Codex auth order are
@@ -463,7 +462,6 @@ Common forms:
 - `/codex skills` lists Codex app-server skills.
 - `/codex plugins list`, `/codex plugins enable <name>`, and
   `/codex plugins disable <name>` manage configured native Codex plugins.
-- `/codex computer-use [status|install]` manages Codex Computer Use.
 - `/codex help` lists the full command tree.
 
 For most support reports, start with `/diagnostics [note]` in the
@@ -826,9 +824,10 @@ Computer Use has its own setup guide:
 [Codex Computer Use](/plugins/codex-computer-use).
 
 Short version: OpenClaw does not vendor the desktop-control app or execute
-desktop actions itself. It prepares Codex app-server, verifies that the
-`computer-use` MCP server is available, and then lets Codex own the native
-MCP tool calls during Codex-mode turns.
+desktop actions itself. It installs `computer-use@openai-bundled` from the
+fixed sky-cua marketplace before the first thread, rejects competing enabled
+owners, and then lets Codex own the native MCP tool calls during Codex-mode
+turns.
 
 ## Runtime boundaries
 
@@ -933,9 +932,10 @@ are recreated.
 or model runtime policy routes it to another harness. Plain non-OpenAI
 provider refs stay on their normal provider path in `auto` mode.
 
-**Computer Use is installed but tools do not run:** check
-`/codex computer-use status` from a fresh session. If a tool reports
-`Native hook relay unavailable`, use the native hook relay recovery above.
+**Computer Use is installed but tools do not run:** start a fresh session. If
+a tool reports `Native hook relay unavailable`, use the native hook relay
+recovery above. If startup reports a competing plugin, disable that legacy
+Codex plugin first.
 See [Codex Computer Use](/plugins/codex-computer-use#troubleshooting).
 
 ## Related

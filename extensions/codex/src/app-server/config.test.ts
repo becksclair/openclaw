@@ -7,7 +7,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_APP_SERVER_CONFIG_KEYS,
   CODEX_APP_SERVER_EXPERIMENTAL_CONFIG_KEYS,
-  CODEX_COMPUTER_USE_CONFIG_KEYS,
   CODEX_PLUGIN_ENTRY_CONFIG_KEYS,
   CODEX_PLUGINS_CONFIG_KEYS,
   canUseCodexModelBackedApprovalsReviewerForModel,
@@ -16,7 +15,6 @@ import {
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerUserHomeDir,
-  resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecModeForCodexAppServer,
   resolveOpenClawExecModeFromConfig,
@@ -1473,65 +1471,6 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(runtime.start.command).toBe("C:\\Program Files\\OpenAI Codex\\codex.exe");
   });
 
-  it("resolves Computer Use setup from plugin config and environment fallbacks", () => {
-    expect(
-      resolveCodexComputerUseConfig({
-        pluginConfig: {
-          computerUse: {
-            autoInstall: true,
-            marketplaceName: "desktop-tools",
-          },
-        },
-        env: {
-          OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_NAME: "env-fallback-plugin",
-        },
-      }),
-    ).toEqual({
-      enabled: true,
-      autoInstall: true,
-      marketplaceDiscoveryTimeoutMs: 60_000,
-      pluginName: "env-fallback-plugin",
-      mcpServerName: "computer-use",
-      marketplaceName: "desktop-tools",
-    });
-
-    expectFields(
-      resolveCodexComputerUseConfig({
-        pluginConfig: {},
-        env: {
-          OPENCLAW_CODEX_COMPUTER_USE: "1",
-          OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_SOURCE: "github:example/plugins",
-          OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL: "true",
-          OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS: "30000",
-        },
-      }),
-      "computer use config",
-      {
-        enabled: true,
-        autoInstall: true,
-        marketplaceDiscoveryTimeoutMs: 30_000,
-        marketplaceSource: "github:example/plugins",
-      },
-    );
-
-    for (const value of ["0x10", "1e3"]) {
-      expectFields(
-        resolveCodexComputerUseConfig({
-          pluginConfig: {},
-          env: {
-            OPENCLAW_CODEX_COMPUTER_USE: "1",
-            OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS: value,
-          },
-        }),
-        "computer use config",
-        {
-          enabled: true,
-          marketplaceDiscoveryTimeoutMs: 60_000,
-        },
-      );
-    }
-  });
-
   it("allows plugin config to opt in to guardian-reviewed local execution", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {
@@ -2632,7 +2571,6 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       configSchema: {
         properties: {
           appServer: { properties: Record<string, unknown> };
-          computerUse: { properties: Record<string, unknown> };
           codexPlugins: {
             properties: Record<string, unknown>;
             additionalProperties: boolean;
@@ -2659,13 +2597,6 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     ]);
     for (const key of CODEX_APP_SERVER_EXPERIMENTAL_CONFIG_KEYS) {
       expectUiHintLabel(manifest, `appServer.experimental.${key}`);
-    }
-    const computerUseManifestKeys = Object.keys(
-      manifest.configSchema.properties.computerUse.properties,
-    ).toSorted();
-    expect(computerUseManifestKeys).toEqual([...CODEX_COMPUTER_USE_CONFIG_KEYS].toSorted());
-    for (const key of CODEX_COMPUTER_USE_CONFIG_KEYS) {
-      expectUiHintLabel(manifest, `computerUse.${key}`);
     }
     const codexPluginsProperties = manifest.configSchema.properties.codexPlugins;
     const codexPluginsManifestKeys = Object.keys(codexPluginsProperties.properties).toSorted();

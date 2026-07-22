@@ -12,7 +12,6 @@ import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-
 import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
-import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import type { JsonValue } from "./app-server/protocol.js";
 import type { CodexAppServerThreadBinding } from "./app-server/session-binding.js";
@@ -352,10 +351,18 @@ describe("codex command", () => {
       "/codex plugins menu",
       "/codex permissions menu",
       "/codex fast menu",
-      "/codex computer-use menu",
       "/codex account",
       "/codex help",
     ]);
+  });
+
+  it("does not expose the retired Computer Use setup command", async () => {
+    const result = await handleCodexCommand(
+      createContext("computer-use install --source github:example/desktop-tools"),
+      { deps: createDeps() },
+    );
+
+    expectResultTextContains(result, "Unknown Codex command: computer-use");
   });
 
   it("routes /codex plugins menu to the Codex-owned plugin picker", async () => {
@@ -2263,123 +2270,6 @@ describe("codex command", () => {
 
     expect(result.text).toContain("thread-123 &lt;\uff20U123&gt;");
     expect(result.text).not.toContain("<@U123>");
-  });
-
-  it("checks Codex Computer Use setup", async () => {
-    const readCodexComputerUseStatus = vi.fn(async () => computerUseReadyStatus());
-
-    await expect(
-      handleCodexCommand(createContext("computer-use status"), {
-        deps: createDeps({ readCodexComputerUseStatus }),
-      }),
-    ).resolves.toEqual({
-      text: [
-        "Computer Use: ready",
-        "Plugin: computer-use (installed)",
-        "MCP server: computer-use (1 tools)",
-        "Marketplace: desktop-tools",
-        "Tools: list\uff3fapps",
-        "Computer Use is ready.",
-      ].join("\n"),
-    });
-    expect(readCodexComputerUseStatus).toHaveBeenCalledWith({
-      pluginConfig: undefined,
-      forceEnable: false,
-    });
-  });
-
-  it("escapes Codex Computer Use status fields before chat display", async () => {
-    const readCodexComputerUseStatus = vi.fn(async () => ({
-      ...computerUseReadyStatus(),
-      pluginName: "<@U123>",
-      mcpServerName: "computer-use [server](https://evil)",
-      marketplaceName: "desktop_tools",
-      tools: ["list_apps", "[click](https://evil)"],
-      message: "Computer Use is ready @here.",
-    }));
-
-    const result = await handleCodexCommand(createContext("computer-use status"), {
-      deps: createDeps({ readCodexComputerUseStatus }),
-    });
-
-    expect(result.text).toContain("Plugin: &lt;\uff20U123&gt; (installed)");
-    expect(result.text).toContain(
-      "MCP server: computer-use \uff3bserver\uff3d\uff08https://evil\uff09 (2 tools)",
-    );
-    expect(result.text).toContain("Marketplace: desktop\uff3ftools");
-    expect(result.text).toContain(
-      "Tools: list\uff3fapps, \uff3bclick\uff3d\uff08https://evil\uff09",
-    );
-    expect(result.text).toContain("Computer Use is ready \uff20here.");
-    expect(result.text).not.toContain("<@U123>");
-    expect(result.text).not.toContain("[click](https://evil)");
-    expect(result.text).not.toContain("@here");
-  });
-
-  it("formats disabled installed Codex Computer Use plugins", async () => {
-    const readCodexComputerUseStatus = vi.fn(async () => ({
-      ...computerUseReadyStatus(),
-      ready: false,
-      reason: "plugin_disabled" as const,
-      pluginEnabled: false,
-      mcpServerAvailable: false,
-      tools: [],
-      message:
-        "Computer Use is installed, but the computer-use plugin is disabled. Run /codex computer-use install or enable computerUse.autoInstall to re-enable it.",
-    }));
-
-    const result = await handleCodexCommand(createContext("computer-use status"), {
-      deps: createDeps({ readCodexComputerUseStatus }),
-    });
-
-    expectResultTextContains(result, "Plugin: computer-use (installed, disabled)");
-  });
-
-  it("installs Codex Computer Use from command overrides", async () => {
-    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
-
-    const result = await handleCodexCommand(
-      createContext(
-        "computer-use install --source github:example/desktop-tools --marketplace desktop-tools",
-      ),
-      {
-        deps: createDeps({ installCodexComputerUse }),
-      },
-    );
-
-    expectResultTextContains(result, "Computer Use: ready");
-    expect(installCodexComputerUse).toHaveBeenCalledWith({
-      pluginConfig: undefined,
-      forceEnable: true,
-      overrides: {
-        marketplaceSource: "github:example/desktop-tools",
-        marketplaceName: "desktop-tools",
-      },
-    });
-  });
-
-  it("shows help when Computer Use option values are missing", async () => {
-    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
-
-    const result = await handleCodexCommand(createContext("computer-use install --source"), {
-      deps: createDeps({ installCodexComputerUse }),
-    });
-
-    expectResultTextContains(result, "Usage: /codex computer-use");
-    expect(installCodexComputerUse).not.toHaveBeenCalled();
-  });
-
-  it("rejects ambiguous Computer Use actions before setup checks", async () => {
-    const readCodexComputerUseStatus = vi.fn(async () => computerUseReadyStatus());
-    const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
-
-    const result = await handleCodexCommand(createContext("computer-use status install"), {
-      deps: createDeps({ readCodexComputerUseStatus, installCodexComputerUse }),
-    });
-
-    expectResultTextContains(result, "Usage: /codex computer-use");
-    expect(readCodexComputerUseStatus).not.toHaveBeenCalled();
-    expect(installCodexComputerUse).not.toHaveBeenCalled();
   });
 
   it("explains compaction when no Codex thread is attached", async () => {
@@ -4647,19 +4537,3 @@ describe("codex command", () => {
     expect(result.text).not.toContain("[trusted](https://evil)");
   });
 });
-
-function computerUseReadyStatus(): CodexComputerUseStatus {
-  return {
-    enabled: true,
-    ready: true,
-    reason: "ready",
-    installed: true,
-    pluginEnabled: true,
-    mcpServerAvailable: true,
-    pluginName: "computer-use",
-    mcpServerName: "computer-use",
-    marketplaceName: "desktop-tools",
-    tools: ["list_apps"],
-    message: "Computer Use is ready.",
-  };
-}

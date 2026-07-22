@@ -7,12 +7,7 @@ import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
-import {
-  installCodexComputerUse,
-  readCodexComputerUseStatus,
-  type CodexComputerUseSetupParams,
-} from "./app-server/computer-use.js";
-import { isCodexFastServiceTier, type CodexComputerUseConfig } from "./app-server/config.js";
+import { isCodexFastServiceTier } from "./app-server/config.js";
 import { listAllCodexAppServerModels } from "./app-server/models.js";
 import { assertCodexThreadResumeResponse } from "./app-server/protocol-validators.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
@@ -33,7 +28,6 @@ import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command
 import {
   buildHelp,
   formatAccount,
-  formatComputerUseStatus,
   formatCodexDisplayText,
   formatCodexStatus,
   formatList,
@@ -88,8 +82,6 @@ export type CodexCommandDeps = {
   readCodexStatusProbes: typeof readCodexStatusProbes;
   requestOptions: typeof requestOptions;
   safeCodexControlRequest: SafeCodexControlRequestFn;
-  readCodexComputerUseStatus: typeof readCodexComputerUseStatus;
-  installCodexComputerUse: typeof installCodexComputerUse;
   resolveCodexDefaultWorkspaceDir: typeof resolveCodexDefaultWorkspaceDir;
   readCodexConversationActiveTurn: typeof readCodexConversationActiveTurn;
   setCodexConversationFastMode: typeof setCodexConversationFastMode;
@@ -133,8 +125,6 @@ const defaultCodexCommandDeps: Omit<CodexCommandDeps, "bindingStore"> = {
   readCodexStatusProbes,
   requestOptions,
   safeCodexControlRequest,
-  readCodexComputerUseStatus,
-  installCodexComputerUse,
   resolveCodexDefaultWorkspaceDir,
   readCodexConversationActiveTurn,
   setCodexConversationFastMode,
@@ -155,13 +145,6 @@ type ParsedBindArgs = {
   cwd?: string;
   model?: string;
   provider?: string;
-  help?: boolean;
-};
-
-type ParsedComputerUseArgs = {
-  action: "status" | "install";
-  overrides: Partial<CodexComputerUseConfig>;
-  hasOverrides: boolean;
   help?: boolean;
 };
 
@@ -266,7 +249,6 @@ function buildCodexSubcommandPickerReply(): PluginCommandResult {
     { label: "plugins", command: "/codex plugins menu" },
     { label: "permissions", command: "/codex permissions menu" },
     { label: "fast", command: "/codex fast menu" },
-    { label: "computer-use", command: "/codex computer-use menu" },
     { label: "account", command: "/codex account" },
     { label: "help", command: "/codex help" },
   ];
@@ -278,7 +260,7 @@ function buildCodexSubcommandPickerReply(): PluginCommandResult {
     "",
     "Tap 'help' (or type /codex help) for the full list of typeable verbs",
     "including threads, mcp, binding, detach, skills, resume, bind, steer,",
-    "model, diagnostics, compact, review, computer-use.",
+    "model, diagnostics, compact, review.",
     "",
     "Top-level shortcuts cover everyday operations: /status, /fast, /help, /stop, /models.",
   ];
@@ -336,35 +318,6 @@ function buildCodexPermissionsMenuReply(): PluginCommandResult {
     presentation: buildCodexCommandPickerPresentation(
       "Codex permissions",
       "Pick a Codex permissions mode:",
-      buttons,
-    ),
-  };
-}
-
-/** Sub-picker for `/codex computer-use menu` (status / install). */
-function buildCodexComputerUseMenuReply(): PluginCommandResult {
-  const actions = ["status", "install"] as const;
-  const buttons: CodexCommandPickerButton[] = [
-    ...actions.map((action) => ({
-      label: action,
-      command: `/codex computer-use ${action}`,
-    })),
-    { label: "back", command: "/codex" },
-  ];
-  const fallbackTextLines = [
-    "Codex computer-use. Pick one or type /codex computer-use <action>:",
-    "",
-    ...actions.map((a, i) => `  ${i + 1}. /codex computer-use ${a}`),
-    "",
-    "Flag-driven invocations (--source, --marketplace-path, --marketplace) are not in the picker. Type '/codex computer-use' or read '/codex help' for the full surface.",
-    "",
-    "Type '/codex' to go back to the main menu.",
-  ];
-  return {
-    text: fallbackTextLines.join("\n"),
-    presentation: buildCodexCommandPickerPresentation(
-      "Codex computer-use",
-      "Pick a Codex computer-use action:",
       buttons,
     ),
   };
@@ -498,14 +451,6 @@ export async function handleCodexSubcommand(
       rest.join(" "),
       "/codex diagnostics",
     );
-  }
-  if (normalized === "computer-use" || normalized === "computeruse") {
-    if (isMenuVerb(rest)) {
-      return buildCodexComputerUseMenuReply();
-    }
-    return {
-      text: await handleComputerUseCommand(deps, ctx, options.pluginConfig, rest),
-    };
   }
   if (normalized === "mcp") {
     if (rest.length > 0) {
@@ -650,33 +595,6 @@ function returnsBeforeNativeCodexResume(args: readonly string[]): boolean {
     return !normalizedThreadId || parsed.bindHere !== true;
   }
   return !normalizedThreadId || args.length !== 1;
-}
-
-async function handleComputerUseCommand(
-  deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
-  pluginConfig: unknown,
-  args: string[],
-): Promise<string> {
-  const parsed = parseComputerUseArgs(args);
-  if (parsed.help) {
-    return [
-      "Usage: /codex computer-use [status|install] [--source <marketplace-source>] [--marketplace-path <path>] [--marketplace <name>]",
-      "Checks or installs the configured Codex Computer Use plugin through app-server.",
-    ].join("\n");
-  }
-  if (parsed.action === "install" && !canMutateCodexHost(ctx)) {
-    return "Only an owner or operator.admin gateway client can configure Codex Computer Use.";
-  }
-  const params: CodexComputerUseSetupParams = {
-    pluginConfig,
-    forceEnable: parsed.action === "install" || parsed.hasOverrides,
-    ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),
-  };
-  if (parsed.action === "install") {
-    return formatComputerUseStatus(await deps.installCodexComputerUse(params));
-  }
-  return formatComputerUseStatus(await deps.readCodexComputerUseStatus(params));
 }
 
 async function bindConversation(
@@ -2309,85 +2227,6 @@ function parseResumeArgs(args: string[]): ParsedResumeArgs {
   return parsed;
 }
 
-function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
-  const parsed: ParsedComputerUseArgs = {
-    action: "status",
-    overrides: {},
-    hasOverrides: false,
-  };
-  let sawAction = false;
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (arg === "--help" || arg === "-h") {
-      parsed.help = true;
-      continue;
-    }
-    if (arg === "status" || arg === "install") {
-      if (sawAction) {
-        parsed.help = true;
-        continue;
-      }
-      sawAction = true;
-      parsed.action = arg;
-      continue;
-    }
-    if (arg === "--source" || arg === "--marketplace-source") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.marketplaceSource !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.overrides.marketplaceSource = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--marketplace-path" || arg === "--path") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.marketplacePath !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.overrides.marketplacePath = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--marketplace") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.marketplaceName !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.overrides.marketplaceName = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--plugin") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.pluginName !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.overrides.pluginName = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--server" || arg === "--mcp-server") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.mcpServerName !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.overrides.mcpServerName = value;
-      index += 1;
-      continue;
-    }
-    parsed.help = true;
-  }
-  parsed.overrides = normalizeComputerUseStringOverrides(parsed.overrides);
-  parsed.hasOverrides = Object.values(parsed.overrides).some(Boolean);
-  return parsed;
-}
-
 function readRequiredOptionValue(args: string[], index: number): string | undefined {
   const value = args[index + 1];
   const normalized = value?.trim();
@@ -2395,31 +2234,4 @@ function readRequiredOptionValue(args: string[], index: number): string | undefi
     return undefined;
   }
   return value;
-}
-
-function normalizeComputerUseStringOverrides(
-  overrides: Partial<CodexComputerUseConfig>,
-): Partial<CodexComputerUseConfig> {
-  const normalized: Partial<CodexComputerUseConfig> = {};
-  const marketplaceSource = normalizeOptionalString(overrides.marketplaceSource);
-  if (marketplaceSource) {
-    normalized.marketplaceSource = marketplaceSource;
-  }
-  const marketplacePath = normalizeOptionalString(overrides.marketplacePath);
-  if (marketplacePath) {
-    normalized.marketplacePath = marketplacePath;
-  }
-  const marketplaceName = normalizeOptionalString(overrides.marketplaceName);
-  if (marketplaceName) {
-    normalized.marketplaceName = marketplaceName;
-  }
-  const pluginName = normalizeOptionalString(overrides.pluginName);
-  if (pluginName) {
-    normalized.pluginName = pluginName;
-  }
-  const mcpServerName = normalizeOptionalString(overrides.mcpServerName);
-  if (mcpServerName) {
-    normalized.mcpServerName = mcpServerName;
-  }
-  return normalized;
 }

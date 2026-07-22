@@ -1,8 +1,10 @@
 import os from "node:os";
 import path from "node:path";
 import type { CodexAppServerClient } from "./client.js";
+import { isJsonObject } from "./protocol.js";
 
 const MANAGED_PLUGIN_NAMES = ["computer-use", "browser-use"] as const;
+const MANAGED_PLUGIN_IDS = new Set(MANAGED_PLUGIN_NAMES.map((name) => `${name}@openai-bundled`));
 const MARKETPLACE_MANIFEST_RELATIVE_PATH = path.join(
   "sky-cua",
   "codex",
@@ -82,6 +84,41 @@ async function installManagedNativePlugins(params: {
       "plugin/install",
       { marketplacePath, pluginName },
       { timeoutMs: params.timeoutMs, signal: params.signal },
+    );
+  }
+
+  const configRead = await params.client.request(
+    "config/read",
+    { includeLayers: false },
+    { timeoutMs: params.timeoutMs, signal: params.signal },
+  );
+  const config =
+    isJsonObject(configRead) && isJsonObject(configRead.config) ? configRead.config : {};
+  const plugins = isJsonObject(config.plugins) ? config.plugins : undefined;
+  const canonicalOwnersEnabled = [...MANAGED_PLUGIN_IDS].every((pluginId) => {
+    const plugin = plugins?.[pluginId];
+    return isJsonObject(plugin) && plugin.enabled === true;
+  });
+  if (!plugins || !canonicalOwnersEnabled) {
+    throw new Error(
+      "Codex did not report the fixed Computer/Browser Use plugins as enabled after installation.",
+    );
+  }
+  const conflicts = Object.entries(plugins)
+    .filter(([pluginId, plugin]) => {
+      const pluginName = pluginId.split("@", 1)[0];
+      return (
+        isJsonObject(plugin) &&
+        plugin.enabled === true &&
+        MANAGED_PLUGIN_NAMES.includes(pluginName as (typeof MANAGED_PLUGIN_NAMES)[number]) &&
+        !MANAGED_PLUGIN_IDS.has(pluginId)
+      );
+    })
+    .map(([pluginId]) => pluginId)
+    .toSorted();
+  if (conflicts.length > 0) {
+    throw new Error(
+      `Conflicting native Codex plugins are enabled: ${conflicts.join(", ")}. Disable them so computer-use@openai-bundled and browser-use@openai-bundled remain the sole managed owners.`,
     );
   }
 }

@@ -2,7 +2,6 @@
  * Formats Codex command responses for safe chat display, including status,
  * lists, account summaries, and user-facing help text.
  */
-import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
 import {
@@ -160,36 +159,6 @@ function formatAccountAuthOverview(overview: CodexAccountAuthOverview): string {
 
 function formatAuthRowStatus(row: CodexAccountAuthOverview["rows"][number]): string {
   return row.billingNote ? `${row.status} · ${row.billingNote}` : row.status;
-}
-
-/** Formats Codex Computer Use readiness and plugin/MCP availability. */
-export function formatComputerUseStatus(status: CodexComputerUseStatus): string {
-  const lines = [
-    `Computer Use: ${status.ready ? "ready" : status.enabled ? "not ready" : "disabled"}`,
-  ];
-  lines.push(
-    `Plugin: ${formatCodexDisplayText(status.pluginName)} (${computerUsePluginState(status)})`,
-  );
-  lines.push(
-    `MCP server: ${formatCodexDisplayText(status.mcpServerName)}${
-      status.mcpServerAvailable ? ` (${status.tools.length} tools)` : " (unavailable)"
-    }`,
-  );
-  if (status.marketplaceName) {
-    lines.push(`Marketplace: ${formatCodexDisplayText(status.marketplaceName)}`);
-  }
-  if (status.tools.length > 0) {
-    lines.push(`Tools: ${status.tools.slice(0, 8).map(formatCodexDisplayText).join(", ")}`);
-  }
-  lines.push(formatCodexDisplayText(status.message));
-  return lines.join("\n");
-}
-
-function computerUsePluginState(status: CodexComputerUseStatus): string {
-  if (!status.installed) {
-    return "not installed";
-  }
-  return status.pluginEnabled ? "installed" : "installed, disabled";
 }
 
 /** Formats generic array-like Codex app-server responses. */
@@ -373,7 +342,6 @@ export function buildHelp(): string {
     "- /codex compact",
     "- /codex review",
     "- /codex diagnostics [note]",
-    "- /codex computer-use [status|install]",
     "- /codex account",
     "- /codex mcp",
     "- /codex skills",

@@ -39,6 +39,10 @@ function hasRetiredOnFailureApprovalPolicy(value: unknown): boolean {
   return asRecord(value)?.approvalPolicy === "on-failure";
 }
 
+function hasRetiredComputerUseConfig(value: unknown): boolean {
+  return Object.hasOwn(asRecord(value) ?? {}, "computerUse");
+}
+
 /** Legacy Codex config keys that doctor should report or repair. */
 export const legacyConfigRules: LegacyConfigRule[] = [
   {
@@ -59,6 +63,12 @@ export const legacyConfigRules: LegacyConfigRule[] = [
       'plugins.entries.codex.config.appServer.approvalPolicy="on-failure" was retired by Codex 0.143; use "on-request". Run "openclaw doctor --fix".',
     match: hasRetiredOnFailureApprovalPolicy,
   },
+  {
+    path: ["plugins", "entries", "codex", "config"],
+    message:
+      'plugins.entries.codex.config.computerUse is retired; sky-cua Computer/Browser Use plugins are installed from the fixed managed marketplace. Run "openclaw doctor --fix".',
+    match: hasRetiredComputerUseConfig,
+  },
 ];
 
 /**
@@ -76,11 +86,13 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     rawPluginConfig !== null && hasRetiredDynamicToolsProfile(rawPluginConfig);
   const shouldRewriteDestructivePolicy = hasLegacyPluginDestructivePolicy(rawCodexPlugins);
   const shouldRewriteApprovalPolicy = hasRetiredOnFailureApprovalPolicy(rawAppServer);
+  const shouldRemoveComputerUse = hasRetiredComputerUseConfig(rawPluginConfig);
   if (
     !rawPluginConfig ||
     (!shouldRemoveDynamicToolsProfile &&
       !shouldRewriteDestructivePolicy &&
-      !shouldRewriteApprovalPolicy)
+      !shouldRewriteApprovalPolicy &&
+      !shouldRemoveComputerUse)
   ) {
     return { config: cfg, changes: [] };
   }
@@ -101,6 +113,13 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     delete nextPluginConfig.codexDynamicToolsProfile;
     changes.push(
       "Removed retired plugins.entries.codex.config.codexDynamicToolsProfile; Codex app-server always keeps Codex-native workspace tools native.",
+    );
+  }
+
+  if (shouldRemoveComputerUse) {
+    delete nextPluginConfig.computerUse;
+    changes.push(
+      "Removed retired plugins.entries.codex.config.computerUse; sky-cua Computer/Browser Use plugins use the fixed managed marketplace.",
     );
   }
 

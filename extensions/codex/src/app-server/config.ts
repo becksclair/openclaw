@@ -76,28 +76,6 @@ export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto" | "as
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
 
-export type CodexComputerUseConfig = {
-  enabled?: boolean;
-  autoInstall?: boolean;
-  marketplaceDiscoveryTimeoutMs?: number;
-  marketplaceSource?: string;
-  marketplacePath?: string;
-  marketplaceName?: string;
-  pluginName?: string;
-  mcpServerName?: string;
-};
-
-export type ResolvedCodexComputerUseConfig = {
-  enabled: boolean;
-  autoInstall: boolean;
-  marketplaceDiscoveryTimeoutMs: number;
-  pluginName: string;
-  mcpServerName: string;
-  marketplaceSource?: string;
-  marketplacePath?: string;
-  marketplaceName?: string;
-};
-
 export type CodexPluginEntryConfig = {
   enabled?: boolean;
   marketplaceName?: string;
@@ -210,7 +188,6 @@ export type CodexPluginConfig = {
     enabled?: boolean;
     timeoutMs?: number;
   };
-  computerUse?: CodexComputerUseConfig;
   codexPlugins?: CodexPluginsConfig;
   appServer?: {
     mode?: CodexAppServerPolicyMode;
@@ -273,17 +250,6 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
 
 export const CODEX_APP_SERVER_EXPERIMENTAL_CONFIG_KEYS = ["sandboxExecServer"] as const;
 
-export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
-  "enabled",
-  "autoInstall",
-  "marketplaceDiscoveryTimeoutMs",
-  "marketplaceSource",
-  "marketplacePath",
-  "marketplaceName",
-  "pluginName",
-  "mcpServerName",
-] as const;
-
 export const CODEX_PLUGINS_CONFIG_KEYS = [
   "enabled",
   "allow_all_plugins",
@@ -298,9 +264,6 @@ export const CODEX_PLUGIN_ENTRY_CONFIG_KEYS = [
   "allow_destructive_actions",
 ] as const;
 
-const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
-const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
-const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
 const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network";
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
@@ -382,19 +345,6 @@ const codexPluginConfigSchema = z
       .object({
         enabled: z.boolean().optional(),
         timeoutMs: z.number().positive().optional(),
-      })
-      .strict()
-      .optional(),
-    computerUse: z
-      .object({
-        enabled: z.boolean().optional(),
-        autoInstall: z.boolean().optional(),
-        marketplaceDiscoveryTimeoutMs: z.number().positive().optional(),
-        marketplaceSource: z.string().optional(),
-        marketplacePath: z.string().optional(),
-        marketplaceName: z.string().optional(),
-        pluginName: z.string().optional(),
-        mcpServerName: z.string().optional(),
       })
       .strict()
       .optional(),
@@ -825,64 +775,6 @@ export function resolveCodexModelBackedReviewerPolicyContext(params: {
   return {
     modelProvider: params.nativeAuthProfile === true ? "openai" : undefined,
     model: params.model ?? params.bindingModel,
-  };
-}
-
-export function resolveCodexComputerUseConfig(
-  params: {
-    pluginConfig?: unknown;
-    env?: NodeJS.ProcessEnv;
-    overrides?: Partial<CodexComputerUseConfig>;
-  } = {},
-): ResolvedCodexComputerUseConfig {
-  const env = params.env ?? process.env;
-  const config = readCodexPluginConfig(params.pluginConfig).computerUse ?? {};
-  const marketplaceSource =
-    readNonEmptyString(params.overrides?.marketplaceSource) ??
-    readNonEmptyString(config.marketplaceSource) ??
-    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_SOURCE);
-  const marketplacePath =
-    readNonEmptyString(params.overrides?.marketplacePath) ??
-    readNonEmptyString(config.marketplacePath) ??
-    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_PATH);
-  const marketplaceName =
-    readNonEmptyString(params.overrides?.marketplaceName) ??
-    readNonEmptyString(config.marketplaceName) ??
-    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_NAME);
-  const autoInstall =
-    params.overrides?.autoInstall ??
-    config.autoInstall ??
-    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL) ??
-    false;
-  const marketplaceDiscoveryTimeoutMs = normalizePositiveNumber(
-    params.overrides?.marketplaceDiscoveryTimeoutMs ??
-      config.marketplaceDiscoveryTimeoutMs ??
-      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS),
-    DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS,
-  );
-  const enabled =
-    params.overrides?.enabled ??
-    config.enabled ??
-    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE) ??
-    Boolean(autoInstall || marketplaceSource || marketplacePath || marketplaceName);
-
-  return {
-    enabled,
-    autoInstall,
-    marketplaceDiscoveryTimeoutMs,
-    pluginName:
-      readNonEmptyString(params.overrides?.pluginName) ??
-      readNonEmptyString(config.pluginName) ??
-      readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_NAME) ??
-      DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME,
-    mcpServerName:
-      readNonEmptyString(params.overrides?.mcpServerName) ??
-      readNonEmptyString(config.mcpServerName) ??
-      readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MCP_SERVER_NAME) ??
-      DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME,
-    ...(marketplaceSource ? { marketplaceSource } : {}),
-    ...(marketplacePath ? { marketplacePath } : {}),
-    ...(marketplaceName ? { marketplaceName } : {}),
   };
 }
 

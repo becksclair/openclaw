@@ -180,6 +180,11 @@ describe("codex doctor contract", () => {
     expect(legacyConfigRules[2]?.match({ approvalPolicy: "on-request" })).toBe(false);
   });
 
+  it("reports the retired Computer Use config", () => {
+    expect(legacyConfigRules[3]?.match({ computerUse: { autoInstall: true } })).toBe(true);
+    expect(legacyConfigRules[3]?.match({ appServer: { mode: "guardian" } })).toBe(false);
+  });
+
   it("removes the retired dynamic tools profile without dropping other Codex config", () => {
     const original = {
       plugins: {
@@ -208,6 +213,35 @@ describe("codex doctor contract", () => {
       appServer: { mode: "guardian" },
     });
     expect(original.plugins.entries.codex.config).toHaveProperty("codexDynamicToolsProfile");
+  });
+
+  it("removes retired Computer Use config without dropping sibling Codex config", () => {
+    const original = {
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              computerUse: {
+                autoInstall: true,
+                marketplacePath: "/legacy/marketplace.json",
+              },
+              appServer: { mode: "guardian" },
+            },
+          },
+        },
+      },
+    };
+
+    const result = normalizeCompatibilityConfig({ cfg: original });
+
+    expect(result.changes).toEqual([
+      "Removed retired plugins.entries.codex.config.computerUse; sky-cua Computer/Browser Use plugins use the fixed managed marketplace.",
+    ]);
+    expect(result.config.plugins?.entries?.codex?.config).toEqual({
+      appServer: { mode: "guardian" },
+    });
+    expect(original.plugins.entries.codex.config).toHaveProperty("computerUse");
   });
 
   it("imports and archives shipped binding sidecars", async () => {

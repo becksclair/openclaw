@@ -5,16 +5,14 @@ read_when:
   - You want Codex-mode OpenClaw agents to use Codex Computer Use
   - You are deciding between Codex Computer Use, PeekabooBridge, and direct cua-driver MCP
   - You are deciding between Codex Computer Use and a direct cua-driver MCP setup
-  - You are configuring computerUse for the bundled Codex plugin
-  - You are troubleshooting /codex computer-use status or install
+  - You are troubleshooting the managed Codex Computer Use plugin
 ---
 
 Computer Use is a Codex-native MCP plugin for local desktop control. OpenClaw
 does not vendor the desktop app, execute desktop actions itself, or bypass
-Codex permissions. The bundled `codex` plugin only prepares Codex app-server:
-it enables Codex plugin support, finds or installs the configured Computer Use
-plugin, checks that the `computer-use` MCP server is available, and then lets
-Codex own the native MCP tool calls during Codex-mode turns.
+Codex permissions. The bundled `codex` plugin installs the fixed sky-cua
+Computer Use plugin before the first app-server thread, then lets Codex own
+the native MCP tool calls during Codex-mode turns.
 
 Use this page when OpenClaw is already using the native Codex harness. For the
 runtime setup itself, see [Codex harness](/plugins/codex-harness).
@@ -76,44 +74,10 @@ driver's safety model.
 
 ## Quick setup
 
-Set `plugins.entries.codex.config.computerUse` when Codex-mode turns must have
-Computer Use available before a thread starts. `autoInstall: true` opts
-Computer Use in and lets OpenClaw install or re-enable it before the turn:
-
-```json5
-{
-  plugins: {
-    entries: {
-      codex: {
-        enabled: true,
-        config: {
-          computerUse: {
-            autoInstall: true,
-          },
-        },
-      },
-    },
-  },
-  agents: {
-    defaults: {
-      model: "openai/gpt-5.5",
-    },
-  },
-}
-```
-
-With this config, OpenClaw checks Codex app-server before each Codex-mode
-turn. If Computer Use is missing but Codex app-server has already discovered
-an installable marketplace, OpenClaw asks Codex app-server to install or
-re-enable the plugin and reload MCP servers. On macOS, when no matching
-marketplace is registered and the standard Codex app bundle exists, OpenClaw
-also tries to register the bundled Codex marketplace from
-`/Applications/Codex.app/Contents/Resources/plugins/openai-bundled` before it
-fails. If setup still cannot make the MCP server available, the turn fails
-before the thread starts.
-
-After changing Computer Use config, use `/new` or `/reset` in the affected
-chat before testing if an existing Codex thread has already started.
+Install sky-cua into its fixed data root and enable the bundled `codex` plugin.
+OpenClaw installs Computer Use and Browser Use from that marketplace before
+the first Codex thread for each app-server client. Start a new Codex thread or
+restart the app-server client after replacing the sky-cua installation.
 
 On macOS managed stdio startup, OpenClaw prefers the signed desktop Codex app
 bundle at `/Applications/Codex.app/Contents/Resources/codex` when it exists.
@@ -126,150 +90,25 @@ instead of letting a stale desktop app shadow the plugin-local fallback.
 Explicit `appServer.command` config or `OPENCLAW_CODEX_APP_SERVER_BIN` still
 overrides this managed selection.
 
-## Commands
+## Managed Codex installation
 
-Use the `/codex computer-use` commands from any chat surface where the
-`codex` plugin command surface is available. These are OpenClaw chat/runtime
-commands, not `openclaw codex ...` CLI subcommands:
-
-```text
-/codex computer-use status
-/codex computer-use install
-/codex computer-use install --source <marketplace-source>
-/codex computer-use install --marketplace-path <path>
-/codex computer-use install --marketplace <name>
-```
-
-`status` is the default action and is read-only: it does not add marketplace
-sources, install plugins, or enable Codex plugin support. If no config opts
-Computer Use in, `status` can report disabled even after a one-off install
-command.
-
-`install` enables Codex app-server plugin support, optionally adds a
-configured marketplace source, installs or re-enables the configured plugin
-through Codex app-server, reloads MCP servers, and verifies that the MCP
-server exposes tools. Because installation changes trusted host resources,
-only an owner or an `operator.admin` Gateway client can run `install`. Other
-authorized senders can continue to use the read-only `status` command,
-including with overrides.
-
-## Marketplace choices
-
-OpenClaw uses the same app-server API that Codex itself exposes. The
-marketplace fields choose where Codex should find `computer-use`.
-
-| Field                | Use when                                                        | Install support                                          |
-| -------------------- | --------------------------------------------------------------- | -------------------------------------------------------- |
-| No marketplace field | You want Codex app-server to use marketplaces it already knows. | Yes, when app-server returns a local marketplace.        |
-| `marketplaceSource`  | You have a Codex marketplace source app-server can add.         | Yes, for explicit `/codex computer-use install`.         |
-| `marketplacePath`    | You already know the local marketplace file path on the host.   | Yes, for explicit install and turn-start auto-install.   |
-| `marketplaceName`    | You want to select one already registered marketplace by name.  | Yes only when the selected marketplace has a local path. |
-
-Fresh Codex homes may need a short moment to seed their official
-marketplaces. During install, OpenClaw polls `plugin/list` for up to
-`marketplaceDiscoveryTimeoutMs` milliseconds (default 60 seconds).
-
-If multiple known marketplaces contain Computer Use, OpenClaw prefers
-`openai-bundled`, then `openai-curated`, then `local`. Unknown ambiguous
-matches fail closed and ask you to set `marketplaceName` or
-`marketplacePath`.
-
-## Bundled macOS marketplace
-
-Recent Codex desktop builds bundle Computer Use here:
+OpenClaw installs Computer Use automatically before the first native Codex
+thread for each app-server client. It uses the fixed sky-cua marketplace:
 
 ```text
-/Applications/Codex.app/Contents/Resources/plugins/openai-bundled/plugins/computer-use
+${XDG_DATA_HOME:-~/.local/share}/sky-cua/codex/openai-bundled/.agents/plugins/marketplace.json
 ```
 
-When `computerUse.autoInstall` is true and no marketplace containing
-`computer-use` is registered, OpenClaw tries to add the standard bundled
-marketplace root automatically:
-
-```text
-/Applications/Codex.app/Contents/Resources/plugins/openai-bundled
-```
-
-You can also register it explicitly from a shell with Codex:
-
-```bash
-codex plugin marketplace add /Applications/Codex.app/Contents/Resources/plugins/openai-bundled
-```
-
-If you use a nonstandard Codex app path, run `/codex computer-use install
---source <marketplace-root>` once, or set `computerUse.marketplacePath` to a
-local marketplace file path. Use `--marketplace-path` only when you have the
-marketplace JSON file path, not the bundled marketplace root.
-
-## Remote catalog limit
-
-Codex app-server can list and read remote-only catalog entries, but it does
-not currently support remote `plugin/install`. That means `marketplaceName`
-can select a remote-only marketplace for status checks, but installs and
-re-enables still need a local marketplace via `marketplaceSource` or
-`marketplacePath`.
-
-If status says the plugin is available in a remote Codex marketplace but
-remote install is unsupported, run install with a local source or path:
-
-```text
-/codex computer-use install --source <marketplace-source>
-/codex computer-use install --marketplace-path <path>
-```
-
-## Configuration reference
-
-| Field                           | Default        | Meaning                                                                        |
-| ------------------------------- | -------------- | ------------------------------------------------------------------------------ |
-| `enabled`                       | inferred       | Require Computer Use. Defaults to true when another Computer Use field is set. |
-| `autoInstall`                   | false          | Install or re-enable from already discovered marketplaces at turn start.       |
-| `marketplaceDiscoveryTimeoutMs` | 60000          | How long install waits for Codex app-server marketplace discovery.             |
-| `marketplaceSource`             | unset          | Source string passed to Codex app-server `marketplace/add`.                    |
-| `marketplacePath`               | unset          | Local Codex marketplace file path containing the plugin.                       |
-| `marketplaceName`               | unset          | Registered Codex marketplace name to select.                                   |
-| `pluginName`                    | `computer-use` | Codex marketplace plugin name.                                                 |
-| `mcpServerName`                 | `computer-use` | MCP server name exposed by the installed plugin.                               |
-
-Turn-start auto-install intentionally refuses configured `marketplaceSource`
-values. Adding a new source is an explicit setup operation, so use
-`/codex computer-use install --source <marketplace-source>` once, then let
-`autoInstall` handle future re-enables from discovered local marketplaces.
-Turn-start auto-install can use a configured `marketplacePath`, because that
-is already a local path on the host.
-
-Each field also accepts an environment variable override, checked when the
-matching config key is unset:
-
-| Field                           | Env var                                                        |
-| ------------------------------- | -------------------------------------------------------------- |
-| `enabled`                       | `OPENCLAW_CODEX_COMPUTER_USE`                                  |
-| `autoInstall`                   | `OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL`                     |
-| `marketplaceDiscoveryTimeoutMs` | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS` |
-| `marketplaceSource`             | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_SOURCE`               |
-| `marketplacePath`               | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_PATH`                 |
-| `marketplaceName`               | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_NAME`                 |
-| `pluginName`                    | `OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_NAME`                      |
-| `mcpServerName`                 | `OPENCLAW_CODEX_COMPUTER_USE_MCP_SERVER_NAME`                  |
+There is no `/codex computer-use` install or status command and no marketplace
+override. OpenClaw installs `computer-use@openai-bundled`, then verifies the
+effective Codex configured-plugin map so no enabled `computer-use@*` entry
+from another marketplace can shadow it. A conflict fails the thread
+explicitly; disable the legacy Codex plugin before retrying.
 
 ## What OpenClaw checks
 
-OpenClaw reports a stable setup reason internally and formats the
-user-facing status for chat:
-
-| Reason                       | Meaning                                                | Next step                                     |
-| ---------------------------- | ------------------------------------------------------ | --------------------------------------------- |
-| `disabled`                   | `computerUse.enabled` resolved to false.               | Set `enabled` or another Computer Use field.  |
-| `marketplace_missing`        | No matching marketplace was available.                 | Configure source, path, or marketplace name.  |
-| `plugin_not_installed`       | Marketplace exists, but the plugin is not installed.   | Run install or enable `autoInstall`.          |
-| `plugin_disabled`            | Plugin is installed but disabled in Codex config.      | Run install to re-enable it.                  |
-| `remote_install_unsupported` | Selected marketplace is remote-only.                   | Use `marketplaceSource` or `marketplacePath`. |
-| `mcp_missing`                | Plugin is enabled, but the MCP server is unavailable.  | Check Codex Computer Use and OS permissions.  |
-| `ready`                      | Plugin and MCP tools are available.                    | Start the Codex-mode turn.                    |
-| `check_failed`               | A Codex app-server request failed during status check. | Check app-server connectivity and logs.       |
-| `auto_install_blocked`       | Turn-start setup would need to add a new source.       | Run explicit install first.                   |
-
-The chat output includes the plugin state, MCP server state, marketplace,
-tools when available, and the specific message for the failing setup step.
+OpenClaw fails the first thread if the fixed install fails or another enabled
+Computer Use plugin could shadow `computer-use@openai-bundled`.
 
 ## macOS permissions
 
@@ -285,36 +124,25 @@ Computer Use setup first:
 - macOS has granted the required permissions for the desktop-control app.
 - The current host session can access the desktop being controlled.
 
-OpenClaw intentionally fails closed when `computerUse.enabled` is true. A
-Codex-mode turn should not silently proceed without the native desktop tools
-that the config required.
+OpenClaw intentionally fails closed before a Codex-mode turn can proceed
+without the managed native desktop tools.
 
 ## Troubleshooting
 
-**Status says not installed.** Run `/codex computer-use install`. If the
-marketplace is not discovered, pass `--source` or `--marketplace-path`.
+**The managed install fails.** Verify that sky-cua is installed at the fixed
+data root and that its marketplace manifest exists. Restart the Codex
+app-server client after repairing the producer installation so OpenClaw runs
+the managed installs again.
 
-**Status says installed but disabled.** Run `/codex computer-use install`
-again. Codex app-server install writes the plugin config back to enabled.
-
-**Status says remote install is unsupported.** Use a local marketplace
-source or path. Remote-only catalog entries can be inspected but not
-installed through the current app-server API.
-
-**Status says the MCP server is unavailable.** Re-run install once so MCP
-servers reload. If it remains unavailable, fix the Codex Computer Use app,
-Codex app-server MCP status, or macOS permissions.
+**A conflicting plugin is enabled.** Disable the reported legacy
+`computer-use@<marketplace>` entry in Codex config. OpenClaw does not
+automatically uninstall Codex plugins.
 
 **Status or a probe times out on `computer-use.list_apps`.** The plugin and
 MCP server are present, but the local Computer Use bridge did not answer.
 Quit or restart Codex Computer Use, relaunch Codex Desktop if needed, then
-retry in a fresh OpenClaw session. If the host previously ran Computer Use
-through an older managed Codex app-server, refresh the installed plugin from
-the desktop bundled marketplace:
-
-```text
-/codex computer-use install --source /Applications/Codex.app/Contents/Resources/plugins/openai-bundled
-```
+retry in a fresh OpenClaw session. Restart the Codex app-server client to
+refresh the plugin from the fixed sky-cua marketplace.
 
 **A Computer Use tool says `Native hook relay unavailable`.** The
 Codex-native tool hook could not reach an active OpenClaw relay through the
@@ -323,11 +151,6 @@ or `/reset`. If it works once and then fails again on a later tool call,
 `/new` is only clearing the current attempt; restart the Codex app-server or
 OpenClaw Gateway so old threads and hook registrations are dropped, then
 retry in a fresh session.
-
-**Turn-start auto-install refuses a source.** This is intentional. Add the
-source with explicit `/codex computer-use install --source
-<marketplace-source>` first, then future turn-start auto-install can use the
-discovered local marketplace.
 
 ## Related
 
