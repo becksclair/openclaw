@@ -27,19 +27,7 @@ type CodexUserMcpServersProjectionOptions = {
   agentId?: string;
 };
 
-const MANAGED_CODEX_PLUGIN_MCP_SERVERS = new Set(["computer-use"]);
-const CODEX_PLUGIN_OWNED_GLOBAL_MCP_SERVERS = new Set(["node_repl"]);
-
-function assertNoManagedCodexPluginMcpCollisions(serverNames: Iterable<string>): void {
-  const collisions = [...serverNames]
-    .filter((name) => MANAGED_CODEX_PLUGIN_MCP_SERVERS.has(name))
-    .toSorted();
-  if (collisions.length > 0) {
-    throw new Error(
-      `Codex MCP config collides with managed native plugins: remove ${collisions.join(", ")} from standalone MCP configuration`,
-    );
-  }
-}
+const CODEX_PLUGIN_OWNED_MCP_SERVERS = new Set(["computer-use", "node_repl"]);
 
 function normalizeAgentIds(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -76,13 +64,12 @@ export function injectCodexMcpConfigArgs(
   args: string[] | undefined,
   config: BundleMcpConfig,
 ): string[] {
-  assertNoManagedCodexPluginMcpCollisions(Object.keys(config.mcpServers));
-  // node_repl remains a global OpenClaw MCP, but browser-use owns the sole
-  // Codex instance. Projecting the global entry would create two MCP owners.
+  // These remain valid global OpenClaw MCPs, but native plugins own the Codex
+  // instances. Codex config MCPs would otherwise override the plugin servers.
   const codexConfig = {
     mcpServers: Object.fromEntries(
       Object.entries(config.mcpServers).filter(
-        ([name]) => !CODEX_PLUGIN_OWNED_GLOBAL_MCP_SERVERS.has(name),
+        ([name]) => !CODEX_PLUGIN_OWNED_MCP_SERVERS.has(name),
       ),
     ),
   };
@@ -108,9 +95,6 @@ export function buildCodexUserMcpServersThreadConfigPatch(
 ): { mcp_servers: CodexThreadConfigObject } | undefined {
   const userServers = normalizeConfiguredMcpServers(cfg?.mcp?.servers);
   const entries = Object.entries(userServers);
-  assertNoManagedCodexPluginMcpCollisions(
-    entries.filter(([, server]) => server.enabled !== false).map(([name]) => name),
-  );
   if (entries.length === 0) {
     return undefined;
   }
@@ -119,7 +103,7 @@ export function buildCodexUserMcpServersThreadConfigPatch(
     if (server.enabled === false) {
       continue;
     }
-    if (CODEX_PLUGIN_OWNED_GLOBAL_MCP_SERVERS.has(name)) {
+    if (CODEX_PLUGIN_OWNED_MCP_SERVERS.has(name)) {
       continue;
     }
     if (!isCodexMcpServerAllowedForAgent(server as BundleMcpServerConfig, options)) {

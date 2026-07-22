@@ -326,11 +326,8 @@ export async function startCodexAttemptThread(params: {
             });
             await (params.managedNativePluginsReconciler ?? ensureManagedNativePlugins)({
               client: activeStartupClient,
-              agentDir: params.agentDir,
               timeoutMs: params.appServer.requestTimeoutMs,
               signal: startupAbandonController.signal,
-              cwd: startupExecutionCwd,
-              bundleMcpThreadConfig: params.bundleMcpThreadConfig.configPatch,
             });
             const startupSandboxPolicy = startupSandboxEnvironment
               ? resolveCodexExternalSandboxPolicyForOpenClawSandbox(params.sandbox)

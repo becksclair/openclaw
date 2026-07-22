@@ -7,23 +7,12 @@ import {
 } from "./bundle-mcp-codex.js";
 
 describe("buildCodexUserMcpServersThreadConfigPatch", () => {
-  it("rejects standalone computer-use config owned by a managed native plugin", () => {
-    expect(() =>
-      buildCodexUserMcpServersThreadConfigPatch({
-        mcp: {
-          servers: {
-            "computer-use": { transport: "stdio", command: "computer-use" },
-          },
-        },
-      } as unknown as OpenClawConfig),
-    ).toThrow("Codex MCP config collides with managed native plugins");
-  });
-
-  it("filters global node_repl while preserving other app-server MCP servers", () => {
+  it("filters plugin-owned MCPs while preserving other app-server MCP servers", () => {
     const patch = buildCodexUserMcpServersThreadConfigPatch({
       mcp: {
         servers: {
           node_repl: { transport: "stdio", command: "node-repl" },
+          "computer-use": { transport: "stdio", command: "computer-use" },
           outlook: { transport: "stdio", command: "outlook-mcp" },
         },
       },
@@ -34,15 +23,17 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
     });
   });
 
-  it("filters global node_repl from Codex CLI MCP overrides", () => {
+  it("filters plugin-owned MCPs from Codex CLI MCP overrides", () => {
     const args = injectCodexMcpConfigArgs([], {
       mcpServers: {
         node_repl: { command: "node-repl" },
+        "computer-use": { command: "computer-use" },
         outlook: { command: "outlook-mcp" },
       },
     });
 
     expect(args.join(" ")).not.toContain("node_repl");
+    expect(args.join(" ")).not.toContain("computer-use");
     expect(args.join(" ")).toContain("outlook");
   });
 

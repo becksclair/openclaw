@@ -454,10 +454,8 @@ async function resolveThreadBindingRuntime(
   try {
     await ensureManagedNativePlugins({
       client,
-      agentDir: params.agentDir,
       timeoutMs: runtime.requestTimeoutMs,
       signal: AbortSignal.timeout(runtime.requestTimeoutMs),
-      cwd: params.workspaceDir,
     });
   } catch (error) {
     releaseLeasedSharedCodexAppServerClient(client);
@@ -736,10 +734,8 @@ async function runBoundTurn(params: {
     if (networkProxyBindingChanged) {
       await ensureManagedNativePlugins({
         client,
-        agentDir: params.data.agentDir,
         timeoutMs: runtime.requestTimeoutMs,
         signal: AbortSignal.timeout(runtime.requestTimeoutMs),
-        cwd: workspaceDir,
       });
       const response = assertCodexThreadStartResponse(
         await client.request(

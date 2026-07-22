@@ -1,177 +1,57 @@
-import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { z } from "zod";
 import type { CodexAppServerClient } from "./client.js";
 
-const MARKETPLACE_NAME = "openai-bundled";
-const RESOLVER_COMMAND = "sky-cua-release";
-const RESOLVER_MAX_OUTPUT_BYTES = 1024 * 1024;
-const SHA256_RE = /^[0-9a-f]{64}$/;
+const MANAGED_PLUGIN_NAMES = ["computer-use", "browser-use"] as const;
+const MARKETPLACE_MANIFEST_RELATIVE_PATH = path.join(
+  "sky-cua",
+  "codex",
+  "openai-bundled",
+  ".agents",
+  "plugins",
+  "marketplace.json",
+);
 
-const expectedPlugins = [
-  {
-    id: "computer-use@openai-bundled",
-    name: "computer-use",
-    version: "0.1.0-sky-cua",
-    mcpServers: ["computer-use"],
-  },
-  {
-    id: "browser-use@openai-bundled",
-    name: "browser-use",
-    version: "1.0.0-sky-cua-openclaw",
-    mcpServers: ["node_repl"],
-  },
-] as const;
+type ManagedNativePluginInstallState = {
+  installByClient: WeakMap<CodexAppServerClient, Promise<void>>;
+};
 
-const pluginSchema = z
-  .object({
-    id: z.string(),
-    name: z.string(),
-    version: z.string(),
-    path: z.string(),
-    tree_sha256: z.string().regex(SHA256_RE),
-    mcp_servers: z.array(z.string()),
-  })
-  .strict();
+const MANAGED_NATIVE_PLUGIN_INSTALL_STATE = Symbol.for(
+  "openclaw.codexManagedNativePluginInstallState",
+);
 
-const activeRuntimeSchema = z
-  .object({
-    status: z.literal("ok"),
-    runtime: z
-      .object({
-        schema_version: z.literal(1),
-        release_id: z.string().min(1),
-        manifest_sha256: z.string().regex(SHA256_RE),
-        release_root: z.string(),
-        manifest_path: z.string(),
-        node_path: z.string(),
-        node_repl_path: z.string(),
-        node_module_dirs: z.array(z.string()),
-        browser_client_path: z.string(),
-        trusted_browser_client_sha256s: z.array(z.string().regex(SHA256_RE)).min(1),
-        codex_marketplace: z
-          .object({
-            name: z.literal(MARKETPLACE_NAME),
-            path: z.string(),
-            manifest_path: z.string(),
-            manifest_sha256: z.string().regex(SHA256_RE),
-            plugins: z.array(pluginSchema).length(expectedPlugins.length),
-          })
-          .strict(),
-      })
-      .strict(),
-  })
-  .strict();
-
-type ManagedPlugin = z.infer<typeof pluginSchema>;
-type ActiveRuntime = z.infer<typeof activeRuntimeSchema>["runtime"];
-
-type PluginReadResponse = {
-  plugin?: {
-    marketplaceName?: unknown;
-    marketplacePath?: unknown;
-    summary?: {
-      id?: unknown;
-      version?: unknown;
-      localVersion?: unknown;
-      name?: unknown;
-      installed?: unknown;
-      enabled?: unknown;
-    };
-    mcpServers?: unknown;
+function getManagedNativePluginInstallState(): ManagedNativePluginInstallState {
+  const globalState = globalThis as typeof globalThis & {
+    [MANAGED_NATIVE_PLUGIN_INSTALL_STATE]?: ManagedNativePluginInstallState;
   };
-};
+  globalState[MANAGED_NATIVE_PLUGIN_INSTALL_STATE] ??= {
+    installByClient: new WeakMap(),
+  };
+  return globalState[MANAGED_NATIVE_PLUGIN_INSTALL_STATE];
+}
 
-type PluginInstalledResponse = {
-  marketplaces?: Array<{
-    name?: unknown;
-    path?: unknown;
-    plugins?: Array<{
-      id?: unknown;
-      name?: unknown;
-      version?: unknown;
-      localVersion?: unknown;
-      source?: unknown;
-      installed?: unknown;
-      enabled?: unknown;
-    }>;
-  }>;
-  marketplaceLoadErrors?: unknown;
-};
-
-type McpServerStatusListResponse = {
-  data?: Array<{ name?: unknown; serverInfo?: unknown }>;
-  nextCursor?: unknown;
-};
-
-type ConfigReadResponse = {
-  config?: unknown;
-};
-
-type ReconcileDependencies = {
-  resolveActive?: (signal: AbortSignal) => Promise<unknown>;
-  hashTree?: (root: string) => Promise<string>;
-};
-
-type ReconcileState = {
-  key: string;
-  promise: Promise<void>;
-};
-
-let reconcileByClient = new WeakMap<CodexAppServerClient, Map<string, ReconcileState>>();
-const reconcileTailByCodexHome = new Map<string, Promise<void>>();
-
+/** Installs the fixed sky-cua marketplace plugins before the client's first thread. */
 export async function ensureManagedNativePlugins(params: {
   client: CodexAppServerClient;
-  agentDir?: string;
   timeoutMs: number;
   signal: AbortSignal;
-  cwd: string;
-  bundleMcpThreadConfig?: unknown;
-  dependencies?: ReconcileDependencies;
 }): Promise<void> {
-  assertNoStandaloneMcpCollisions(params.bundleMcpThreadConfig);
-  const codexHome = resolveManagedCodexHome(params.client, params.agentDir);
-  const runtime = validateActiveRuntime(
-    await (params.dependencies?.resolveActive ?? resolveActiveSkyCuaRelease)(params.signal),
-  );
-  await assertNoClientMcpCollisions(params);
-  const key = `${runtime.release_id}:${runtime.codex_marketplace.manifest_sha256}`;
-  const clientStates = reconcileByClient.get(params.client) ?? new Map<string, ReconcileState>();
-  reconcileByClient.set(params.client, clientStates);
-  const current = clientStates.get(codexHome);
-  if (current?.key === key) {
-    await current.promise;
-    await assertNoEnabledPluginMcpCollisions(params);
-    await requireManagedMcpServers(params);
+  const { installByClient } = getManagedNativePluginInstallState();
+  const current = installByClient.get(params.client);
+  if (current) {
+    await current;
     return;
   }
 
-  // Serialize release rollovers per Codex home so two active generations never
-  // replace the same cache roots concurrently.
-  const waitForCurrent =
-    reconcileTailByCodexHome.get(codexHome)?.catch(() => undefined) ?? Promise.resolve();
-  const promise = waitForCurrent.then(async () => {
-    await reconcileManagedPlugins({
-      client: params.client,
-      codexHome,
-      runtime,
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-      hashTree: params.dependencies?.hashTree ?? canonicalTreeSha256,
-    });
-    await assertNoEnabledPluginMcpCollisions(params);
-    await requireManagedMcpServers(params);
-  });
-  clientStates.set(codexHome, { key, promise });
-  reconcileTailByCodexHome.set(codexHome, promise);
+  // One app-server client can race several first-thread starts. Codex mutates
+  // one plugin cache/config, so share the install sequence for that client.
+  const install = installManagedNativePlugins(params);
+  installByClient.set(params.client, install);
   try {
-    await promise;
+    await install;
   } catch (error) {
-    if (clientStates.get(codexHome)?.promise === promise) {
-      clientStates.delete(codexHome);
+    if (installByClient.get(params.client) === install) {
+      installByClient.delete(params.client);
     }
     throw error;
   }
@@ -180,553 +60,50 @@ export async function ensureManagedNativePlugins(params: {
 /** Disables the managed plugin MCPs for Codex threads that prohibit MCP use. */
 export function buildManagedNativeMcpDisableConfig(): Record<string, unknown> {
   return {
-    plugins: Object.fromEntries(
-      expectedPlugins.map((plugin) => [
-        plugin.id,
-        {
-          mcp_servers: Object.fromEntries(
-            plugin.mcpServers.map((serverName) => [serverName, { enabled: false }]),
-          ),
-        },
-      ]),
-    ),
+    plugins: {
+      "computer-use@openai-bundled": {
+        mcp_servers: { "computer-use": { enabled: false } },
+      },
+      "browser-use@openai-bundled": {
+        mcp_servers: { node_repl: { enabled: false } },
+      },
+    },
   };
 }
 
-function resolveManagedCodexHome(
-  client: CodexAppServerClient,
-  agentDir: string | undefined,
-): string {
-  const expected = agentDir ? path.join(path.resolve(agentDir), "codex-home") : undefined;
-  const reported = client.getRuntimeIdentity?.()?.codexHome;
-  const resolvedReported = reported ? path.resolve(reported) : undefined;
-  // Runtime identity is authoritative for supported user/custom home scopes;
-  // the agent-local path is only the default when the client cannot report it.
-  const codexHome = resolvedReported ?? expected;
-  if (!codexHome) {
-    throw new Error("managed native plugins require an isolated Codex home");
-  }
-  return codexHome;
-}
-
-function validateActiveRuntime(value: unknown): ActiveRuntime {
-  const parsed = activeRuntimeSchema.parse(value).runtime;
-  const marketplace = parsed.codex_marketplace;
-  const marketplaceRoot = requireAbsolutePath(marketplace.path, "marketplace path");
-  const manifestPath = requireAbsolutePath(marketplace.manifest_path, "marketplace manifest path");
-  const expectedManifestPath = path.join(marketplaceRoot, ".agents", "plugins", "marketplace.json");
-  if (manifestPath !== expectedManifestPath) {
-    throw new Error(`sky-cua Codex marketplace manifest path mismatch: ${manifestPath}`);
-  }
-  for (const [index, expected] of expectedPlugins.entries()) {
-    const plugin = marketplace.plugins[index];
-    if (!plugin || !matchesExpectedPlugin(plugin, expected)) {
-      throw new Error(`sky-cua Codex plugin contract mismatch: ${expected.id}`);
-    }
-    const expectedPath = path.join(marketplaceRoot, "plugins", expected.name);
-    if (requireAbsolutePath(plugin.path, `${expected.id} path`) !== expectedPath) {
-      throw new Error(`sky-cua Codex plugin path mismatch: ${expected.id}`);
-    }
-  }
-  return parsed;
-}
-
-function matchesExpectedPlugin(
-  plugin: ManagedPlugin,
-  expected: (typeof expectedPlugins)[number],
-): boolean {
-  return (
-    plugin.id === expected.id &&
-    plugin.name === expected.name &&
-    plugin.version === expected.version &&
-    equalStringArrays(plugin.mcp_servers, expected.mcpServers)
-  );
-}
-
-async function reconcileManagedPlugins(params: {
+async function installManagedNativePlugins(params: {
   client: CodexAppServerClient;
-  codexHome: string;
-  runtime: ActiveRuntime;
   timeoutMs: number;
   signal: AbortSignal;
-  hashTree: (root: string) => Promise<string>;
 }): Promise<void> {
-  const marketplace = params.runtime.codex_marketplace;
-  for (const expected of expectedPlugins) {
-    const contract = marketplace.plugins.find((plugin) => plugin.id === expected.id);
-    if (!contract) {
-      throw new Error(`sky-cua Codex plugin contract is incomplete: ${expected.id}`);
-    }
+  const marketplacePath = resolveSkyCuaMarketplaceManifestPath();
+  for (const pluginName of MANAGED_PLUGIN_NAMES) {
     await params.client.request(
       "plugin/install",
-      { marketplacePath: marketplace.manifest_path, pluginName: expected.name },
+      { marketplacePath, pluginName },
       { timeoutMs: params.timeoutMs, signal: params.signal },
     );
-    const response = await params.client.request<PluginReadResponse>(
-      "plugin/read",
-      { marketplacePath: marketplace.manifest_path, pluginName: expected.name },
-      { timeoutMs: params.timeoutMs, signal: params.signal },
-    );
-    assertInstalledPlugin(response, marketplace.manifest_path, expected);
-    const installedRoot = path.join(
-      params.codexHome,
-      "plugins",
-      "cache",
-      MARKETPLACE_NAME,
-      expected.name,
-      expected.version,
-    );
-    const installedSha256 = await params.hashTree(installedRoot);
-    if (installedSha256 !== contract.tree_sha256) {
-      throw new Error(
-        `managed Codex plugin tree mismatch: ${expected.id} expected ${contract.tree_sha256} got ${installedSha256}`,
-      );
-    }
   }
 }
 
-async function assertNoClientMcpCollisions(params: {
-  client: CodexAppServerClient;
-  cwd: string;
-  timeoutMs: number;
-  signal: AbortSignal;
-}): Promise<void> {
-  const configResponse = await params.client.request<ConfigReadResponse>(
-    "config/read",
-    { includeLayers: false, cwd: params.cwd },
-    { timeoutMs: params.timeoutMs, signal: params.signal },
-  );
-  assertNoEffectiveMcpCollisions(configResponse.config);
-}
-
-async function assertNoEnabledPluginMcpCollisions(params: {
-  client: CodexAppServerClient;
-  cwd: string;
-  timeoutMs: number;
-  signal: AbortSignal;
-}): Promise<void> {
-  const response = await params.client.request<PluginInstalledResponse>(
-    "plugin/installed",
-    { cwds: [params.cwd] },
-    { timeoutMs: params.timeoutMs, signal: params.signal },
-  );
-  if (
-    !Array.isArray(response.marketplaces) ||
-    !Array.isArray(response.marketplaceLoadErrors) ||
-    response.marketplaceLoadErrors.length > 0
-  ) {
-    throw new Error("managed Codex installed plugin inventory is incomplete");
-  }
-
-  for (const marketplace of response.marketplaces) {
-    if (
-      typeof marketplace.name !== "string" ||
-      (marketplace.path !== null && typeof marketplace.path !== "string") ||
-      !Array.isArray(marketplace.plugins)
-    ) {
-      throw new Error("managed Codex installed plugin inventory is invalid");
-    }
-    for (const summary of marketplace.plugins) {
-      if (summary.enabled !== true) {
-        continue;
-      }
-      if (typeof summary.id !== "string" || typeof summary.name !== "string") {
-        throw new Error("managed Codex installed plugin summary is invalid");
-      }
-      // Inventory may retain its configured marketplace path after direct read/hash
-      // verifies the active source, so logical marketplace/id/name identify self here.
-      const isManagedPlugin =
-        marketplace.name === MARKETPLACE_NAME &&
-        expectedPlugins.some((plugin) => plugin.id === summary.id && plugin.name === summary.name);
-      if (isManagedPlugin) {
-        continue;
-      }
-      const mcpServers =
-        typeof marketplace.path === "string"
-          ? await readMarketplacePluginMcpServers(
-              params,
-              marketplace.path,
-              summary.name,
-              summary.id,
-            )
-          : await readRemotePluginMcpServers(
-              resolveManagedCodexHome(params.client, undefined),
-              marketplace.name,
-              summary,
-            );
-      const collisions = expectedPlugins
-        .flatMap((plugin) => plugin.mcpServers)
-        .filter((serverName) => mcpServers.includes(serverName));
-      if (collisions.length > 0) {
-        throw new Error(
-          `managed Codex plugin MCP collision: ${summary.id} also owns ${collisions.toSorted().join(", ")}`,
-        );
-      }
-    }
-  }
-}
-
-async function readMarketplacePluginMcpServers(
-  params: {
-    client: CodexAppServerClient;
-    timeoutMs: number;
-    signal: AbortSignal;
-  },
-  marketplacePath: string,
-  pluginName: string,
-  pluginId: string,
-): Promise<string[]> {
-  const pluginResponse = await params.client.request<PluginReadResponse>(
-    "plugin/read",
-    { marketplacePath, pluginName },
-    { timeoutMs: params.timeoutMs, signal: params.signal },
-  );
-  const mcpServers = pluginResponse.plugin?.mcpServers;
-  if (!Array.isArray(mcpServers) || !mcpServers.every((name) => typeof name === "string")) {
-    throw new Error(`managed Codex plugin MCP inventory is invalid: ${pluginId}`);
-  }
-  return mcpServers;
-}
-
-async function readRemotePluginMcpServers(
-  codexHome: string,
-  marketplaceName: string,
-  summary: {
-    id?: unknown;
-    name?: unknown;
-    version?: unknown;
-    localVersion?: unknown;
-    source?: unknown;
-    installed?: unknown;
-  },
-): Promise<string[]> {
-  if (
-    typeof summary.id !== "string" ||
-    typeof summary.name !== "string" ||
-    summary.id !== `${summary.name}@${marketplaceName}` ||
-    summary.installed !== true ||
-    !isPathSegment(marketplaceName) ||
-    !isPathSegment(summary.name) ||
-    !isRemotePluginSource(summary.source)
-  ) {
-    throw new Error(`managed Codex remote plugin inventory is invalid: ${summary.id}`);
-  }
-  const pluginBaseRoot = path.join(codexHome, "plugins", "cache", marketplaceName, summary.name);
-  const { pluginRoot, version } = await resolveOnlyRemoteVersionRoot(pluginBaseRoot, summary.id);
-  const manifest = await readPluginManifest(pluginRoot, summary.id);
-  if (manifest.name !== summary.name || manifest.version !== version) {
-    throw new Error(`managed Codex remote plugin manifest identity is invalid: ${summary.id}`);
-  }
-  const declaredMcpServers = manifest.mcpServers;
-  if (
-    declaredMcpServers &&
-    typeof declaredMcpServers === "object" &&
-    !Array.isArray(declaredMcpServers)
-  ) {
-    return Object.keys(declaredMcpServers);
-  }
-  const configPath =
-    typeof declaredMcpServers === "string"
-      ? resolvePluginPath(pluginRoot, declaredMcpServers, summary.id)
-      : path.join(pluginRoot, ".mcp.json");
-  if (declaredMcpServers == null) {
-    try {
-      await fs.access(configPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return [];
-      }
-      throw error;
-    }
-  } else if (typeof declaredMcpServers !== "string") {
-    throw new Error(`managed Codex remote plugin manifest is invalid: ${summary.id}`);
-  }
-  const config = await readJsonObject(configPath, `remote plugin MCP config: ${summary.id}`);
-  const servers = config.mcpServers;
-  if (!servers || typeof servers !== "object" || Array.isArray(servers)) {
-    throw new Error(`managed Codex remote plugin MCP inventory is invalid: ${summary.id}`);
-  }
-  return Object.keys(servers);
-}
-
-async function resolveOnlyRemoteVersionRoot(
-  pluginBaseRoot: string,
-  pluginId: string,
-): Promise<{ pluginRoot: string; version: string }> {
-  let versions: string[];
-  try {
-    versions = (await fs.readdir(pluginBaseRoot, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-  } catch (error) {
-    throw new Error(`managed Codex remote plugin cache is unreadable: ${pluginId}`, {
-      cause: error,
-    });
-  }
-  // Codex atomically replaces the entire plugin base root on install. The sole
-  // version directory is authoritative when remote inventory versions drift.
-  const version = versions[0];
-  if (versions.length !== 1 || !version || !isPathSegment(version)) {
-    throw new Error(`managed Codex remote plugin cache version is ambiguous: ${pluginId}`);
-  }
-  return { pluginRoot: path.join(pluginBaseRoot, version), version };
-}
-
-async function readPluginManifest(
-  pluginRoot: string,
-  pluginId: string,
-): Promise<Record<string, unknown>> {
-  for (const relativePath of [
-    ".codex-plugin/plugin.json",
-    ".claude-plugin/plugin.json",
-    ".cursor-plugin/plugin.json",
-  ]) {
-    try {
-      return await readJsonObject(
-        path.join(pluginRoot, relativePath),
-        `remote plugin manifest: ${pluginId}`,
-      );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    }
-  }
-  throw new Error(`managed Codex remote plugin manifest is missing: ${pluginId}`);
-}
-
-async function readJsonObject(filePath: string, label: string): Promise<Record<string, unknown>> {
-  let value: unknown;
-  try {
-    value = JSON.parse(await fs.readFile(filePath, "utf8"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw error;
-    }
-    throw new Error(`managed Codex ${label} is unreadable`, { cause: error });
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`managed Codex ${label} is invalid`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function resolvePluginPath(pluginRoot: string, relativePath: string, pluginId: string): string {
-  if (!relativePath.startsWith("./")) {
-    throw new Error(`managed Codex remote plugin MCP path is invalid: ${pluginId}`);
-  }
-  const resolved = path.resolve(pluginRoot, relativePath);
-  if (!resolved.startsWith(`${pluginRoot}${path.sep}`)) {
-    throw new Error(`managed Codex remote plugin MCP path escapes its root: ${pluginId}`);
-  }
-  return resolved;
-}
-
-function isPathSegment(value: string): boolean {
-  return value !== "." && value !== ".." && path.basename(value) === value;
-}
-
-function isRemotePluginSource(value: unknown): boolean {
-  return Boolean(
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    (value as Record<string, unknown>).type === "remote",
-  );
-}
-
-function assertNoEffectiveMcpCollisions(config: unknown): void {
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    throw new Error("managed Codex config/read response is invalid");
-  }
-  assertNoStandaloneMcpCollisions(config);
-}
-
-async function requireManagedMcpServers(params: {
-  client: CodexAppServerClient;
-  timeoutMs: number;
-  signal: AbortSignal;
-}): Promise<void> {
-  const ready = new Set<string>();
-  let cursor: string | null = null;
-  do {
-    const response: McpServerStatusListResponse =
-      await params.client.request<McpServerStatusListResponse>(
-        "mcpServerStatus/list",
-        { cursor, limit: 100, detail: "toolsAndAuthOnly" },
-        { timeoutMs: params.timeoutMs, signal: params.signal },
-      );
-    if (!Array.isArray(response.data)) {
-      throw new Error("managed Codex MCP status response is invalid");
-    }
-    for (const status of response.data) {
-      if (typeof status.name === "string" && status.serverInfo != null) {
-        ready.add(status.name);
-      }
-    }
-    if (response.nextCursor !== null && typeof response.nextCursor !== "string") {
-      throw new Error("managed Codex MCP status cursor is invalid");
-    }
-    cursor = response.nextCursor;
-  } while (cursor !== null);
-  const missing = expectedPlugins
-    .flatMap((plugin) => plugin.mcpServers)
-    .filter((serverName) => !ready.has(serverName));
-  if (missing.length > 0) {
-    throw new Error(`managed Codex MCP server startup failed: ${missing.join(", ")}`);
-  }
-}
-
-function assertInstalledPlugin(
-  response: PluginReadResponse,
-  manifestPath: string,
-  expected: (typeof expectedPlugins)[number],
-): void {
-  const plugin = response.plugin;
-  const summary = plugin?.summary;
-  if (
-    plugin?.marketplaceName !== MARKETPLACE_NAME ||
-    plugin.marketplacePath !== manifestPath ||
-    summary?.id !== expected.id ||
-    summary.name !== expected.name ||
-    summary.version !== null ||
-    summary.localVersion !== expected.version ||
-    summary.installed !== true ||
-    summary.enabled !== true ||
-    !Array.isArray(plugin.mcpServers) ||
-    !equalStringArrays(plugin.mcpServers, expected.mcpServers)
-  ) {
-    throw new Error(`managed Codex plugin verification failed: ${expected.id}`);
-  }
-}
-
-function assertNoStandaloneMcpCollisions(config: unknown): void {
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    return;
-  }
-  const mcpServers = (config as Record<string, unknown>).mcp_servers;
-  if (!mcpServers || typeof mcpServers !== "object" || Array.isArray(mcpServers)) {
-    return;
-  }
-  const collisions = expectedPlugins
-    .flatMap((plugin) => plugin.mcpServers)
-    .filter((serverName) => Object.hasOwn(mcpServers, serverName));
-  if (collisions.length > 0) {
-    throw new Error(
-      `managed Codex plugin MCP collision: remove standalone ${collisions.toSorted().join(", ")} configuration`,
-    );
-  }
-}
-
-async function resolveActiveSkyCuaRelease(signal: AbortSignal): Promise<unknown> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(RESOLVER_COMMAND, ["resolve-active"], {
-      stdio: ["ignore", "pipe", "pipe"],
-      signal,
-    });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let outputBytes = 0;
-    const collect = (chunks: Buffer[], chunk: Buffer) => {
-      outputBytes += chunk.length;
-      if (outputBytes > RESOLVER_MAX_OUTPUT_BYTES) {
-        child.kill();
-        reject(new Error("sky-cua-release resolve-active output exceeded 1 MiB"));
-        return;
-      }
-      chunks.push(chunk);
-    };
-    child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
-    child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
-    child.once("error", reject);
-    child.once("close", (code) => {
-      if (code !== 0) {
-        reject(
-          new Error(
-            `sky-cua-release resolve-active failed (${code ?? "signal"}): ${Buffer.concat(stderr).toString("utf8").trim()}`,
-          ),
-        );
-        return;
-      }
-      try {
-        resolve(JSON.parse(Buffer.concat(stdout).toString("utf8")));
-      } catch (error) {
-        reject(new Error("sky-cua-release resolve-active returned invalid JSON", { cause: error }));
-      }
-    });
-  });
-}
-
-type TreeEntry =
-  | { mode: number; path: string; type: "directory" }
-  | { mode: number; path: string; sha256: string; size: number; type: "file" };
-
-async function canonicalTreeSha256(root: string): Promise<string> {
-  const rootStat = await fs.lstat(root);
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-    throw new Error(`managed Codex plugin cache root is not a real directory: ${root}`);
-  }
-  const entries: TreeEntry[] = [];
-  await collectTreeEntries(root, root, entries);
-  entries.sort((left, right) => compareUnicodeCodePoints(left.path, right.path));
-  return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
-}
-
-async function collectTreeEntries(root: string, directory: string, entries: TreeEntry[]) {
-  for (const name of await fs.readdir(directory)) {
-    const absolute = path.join(directory, name);
-    const relative = path.relative(root, absolute).split(path.sep).join("/");
-    const stat = await fs.lstat(absolute);
-    if (stat.isSymbolicLink()) {
-      throw new Error(`managed Codex plugin cache contains a symlink: ${relative}`);
-    }
-    const mode = stat.mode & 0o7777;
-    if (stat.isDirectory()) {
-      entries.push({ mode, path: relative, type: "directory" });
-      await collectTreeEntries(root, absolute, entries);
-      continue;
-    }
-    if (stat.isFile()) {
-      const content = await fs.readFile(absolute);
-      entries.push({
-        mode,
-        path: relative,
-        sha256: createHash("sha256").update(content).digest("hex"),
-        size: stat.size,
-        type: "file",
-      });
-      continue;
-    }
-    throw new Error(`managed Codex plugin cache contains a special file: ${relative}`);
-  }
-}
-
-function requireAbsolutePath(value: string, field: string): string {
-  if (!path.isAbsolute(value) || path.normalize(value) !== value) {
-    throw new Error(`sky-cua ${field} must be a normalized absolute path`);
-  }
-  return value;
-}
-
-function equalStringArrays(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-function compareUnicodeCodePoints(left: string, right: string): number {
-  const leftPoints = Array.from(left, (value) => value.codePointAt(0)!);
-  const rightPoints = Array.from(right, (value) => value.codePointAt(0)!);
-  for (let index = 0; index < Math.min(leftPoints.length, rightPoints.length); index += 1) {
-    if (leftPoints[index] !== rightPoints[index]) {
-      return leftPoints[index]! - rightPoints[index]!;
-    }
-  }
-  return leftPoints.length - rightPoints.length;
+function resolveSkyCuaMarketplaceManifestPath(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir: string = os.homedir(),
+): string {
+  const configuredDataHome = env.XDG_DATA_HOME?.trim();
+  const dataHome =
+    configuredDataHome && path.isAbsolute(configuredDataHome)
+      ? configuredDataHome
+      : path.join(homeDir, ".local", "share");
+  return path.join(dataHome, MARKETPLACE_MANIFEST_RELATIVE_PATH);
 }
 
 export const managedNativePluginsTesting = {
-  canonicalTreeSha256,
   reset: () => {
-    reconcileByClient = new WeakMap();
-    reconcileTailByCodexHome.clear();
+    const globalState = globalThis as typeof globalThis & {
+      [MANAGED_NATIVE_PLUGIN_INSTALL_STATE]?: ManagedNativePluginInstallState;
+    };
+    delete globalState[MANAGED_NATIVE_PLUGIN_INSTALL_STATE];
   },
+  resolveSkyCuaMarketplaceManifestPath,
 };
