@@ -54,12 +54,12 @@ if [[ "$cli_version" != "OpenClaw ${package_version} (${short_sha})"* ]]; then
 fi
 
 systemctl --user stop "$SERVICE"
-openclaw plugins update "@openclaw/codex@$codex_package_version"
 openclaw update repair \
   --channel stable \
   --yes \
   --json \
   --timeout 1800 >"$repair_log" 2>&1
+openclaw plugins update "@openclaw/codex@$codex_package_version"
 openclaw gateway install \
   --force \
   --runtime node \
