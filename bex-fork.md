@@ -12,6 +12,152 @@ Replay classification:
 - Partial-overlap carries: behavior upstream partly covers, but not enough to drop the fork seam.
 - Support/proof carries: replay policy, tooling, tests, or ledger structure. These are not product behavior and should not be treated as runtime seams during conflict triage.
 
+## External extension and plugin manifest
+
+Snapshot date: 2026-07-24. OpenClaw fork HEAD before this manifest edit: `b055574163cb`.
+
+This is the preservation manifest for plugin/config/install cleanup. It records ownership and observed live state; it does not authorize `openclaw doctor`, config rewrites, installs, uninstalls, directory deletion, or version upgrades. Re-capture the live registry and compare it with this manifest before any cleanup.
+
+Inventory sources:
+
+- `openclaw plugins list --json` from this checkout
+- `openclaw plugins inspect <id> --json` for persisted install-record provenance
+- the effective OpenClaw config's `plugins.load.paths`, `plugins.entries`, `plugins.allow`, and `plugins.installs`
+- managed plugin directories under `/home/bex/.openclaw/{extensions,git,npm/projects}`
+- Git remotes, HEADs, and worktree state from known local checkouts
+- the Sky agent's native Codex home under `/home/bex/.openclaw/agents/sky/agent/codex-home`
+- the producer marketplace under `/home/bex/.local/share/sky-cua`
+- the sibling Codex `plugin/list`, `plugin/installed`, and `plugin/install` contracts in `../codex`
+
+Snapshot summary:
+
+- OpenClaw reports 8 non-bundled plugins, all loaded.
+- The current fork differs from `v2026.7.1` in 14 in-tree extension packages.
+- The Sky agent Codex home has the 2 OpenClaw-managed `openai-bundled` plugins enabled and materialized at the producer versions.
+- the legacy config field `plugins.installs` is empty, while the SQLite-backed installed-plugin index contains 25 records: 17 bundled-path records, 1 external checkout-path record, and 7 managed/copied/git records.
+- `plugins.load.paths` contains only the temporary `kindle` external checkout path; 17 redundant OpenClaw-checkout aliases plus the `mailpref`, `voice-emotion`, and `acpx-remote` development paths were removed directly on 2026-07-24.
+- `/home/bex/.openclaw/npm/projects` contains 19 generated project directories; only the current Codex project owns a plugin loaded by the registry.
+
+### External plugin development and installation lifecycle
+
+The steady-state Gateway installation for a separately owned plugin repository must be a managed Git install from its Gitea origin. A local checkout may appear in `plugins.load.paths` only temporarily when live checkout loading is required for development or review. The checkout path is never the deployed source of truth.
+
+Closing changes in one of these repositories requires all of the following:
+
+1. Complete the repository's review and validation gates.
+2. Commit the reviewed state and push it to the repository's Gitea origin.
+3. Remove the development checkout from `plugins.load.paths`.
+4. Install or update the Gateway plugin from that Gitea repository, preferably at the exact reviewed commit for deployment proof.
+5. Verify the persisted install record has `source: "git"`, the expected `gitUrl` and `gitCommit`, a managed `installPath`, and no stale checkout `sourcePath`.
+6. Restart the Gateway and prove config validity, loaded runtime identity/version, plugin-specific registrations, and Gateway health.
+
+`kindle` is the sole current exception: its plugin is a TypeScript package nested at `packages/openclaw-plugin` inside the `sky-kindle` repository, while the direct `git:` installer consumes an installable plugin at the cloned repository root. Keep its path entry only until `sky-kindle` exposes a Git-installable built plugin package or an equivalent repository-backed managed source; then apply the same closing gate and remove the exception.
+
+### Live non-bundled OpenClaw plugins
+
+`Runtime source` is the path actually selected by the live plugin registry. `Checkout` is the source repository to preserve; it is not necessarily byte-identical to the installed artifact.
+
+| Plugin | Live version/state | Install/load owner | Repository | Checkout | Runtime source and provenance |
+| --- | --- | --- | --- | --- | --- |
+| `acpx-remote` / `@openclaw/acpx-remote` | `2026.7.1`, loaded | persisted managed-Git record | `https://git.heliasar.com/bex/acpx-remote` (`github`: `https://github.com/becksclair/acpx-remote`) | `/home/bex/projects/sky/acpx-remote` at `b8c3389b9b91`, clean and synchronized with `origin/main` | Runtime clone: `/home/bex/.openclaw/git/git-ff1728e373e1e459/repo`, installed from Gitea at exact commit `b8c3389b9b91de7185cb68f69cf767abae5a07f2`. The development load path and stale checkout provenance were removed. The July 24 ultra-review fixed the standalone host-root resolver and Codex bridge launch/auth-state handling, upgraded current ACP dependencies, and passed type, 36-test, build/resource, syntax, and package proof. Devbox and Orion validation were intentionally excluded. |
+| `kindle` / `@sky-kindle/kindle` | `0.1.0`, loaded | `plugins.load.paths` plus persisted path record | `https://git.heliasar.com/bex/sky-kindle` (`github`: `https://github.com/becksclair/sky-kindle`) | `/home/bex/projects/sky-kindle` at `76df9eb6900d`, clean | Loaded directly from `/home/bex/projects/sky-kindle/packages/openclaw-plugin`; persisted `installPath` and `sourcePath` match. |
+| `mailpref` / `@local/mailpref` | `2026.7.4`, loaded | persisted managed-Git record | `https://git.heliasar.com/bex/mailpref` (`github`: `https://github.com/becksclair/mailpref`) | `/home/bex/projects/mailpref` at `b352f86adb4d`, clean and synchronized with `origin/main` | Runtime clone: `/home/bex/.openclaw/git/git-c86c9401c1e9fc8c/repo`, installed from Gitea at commit `b352f86adb4de057df5a50b671c00cec9409f676`; the development load path was removed and plugin config preserved. |
+| `voice-emotion` | `0.1.0`, loaded | persisted managed-Git record | `https://git.heliasar.com/bex/voice-emotion` | `/home/bex/projects/voice-emotion` at `7d3bf993932e`; clean and synchronized with `origin/main` | Runtime clone: `/home/bex/.openclaw/git/git-15f06ad596301a33/repo`, installed from Gitea at commit `7d3bf993932e00bd50ccde3cc8ec2824f7d9bdd2`; the development load path was removed. The July 24 ultra-review restored the current typed TTS hook, bound-agent routing, synthesis limits, Unicode handling, cache identity, and fallback coverage; 104 tests passed before the reviewed result was committed and pushed. |
+| `codex` / `@openclaw/codex` | `2026.7.1`, loaded | persisted npm-pack record; external managed plugin package | this fork: `https://git.heliasar.com/bex/openclaw`; upstream: `https://github.com/openclaw/openclaw` | `/home/bex/projects/openclaw/extensions/codex` at fork HEAD | Loaded from `/home/bex/.openclaw/npm/projects/openclaw-codex-8902d781d4__openclaw-generation__g-95c5154d8139b307/node_modules/@openclaw/codex`. The generated project depends on the retained local package archive `@openclaw__codex-2026.7.1-d5f827ab19a6fffb.tgz`; the persisted record carries the matching `2026.7.1` version, npm integrity, and shasum. |
+| `codex-transcribe` / `@openclaw/codex-transcribe` | `2026.6.5`, loaded | persisted managed-Git record | `https://git.heliasar.com/bex/codex-transcribe` (`github`: `https://github.com/becksclair/codex-transcribe`) | `/home/bex/projects/sky/codex-transcribe` at `6c9a50f7f03d`, clean | Runtime clone: `/home/bex/.openclaw/git/git-c4589a818af0605f/repo`, same HEAD and byte-identical to the checkout excluding Git/dependency metadata. The persisted record names the same full commit. |
+| `lossless-claw` / `@martian-engineering/lossless-claw` | `0.13.2`, loaded | persisted archive record | fork: `https://github.com/becksclair/lossless-claw`; upstream: `https://github.com/Martian-Engineering/lossless-claw` | `/home/bex/projects/lossless-claw` at `92637d56b541`, clean | Runtime copy: `/home/bex/.openclaw/extensions/lossless-claw`. It has the same package version but its built `dist/index.js` differs from the checkout. The persisted record says installed `0.13.2` but retains resolved metadata for `0.13.1`; reconcile both byte drift and record drift before reinstall/removal. |
+| `openclaw-honcho` / `@honcho-ai/openclaw-honcho` | `1.5.2`, loaded | persisted managed-Git record | fork: `https://git.heliasar.com/bex/openclaw-honcho`; upstream: `https://github.com/plastic-labs/openclaw-honcho` | `/home/bex/projects/openclaw-honcho` at `8257f9d0808d`, clean | Runtime clone: `/home/bex/.openclaw/git/git-9d3d045eded403c2/repo`, same HEAD and byte-identical to the checkout excluding Git/dependency metadata. The persisted record names the same full commit. |
+
+### In-tree extension packages changed by the fork
+
+These packages are owned by this OpenClaw fork rather than separate plugin repositories. Their behavioral carry remains defined by the seam table and matching seam sections below; this table only prevents package ownership from disappearing during install/config cleanup.
+
+Repository: `https://git.heliasar.com/bex/openclaw` (`github`: `https://github.com/becksclair/openclaw`, upstream: `https://github.com/openclaw/openclaw`). Checkout: `/home/bex/projects/openclaw`.
+
+| Extension path | Live state at snapshot | Ownership note |
+| --- | --- | --- |
+| `extensions/acpx` | `2026.7.1`, bundled and loaded | Fork-modified ACPX runtime/auth/process behavior. |
+| `extensions/active-memory` | unversioned fork tree, bundled and loaded | Fork-owned persistent memory behavior. |
+| `extensions/codex` | `2026.7.1`, externally packaged copy loaded | Source owner for the managed Codex package listed above. |
+| `extensions/copilot` | `2026.7.1`, bundled and disabled | Fork-modified sibling harness behavior. |
+| `extensions/discord` | `2026.7.1`, bundled and loaded | Fork-modified delivery/deploy/TTS behavior. |
+| `extensions/elevenlabs` | `2026.7.1`, bundled and loaded | Fork-modified speech behavior. |
+| `extensions/feishu` | `2026.7.1`, bundled and disabled | Fork-modified channel/TTS capability behavior. |
+| `extensions/google` | `2026.7.1`, bundled and loaded | Fork-modified speech/realtime behavior. |
+| `extensions/lobster` | `2026.7.1`, bundled and loaded | Fork-modified workspace sandbox behavior. |
+| `extensions/matrix` | `2026.7.1`, bundled and disabled | Fork-modified channel/TTS capability behavior. |
+| `extensions/openai` | `2026.7.1`, bundled and loaded | Fork-owned Responses Lite and realtime behavior. |
+| `extensions/telegram` | `2026.7.1`, bundled and disabled | Fork-modified delivery, streaming, voice, and TTS behavior. |
+| `extensions/tokenjuice` | `2026.7.1`, bundled and loaded from source checkout | Fork-modified package/manifest behavior. |
+| `extensions/whatsapp` | `2026.7.1`, bundled and disabled from source checkout | Fork-modified inbound archive and TTS behavior. |
+
+### OpenClaw-managed native Codex plugins
+
+The Sky agent uses the agent-scoped Codex home `/home/bex/.openclaw/agents/sky/agent/codex-home`, not the user's shared `/home/bex/.codex`. Sibling Codex source confirms that `plugin/installed` is the narrow installed-state view and that `plugin/install` delegates a local `marketplacePath` plus `pluginName` to the plugin manager. Cache-directory presence alone is therefore evidence of materialized bytes, not authoritative installed/enabled state.
+
+| Native plugin | Agent-home state | Producer repository and checkout | Producer/runtime paths |
+| --- | --- | --- | --- |
+| `computer-use@openai-bundled` | enabled; cache version `0.1.0-sky-cua` | `https://git.heliasar.com/bex/sky-cua` (`github`: `https://github.com/becksclair/sky-cua`); `/home/bex/projects/sky-cua` at `cf6912be5bf7` with 16 worktree changes | Marketplace plugin version `0.1.0-sky-cua` under `/home/bex/.local/share/sky-cua/codex/openai-bundled`; installed under the Sky agent Codex home. |
+| `browser-use@openai-bundled` | enabled; cache version `1.0.0-sky-cua-openclaw` | same Sky CUA repository/checkout | Marketplace plugin version `1.0.0-sky-cua-openclaw` under `/home/bex/.local/share/sky-cua/codex/openai-bundled`; installed under the Sky agent Codex home. |
+
+The same agent Codex home also contains cached non-fork plugins from other marketplaces. They are not owned by the OpenClaw fork and must not be deleted merely because they are disabled in the current config:
+
+- `created-by-me-remote`: four opaque `dev-*` plugins, each cache version `1.0.0`
+- `openai-curated-remote`: `creative-production@0.1.25`, `data-analytics@0.2.8-13ceeea1f599`, `github@0.1.8-2841cf9749ae`, `google-calendar@1.2.4`, `google-contacts@1.0.0`, `openai-templates@0.1.0`, `product-design@0.1.52`, `remotion@1.0.5`, `sales@1.0.8`, and `test-android-apps@0.1.2`
+- `openai-curated`: `sentry@0.1.2` in cache directory `c6ea566d`
+
+The agent config currently enables `build-web-apps@openai-curated-remote` without a matching materialized cache directory. It explicitly disables most named cached curated plugins; `google-contacts` has no matching config entry, and cached `remotion` is under `openai-curated-remote` while the disabled config key is `remotion@openai-curated`. Treat all of that as configuration/cache reconciliation work, not deletion evidence.
+
+The user's shared Codex home `/home/bex/.codex` separately contains `computer-use`, `browser-use`, two `chrome` versions, and `skynet-browser-use` cache entries. Those bytes are owned by user Codex/Desktop workflows, not this OpenClaw cleanup.
+
+### Generated OpenClaw directories not selected by the live registry
+
+The following generated directories exist under `/home/bex/.openclaw/npm/projects`, but the live registry does not load from them. Some corresponding plugin ids still have persisted records, but their current `installPath`/`sourcePath` points at this checkout's `dist/extensions/*` or `extensions/*`; `lossless-claw` points at its copied global extension. Their names are inventory evidence only; deletion requires a separate provenance/version review:
+
+- `martian-engineering-lossless-claw-fde018f0ba`
+- `openclaw-acpx-052d680d6d__openclaw-generation__g-96f2f3fa72ec67c6`
+- `openclaw-brave-plugin-11fe9e3aa3__openclaw-generation__g-2a017c13a8f20dee`
+- `openclaw-deepseek-provider-2481ed984b__openclaw-generation__g-9c28a543f66a65c3`
+- `openclaw-diffs-3468e762c3__openclaw-generation__g-e098fa884567c07a`
+- `openclaw-discord-c0892df945__openclaw-generation__g-3a4aecad18bbe2c4`
+- `openclaw-exa-plugin-43ba85cedc__openclaw-generation__g-809f5347cca5c967`
+- `openclaw-fireworks-provider-7293ca3d1e__openclaw-generation__g-a3ebdcd2703eb434`
+- `openclaw-groq-provider-d726e35179__openclaw-generation__g-21c2c9b14da31adb`
+- `openclaw-kimi-provider-9241ab9f01__openclaw-generation__g-401fac56011ecb04`
+- `openclaw-lobster-15c8c69744__openclaw-generation__g-d8d8958930450cbe`
+- `openclaw-moonshot-provider-4617b6c201__openclaw-generation__g-ab8fde3a603bf714`
+- `openclaw-parallel-plugin-609efe5372__openclaw-generation__g-f16677e9472a1a9e`
+- `openclaw-perplexity-plugin-9e59921123__openclaw-generation__g-28c4f00c661a115f`
+- `openclaw-tavily-plugin-8ad843922d__openclaw-generation__g-259a9119e3e24c7e`
+- `openclaw-tokenjuice-b4a457cc96__openclaw-generation__g-8da7dc4532e0b27a`
+- `openclaw-venice-provider-43cad75456__openclaw-generation__g-354f0c2b428ede60`
+- `openclaw-voice-call-d0fedeaf18__openclaw-generation__g-64fe0575f4a648e1`
+
+Other unowned filesystem state:
+
+- `/home/bex/.openclaw/extensions/acpx` contains dependency material but is not selected by the live registry.
+- `/home/bex/.openclaw/extensions/.openclaw-install-backups` exists and was empty at snapshot time; retention/removal is still deferred to cleanup.
+- `plugins.load.paths` now contains only the 4 external checkout entries listed in the live non-bundled table.
+
+The persisted bundled inventory still records the same 17 checkout-backed bundled plugins at version `2026.7.1`; these records are independent of `plugins.load.paths` and remain valid:
+
+- current packaged paths: `acpx`, `brave`, `diffs`, `discord`, `lobster`, and `voice-call`, each with `installPath` under `/home/bex/projects/openclaw/dist/extensions`
+- source-checkout paths: `deepseek`, `exa`, `fireworks`, `groq`, `kimi` (directory `kimi-coding`), `moonshot`, `parallel`, `perplexity`, `tavily`, `tokenjuice`, and `venice`, each with `installPath` under `/home/bex/projects/openclaw/extensions`
+
+Those bundled inventory records do not make the old generated npm project directories active and should not be deleted as part of load-path cleanup.
+
+### Cleanup gates
+
+Before changing config or installed state:
+
+1. Re-capture `openclaw plugins list --json` and the four config surfaces named above.
+2. Resolve every loaded artifact to a manifest row and compare its version/bytes with the preserved checkout.
+3. Export an explicit keep/remove/reinstall plan; absence from the legacy config field `plugins.installs` is not sufficient removal evidence. Inspect the persisted installed-plugin index.
+4. Keep OpenClaw agent Codex homes separate from the user's shared Codex home.
+5. Preserve dirty checkouts before any operation that could rebuild, replace, or relink their runtime artifacts.
+6. Apply config edits directly and review the diff. Do not use `openclaw doctor` as the cleanup authority.
+7. Restart once after the candidate config/install set is frozen, then prove registry identity, loaded versions, plugin errors, and Gateway health.
+
 ## v2026.7.1 seam necessity review
 
 Replayed from fork head `cd140f04eb` onto upstream `v2026.7.1` (`2d2ddc43d0`). The stable target absorbed the newer Codex binding-migration convergence implementation, while #102403, #102398, and the Responses Lite reasoning-context fix remain explicit carries.
@@ -465,7 +611,7 @@ Primary seam tests:
 Rebase notes:
 
 - Do not replay generated sidecar baseline files blindly. Regenerate baselines from the current tree and verify that excluded/private plugin directories remain outside the collected bundled-plugin set.
-- Treat `extensions/acpx-remote/` and `extensions/memory-maintenance/` as local/private lifecycles when they are present through local excludes, nested repos, or symlinks.
+- Treat `extensions/acpx-remote/` as a local/private lifecycle when it is present through local excludes, nested repos, or symlinks.
 - Keep the checked-in baseline regression test on the same tracked-directory filter as the generator; otherwise local/private `extensions/*` directories can make replay proof environment-sensitive.
 
 ### Plugin SDK package-boundary artifacts
