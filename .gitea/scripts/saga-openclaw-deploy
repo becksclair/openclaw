@@ -16,7 +16,7 @@ flock -n 9 || {
 
 exec > >(tee -a "$STATE_DIR/deploy.log") 2>&1
 
-IFS=' ' read -r action package_version source_version commit_sha extra <<<"${SSH_ORIGINAL_COMMAND:-}"
+IFS=' ' read -r action package_version source_version commit_sha codex_package_version extra <<<"${SSH_ORIGINAL_COMMAND:-}"
 if [[ "$action" != "deploy-openclaw" || -n "${extra:-}" ]]; then
   echo "Rejected deployment command." >&2
   exit 64
@@ -31,6 +31,10 @@ if [[ ! "$source_version" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(-[0-9A-Za-z.-]+)?
 fi
 if [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
   echo "Rejected commit SHA." >&2
+  exit 64
+fi
+if [[ ! "$codex_package_version" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}[-.][0-9A-Za-z.-]+$ ]]; then
+  echo "Rejected Codex package version." >&2
   exit 64
 fi
 
@@ -50,6 +54,7 @@ if [[ "$cli_version" != "OpenClaw ${package_version} (${short_sha})"* ]]; then
 fi
 
 systemctl --user stop "$SERVICE"
+openclaw plugins update "@openclaw/codex@$codex_package_version"
 openclaw update repair \
   --channel stable \
   --yes \
@@ -90,8 +95,13 @@ jq -e \
   <<<"$status_json" >/dev/null
 
 plugin_json="$(openclaw plugins list --json)"
-jq -e '[.plugins[] | select(.status == "error")] | length == 0' <<<"$plugin_json" >/dev/null
+jq -e \
+  --arg codex_version "$codex_package_version" \
+  '([.plugins[] | select(.status == "error")] | length == 0) and
+   ([.plugins[] | select(.id == "codex" and .status == "loaded" and .version == $codex_version)] | length == 1)' \
+  <<<"$plugin_json" >/dev/null
 
 printf '%s\n' "$commit_sha" >"$STATE_DIR/last-deployed-commit"
 printf '%s\n' "$package_version" >"$STATE_DIR/last-deployed-package"
-echo "[$(date -Is)] deployed package=${package_version} runtime=${source_version} commit=${commit_sha} health=ok"
+printf '%s\n' "$codex_package_version" >"$STATE_DIR/last-deployed-codex-package"
+echo "[$(date -Is)] deployed package=${package_version} codex=${codex_package_version} runtime=${source_version} commit=${commit_sha} health=ok"

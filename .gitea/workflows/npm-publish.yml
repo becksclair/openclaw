@@ -11,6 +11,10 @@ on:
         description: OpenClaw source release version embedded in the package
         required: true
         type: string
+      codex_package_version:
+        description: Immutable @openclaw/codex package version already published from the development machine
+        required: true
+        type: string
       commit_sha:
         description: Full source commit SHA represented by the package
         required: true
@@ -33,12 +37,14 @@ jobs:
 
       - name: Deploy and verify Saga-Sky
         env:
+          CODEX_PACKAGE_VERSION: ${{ inputs.codex_package_version }}
           PACKAGE_VERSION: ${{ inputs.package_version }}
           SAGA_DEPLOY_SSH_KEY_B64: ${{ secrets.SAGA_DEPLOY_SSH_KEY_B64 }}
           SOURCE_COMMIT_SHA: ${{ inputs.commit_sha }}
           SOURCE_VERSION: ${{ inputs.source_version }}
         run: |
           set -euo pipefail
+          [[ "$CODEX_PACKAGE_VERSION" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}[-.][0-9A-Za-z.-]+$ ]]
           [[ "$PACKAGE_VERSION" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}[-.][0-9A-Za-z.-]+$ ]]
           [[ "$SOURCE_VERSION" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(-[0-9A-Za-z.-]+)?$ ]]
           [[ "$SOURCE_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -54,7 +60,7 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$SSH_DIR/known_hosts" \
             "ubuntu@$SAGA_DEPLOY_HOST" \
-            "deploy-openclaw $PACKAGE_VERSION $SOURCE_VERSION $SOURCE_COMMIT_SHA"
+            "deploy-openclaw $PACKAGE_VERSION $SOURCE_VERSION $SOURCE_COMMIT_SHA $CODEX_PACKAGE_VERSION"
 
       - name: Report deployed package
         run: |
@@ -62,6 +68,7 @@ jobs:
             echo "### Published OpenClaw package deployed"
             echo
             echo "- Package: \`openclaw@${{ inputs.package_version }}\`"
+            echo "- Codex plugin: \`@openclaw/codex@${{ inputs.codex_package_version }}\`"
             echo "- Runtime release: \`${{ inputs.source_version }}\`"
             echo "- Commit: \`${{ inputs.commit_sha }}\`"
             echo "- Saga-Sky: installed and healthy"
