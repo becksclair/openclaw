@@ -3,8 +3,9 @@ import path from "node:path";
 import type { CodexAppServerClient } from "./client.js";
 import { isJsonObject } from "./protocol.js";
 
-const MANAGED_PLUGIN_NAMES = ["computer-use", "browser-use"] as const;
+const MANAGED_PLUGIN_NAMES = ["computer-use", "browser"] as const;
 const MANAGED_PLUGIN_IDS = new Set(MANAGED_PLUGIN_NAMES.map((name) => `${name}@openai-bundled`));
+const CONFLICTING_PLUGIN_NAMES = new Set([...MANAGED_PLUGIN_NAMES, "browser-use"]);
 const MARKETPLACE_MANIFEST_RELATIVE_PATH = path.join(
   "sky-cua",
   "codex",
@@ -72,7 +73,7 @@ export function buildManagedNativeMcpDisableConfig(): Record<string, unknown> {
       "computer-use@openai-bundled": {
         mcp_servers: { "computer-use": { enabled: false } },
       },
-      "browser-use@openai-bundled": {
+      "browser@openai-bundled": {
         mcp_servers: { node_repl: { enabled: false } },
       },
     },
@@ -145,7 +146,7 @@ async function reconcileManagedNativePlugins(params: {
       return (
         isJsonObject(plugin) &&
         plugin.enabled === true &&
-        MANAGED_PLUGIN_NAMES.includes(pluginName as (typeof MANAGED_PLUGIN_NAMES)[number]) &&
+        CONFLICTING_PLUGIN_NAMES.has(pluginName) &&
         !MANAGED_PLUGIN_IDS.has(pluginId)
       );
     })
@@ -153,7 +154,7 @@ async function reconcileManagedNativePlugins(params: {
     .toSorted();
   if (conflicts.length > 0) {
     throw new Error(
-      `Conflicting native Codex plugins are enabled: ${conflicts.join(", ")}. Disable them so computer-use@openai-bundled and browser-use@openai-bundled remain the sole managed owners.`,
+      `Conflicting native Codex plugins are enabled: ${conflicts.join(", ")}. Disable them so computer-use@openai-bundled and browser@openai-bundled remain the sole managed owners.`,
     );
   }
 }

@@ -413,7 +413,7 @@ describe("startCodexAttemptThread", () => {
         "computer-use@openai-bundled": {
           mcp_servers: { "computer-use": { enabled: false } },
         },
-        "browser-use@openai-bundled": {
+        "browser@openai-bundled": {
           mcp_servers: { node_repl: { enabled: false } },
         },
       },

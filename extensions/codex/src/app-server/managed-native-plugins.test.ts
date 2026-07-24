@@ -20,7 +20,7 @@ function managedPluginConfig(extra: Record<string, { enabled: boolean }> = {}) {
     config: {
       plugins: {
         "computer-use@openai-bundled": { enabled: true },
-        "browser-use@openai-bundled": { enabled: true },
+        "browser@openai-bundled": { enabled: true },
         ...extra,
       },
     },
@@ -61,7 +61,7 @@ describe("managed native Codex plugins", () => {
       ],
       [
         "plugin/install",
-        { marketplacePath, pluginName: "browser-use" },
+        { marketplacePath, pluginName: "browser" },
         expect.objectContaining({ timeoutMs: 1_000 }),
       ],
       [
@@ -135,6 +135,20 @@ describe("managed native Codex plugins", () => {
 
     await expect(ensureManagedNativePlugins(installParams(client))).rejects.toThrow(
       "Conflicting native Codex plugins are enabled: computer-use@desktop-tools",
+    );
+  });
+
+  it("fails closed when the retired browser-use owner remains enabled", async () => {
+    vi.stubEnv("XDG_DATA_HOME", "/data");
+    const request = vi.fn(async (method: string) =>
+      method === "config/read"
+        ? managedPluginConfig({ "browser-use@openai-bundled": { enabled: true } })
+        : { authPolicy: "ON_INSTALL", appsNeedingAuth: [] },
+    );
+    const client = { request } as unknown as CodexAppServerClient;
+
+    await expect(ensureManagedNativePlugins(installParams(client))).rejects.toThrow(
+      "Conflicting native Codex plugins are enabled: browser-use@openai-bundled",
     );
   });
 

@@ -1132,7 +1132,7 @@ export async function runCodexAppServerAttempt(
   });
   const dynamicTools =
     params.suppressPluginHooks === true ? toolBridge.availableSpecs : toolBridge.specs;
-  // These tools are owned by the exact-hash browser-use plugin verified before
+  // These tools are owned by the managed browser plugin verified before
   // thread creation. Relaying them through generic hooks would re-prompt (and
   // can deadlock) before the native MCP call reaches its trusted owner.
   const locallyHandledToolNames = [
