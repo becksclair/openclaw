@@ -177,6 +177,36 @@ describe("Codex plugin thread config", () => {
     });
   });
 
+  it("clears stronger overrides before projecting explicit approve policy", async () => {
+    const config = await buildReadyGoogleCalendarThreadConfig({
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: "approve",
+        plugins: {
+          "google-calendar": {
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: "google-calendar",
+          },
+        },
+      },
+    });
+
+    const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
+    expect(apps?.["google-calendar-app"]).toEqual({
+      enabled: true,
+      destructive_enabled: true,
+      open_world_enabled: true,
+      default_tools_approval_mode: "approve",
+    });
+    expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "approve",
+    });
+    expect(buildCodexPluginAppsConfigPatchFromPolicyContext(config.policyContext)).toEqual(
+      config.configPatch,
+    );
+  });
+
   it("routes destructive approvals to the user while clearing durable overrides for always mode", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
@@ -777,61 +807,65 @@ describe("Codex plugin thread config", () => {
     });
   });
 
-  it("clears durable approval overrides for account apps in ask mode", async () => {
-    let configReadCount = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "app/list") {
-        return {
-          data: [{ ...appInfo("chatgpt-meetings", true), name: "ChatGPT Meetings" }],
-          nextCursor: null,
-        };
-      }
-      if (method === "config/read") {
-        configReadCount += 1;
-        return {
-          config: {
-            apps: {
-              "chatgpt-meetings": {
-                tools:
-                  configReadCount === 1
-                    ? { import_meeting: { approval_mode: "approve" } }
-                    : {},
+  it.each([
+    ["ask", "auto", "user"],
+    ["approve", "approve", undefined],
+  ] as const)(
+    "clears durable approval overrides for account apps in %s mode",
+    async (policy, defaultToolsApprovalMode, approvalsReviewer) => {
+      let configReadCount = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "app/list") {
+          return {
+            data: [{ ...appInfo("chatgpt-meetings", true), name: "ChatGPT Meetings" }],
+            nextCursor: null,
+          };
+        }
+        if (method === "config/read") {
+          configReadCount += 1;
+          return {
+            config: {
+              apps: {
+                "chatgpt-meetings": {
+                  tools:
+                    configReadCount === 1 ? { import_meeting: { approval_mode: "approve" } } : {},
+                },
               },
             },
+          };
+        }
+        if (method === "config/value/write") {
+          return { status: "ok" };
+        }
+        throw new Error(`unexpected request ${method}`);
+      });
+
+      const config = await buildCodexPluginThreadConfig({
+        pluginConfig: {
+          codexPlugins: {
+            enabled: true,
+            allow_all_plugins: true,
+            allow_destructive_actions: policy,
           },
-        };
-      }
-      if (method === "config/value/write") {
-        return { status: "ok" };
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
-
-    const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_all_plugins: true,
-          allow_destructive_actions: "ask",
         },
-      },
-      appCacheKey: "runtime",
-      request,
-    });
+        appCacheKey: "runtime",
+        request,
+      });
 
-    expect((config.configPatch?.apps as Record<string, unknown>)?.["chatgpt-meetings"]).toEqual({
-      enabled: true,
-      approvals_reviewer: "user",
-      destructive_enabled: true,
-      open_world_enabled: true,
-      default_tools_approval_mode: "auto",
-    });
-    expect(request).toHaveBeenCalledWith("config/value/write", {
-      keyPath: 'apps."chatgpt-meetings".tools."import_meeting".approval_mode',
-      value: null,
-      mergeStrategy: "replace",
-    });
-  });
+      expect((config.configPatch?.apps as Record<string, unknown>)?.["chatgpt-meetings"]).toEqual({
+        enabled: true,
+        ...(approvalsReviewer ? { approvals_reviewer: approvalsReviewer } : {}),
+        destructive_enabled: true,
+        open_world_enabled: true,
+        default_tools_approval_mode: defaultToolsApprovalMode,
+      });
+      expect(request).toHaveBeenCalledWith("config/value/write", {
+        keyPath: 'apps."chatgpt-meetings".tools."import_meeting".approval_mode',
+        value: null,
+        mergeStrategy: "replace",
+      });
+    },
+  );
 
   it("does not re-admit an excluded plugin-owned app through account-wide policy", async () => {
     const config = await buildCodexPluginThreadConfig({

@@ -157,7 +157,7 @@ function buildConnectorPluginApprovalElicitation(overrides: Record<string, unkno
 function createPluginAppPolicyContext(
   params: {
     allowDestructiveActions?: boolean;
-    destructiveApprovalMode?: "allow" | "deny" | "auto" | "ask";
+    destructiveApprovalMode?: "allow" | "deny" | "auto" | "ask" | "approve";
     apps?: Array<{ appId: string; pluginName: string; mcpServerNames: string[] }>;
   } = {},
 ) {
@@ -195,7 +195,7 @@ function createAccountAppPolicyContext(params: {
   appId: string;
   appName: string;
   allowDestructiveActions: boolean;
-  destructiveApprovalMode?: "allow" | "deny" | "auto" | "ask";
+  destructiveApprovalMode?: "allow" | "deny" | "auto" | "ask" | "approve";
 }) {
   return {
     fingerprint: "account-app-policy-1",
@@ -984,6 +984,29 @@ describe("Codex app-server elicitation bridge", () => {
       toolName: "codex_mcp_tool_approval",
       twoPhase: true,
     });
+  });
+
+  it("accepts approve connector-id plugin app elicitations without routing an approval", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation(),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        destructiveApprovalMode: "approve",
+        apps: [
+          {
+            appId: "connector_google_calendar",
+            pluginName: "google-calendar",
+            mcpServerNames: [],
+          },
+        ],
+      }),
+    });
+
+    expect(result).toEqual({ action: "accept", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
   it("maps auto plugin allow-always only when Codex offers always persistence", async () => {

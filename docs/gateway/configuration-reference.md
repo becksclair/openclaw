@@ -313,10 +313,12 @@ conversation bindings, or any non-Codex harness.
   default destructive-action policy for migrated plugin app elicitations.
   Use `true` to accept safe Codex approval schemas without prompting, `false`
   to decline them, `"auto"` to route Codex-required approvals through OpenClaw
-  plugin approvals, or `"ask"` to prompt for every plugin write/destructive
-  action without durable approval. The `"ask"` mode clears durable Codex
-  per-tool approval overrides for the affected app and selects the human
-  approvals reviewer for that app before the Codex thread starts.
+  plugin approvals, `"ask"` to prompt for every plugin write/destructive
+  action without durable approval, or `"approve"` for unattended operation
+  with Codex's per-app tools always approved. The `"ask"` and `"approve"`
+  modes clear durable Codex per-tool approval overrides for the affected app;
+  `"ask"` also selects the human approvals reviewer before the Codex thread
+  starts.
   Default: `true`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.enabled`: enables a
   migrated plugin entry when global `codexPlugins.enabled` is also true.
@@ -328,12 +330,11 @@ conversation bindings, or any non-Codex harness.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
   per-plugin destructive-action override. When omitted, the global
   `allow_destructive_actions` value is used. The per-plugin value accepts the
-  same `true`, `false`, `"auto"`, or `"ask"` policies.
+  same `true`, `false`, `"auto"`, `"ask"`, or `"approve"` policies.
 
 Each admitted plugin app that uses `"ask"` routes that app's approval requests
 to the human reviewer. Other apps and non-app thread approvals keep their
 configured reviewer, so mixed plugin policies do not inherit `"ask"` behavior.
-
 `codexPlugins.enabled` is the global enablement directive. Explicit plugin
 entries written by migration are the durable install and repair eligibility set.
 `plugins["*"]` is not supported, there is no `install` switch, and local

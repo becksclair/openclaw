@@ -219,7 +219,7 @@ threads keep their persisted app set; use `/new`, `/reset`, or restart the
 gateway to pick up newly connected or revoked apps.
 
 Account apps inherit the global `codexPlugins.allow_destructive_actions` value,
-which accepts `true`, `false`, `"auto"`, or `"ask"`. Explicit per-plugin policy
+which accepts `true`, `false`, `"auto"`, `"ask"`, or `"approve"`. Explicit per-plugin policy
 overrides the global policy for overlapping app ids. Inventory failures fail
 closed instead of falling back to an unrestricted default.
 
@@ -230,7 +230,7 @@ OpenClaw injects a restrictive `config.apps` patch for the Codex thread:
 accessible account apps admitted by `allow_all_plugins` are enabled.
 
 `destructive_enabled` on each app comes from the effective global or
-per-plugin `allow_destructive_actions` policy; `true`, `"auto"`, and `"ask"`
+per-plugin `allow_destructive_actions` policy; `true`, `"auto"`, `"ask"`, and `"approve"`
 all set `destructive_enabled: true`, and `false` sets it `false`. Codex still
 enforces destructive tool metadata from its native app tool annotations.
 `_default` is disabled with `open_world_enabled: false`; enabled plugin apps
@@ -239,8 +239,10 @@ plugin-level open-world policy knob and does not maintain per-plugin
 destructive tool-name deny lists.
 
 Tool approval mode defaults to automatic for admitted apps, so non-destructive
-read tools run without a same-thread approval prompt. Destructive tools stay
-controlled by each app's `destructive_enabled` policy.
+read tools run without a same-thread approval prompt. `"approve"` instead projects
+Codex `default_tools_approval_mode: "approve"` for the app, suppressing native
+plugin approval prompts. Destructive tools stay controlled by each app's
+`destructive_enabled` policy.
 
 ## Destructive action policy
 
@@ -264,6 +266,9 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
   reviewer for that app so Codex sends its approval elicitations to
   OpenClaw; other apps and non-app thread approvals keep their configured
   reviewer and policy.
+- `"approve"`: OpenClaw enables destructive actions and projects Codex's
+  always-approved per-app tool policy, so read, open-world, write, and destructive
+  tools run without OpenClaw relay approval prompts.
 - Missing plugin identity, ambiguous ownership, a missing or mismatched
   turn id, or an unsafe elicitation schema declines instead of prompting.
 
@@ -286,7 +291,7 @@ Codex thread bindings keep the app config they started with until OpenClaw
 establishes a new harness session or replaces a stale binding.
 
 **Destructive action is declined:** check the global and per-plugin
-`allow_destructive_actions` values. Even with `true`, `"auto"`, or `"ask"`,
+`allow_destructive_actions` values. Even with `true`, `"auto"`, `"ask"`, or `"approve"`,
 unsafe elicitation schemas and ambiguous plugin identity still fail closed.
 
 ## Related

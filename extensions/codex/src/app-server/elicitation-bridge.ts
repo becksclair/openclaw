@@ -328,7 +328,7 @@ async function buildPluginPolicyElicitationResponse(params: {
   }
   const response = buildElicitationResponse(approvalPrompt, "approved-once");
   if (isJsonObject(response) && response.action === "accept") {
-    if (mode === "allow") {
+    if (mode === "allow" || mode === "approve") {
       return response;
     }
     const outcome = await requestPluginApprovalOutcome({
@@ -349,12 +349,12 @@ async function buildPluginPolicyElicitationResponse(params: {
 
 function resolvePluginDestructiveApprovalMode(
   entry: CodexAppPolicyContextEntry,
-): "allow" | "deny" | "auto" | "ask" {
+): "allow" | "deny" | "auto" | "ask" | "approve" {
   return entry.destructiveApprovalMode ?? (entry.allowDestructiveActions ? "allow" : "deny");
 }
 
 function allowedPluginPolicyApprovalDecisions(
-  mode: "allow" | "deny" | "auto" | "ask",
+  mode: "allow" | "deny" | "auto" | "ask" | "approve",
   approvalPrompt: BridgeableApprovalElicitation,
 ): ExecApprovalDecision[] {
   const allowedDecisions = approvalPrompt.allowedDecisions ?? ["allow-once", "deny"];
@@ -365,7 +365,7 @@ function allowedPluginPolicyApprovalDecisions(
 }
 
 function oneShotPluginPolicyApprovalOutcome(
-  mode: "allow" | "deny" | "auto" | "ask",
+  mode: "allow" | "deny" | "auto" | "ask" | "approve",
   outcome: AppServerApprovalOutcome,
 ): AppServerApprovalOutcome {
   return mode === "ask" && outcome === "approved-session" ? "approved-once" : outcome;

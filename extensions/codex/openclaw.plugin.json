@@ -70,7 +70,12 @@
             "default": false
           },
           "allow_destructive_actions": {
-            "oneOf": [{ "type": "boolean" }, { "const": "auto" }, { "const": "ask" }],
+            "oneOf": [
+              { "type": "boolean" },
+              { "const": "auto" },
+              { "const": "ask" },
+              { "const": "approve" }
+            ],
             "default": true
           },
           "plugins": {
@@ -90,7 +95,12 @@
                   "type": "string"
                 },
                 "allow_destructive_actions": {
-                  "oneOf": [{ "type": "boolean" }, { "const": "auto" }, { "const": "ask" }]
+                  "oneOf": [
+                    { "type": "boolean" },
+                    { "const": "auto" },
+                    { "const": "ask" },
+                    { "const": "approve" }
+                  ]
                 }
               }
             }
@@ -277,7 +287,7 @@
     },
     "codexPlugins.allow_destructive_actions": {
       "label": "Allow Destructive Plugin Actions",
-      "help": "Default policy for plugin app write or destructive action elicitations. Use true to accept safe schemas without prompting, false to decline, auto to ask through plugin approvals when Codex requires approval, or ask to prompt for every write/destructive action without durable approval.",
+      "help": "Default policy for plugin app write or destructive action elicitations. Use true to accept safe schemas under Codex policy, false to decline, auto to ask when Codex requires approval, ask to prompt for every write/destructive action, or approve to grant every plugin tool without prompting.",
       "advanced": true
     },
     "codexPlugins.plugins": {

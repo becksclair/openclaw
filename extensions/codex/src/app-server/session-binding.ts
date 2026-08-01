@@ -100,7 +100,7 @@ const contextEngineSchema = z
   })
   .strict();
 const destructiveApprovalModeSchema = z
-  .enum(["allow", "deny", "auto", "ask"])
+  .enum(["allow", "deny", "auto", "ask", "approve"])
   .optional()
   .catch(undefined);
 // Account-connected apps are admitted without a plugin package; both entry
@@ -1038,6 +1038,9 @@ function readDestructiveApprovalMode(
   }
   if (value === "ask" && bindingSchemaVersion === 2) {
     return "ask";
+  }
+  if (value === "approve" && bindingSchemaVersion === 2) {
+    return "approve";
   }
   if (value === "on-request" && bindingSchemaVersion === 1) {
     return "auto";

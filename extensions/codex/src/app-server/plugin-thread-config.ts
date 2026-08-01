@@ -52,9 +52,7 @@ export type AccountAppPolicyContextEntry = {
 };
 
 /** Policy context for any app exposed to a native Codex thread. */
-export type CodexAppPolicyContextEntry =
-  | PluginAppPolicyContextEntry
-  | AccountAppPolicyContextEntry;
+export type CodexAppPolicyContextEntry = PluginAppPolicyContextEntry | AccountAppPolicyContextEntry;
 
 /** Stable app-to-plugin ownership context persisted with Codex thread bindings. */
 export type PluginAppPolicyContext = {
@@ -136,17 +134,18 @@ export async function buildCodexPluginThreadConfig(
     });
   }
 
-  let inventory = policy.pluginPolicies.length > 0
-    ? await readCodexPluginInventory({
-        pluginConfig: params.pluginConfig,
-        policy,
-        request: params.request,
-        appCache,
-        appCacheKey: params.appCacheKey,
-        nowMs: params.nowMs,
-        suppressAppInventoryRefresh: true,
-      })
-    : emptyCodexPluginInventory(policy);
+  let inventory =
+    policy.pluginPolicies.length > 0
+      ? await readCodexPluginInventory({
+          pluginConfig: params.pluginConfig,
+          policy,
+          request: params.request,
+          appCache,
+          appCacheKey: params.appCacheKey,
+          nowMs: params.nowMs,
+          suppressAppInventoryRefresh: true,
+        })
+      : emptyCodexPluginInventory(policy);
   const appInventoryRefreshDeferredForActivation =
     inventory.records.some((record) => record.activationRequired) &&
     shouldRefreshMissingAppInventory(params, policy, inventory);
@@ -243,9 +242,7 @@ export async function buildCodexPluginThreadConfig(
   }
 
   const accountAppsResult: Awaited<ReturnType<typeof readAccessibleAccountApps>> =
-    policy.allowAllPlugins
-    ? await readAccessibleAccountApps(params, appCache)
-    : { apps: [] };
+    policy.allowAllPlugins ? await readAccessibleAccountApps(params, appCache) : { apps: [] };
 
   const diagnostics: CodexPluginThreadConfigDiagnostic[] = [
     ...inventory.diagnostics,
@@ -287,7 +284,8 @@ export async function buildCodexPluginThreadConfig(
         continue;
       }
       if (
-        record.policy.destructiveApprovalMode === "ask" &&
+        (record.policy.destructiveApprovalMode === "ask" ||
+          record.policy.destructiveApprovalMode === "approve") &&
         !(await clearPersistedAppToolApprovalOverrides({
           request: params.request,
           configCwd: params.configCwd,
@@ -319,7 +317,7 @@ export async function buildCodexPluginThreadConfig(
     }
     const accountApp = toOwnedAccountApp(app);
     if (
-      policy.destructiveApprovalMode === "ask" &&
+      (policy.destructiveApprovalMode === "ask" || policy.destructiveApprovalMode === "approve") &&
       !(await clearPersistedAppToolApprovalOverrides({
         request: params.request,
         configCwd: params.configCwd,
@@ -431,11 +429,13 @@ function buildEnabledAppConfig(policy: {
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
 }): JsonObject {
+  const defaultToolsApprovalMode =
+    policy.destructiveApprovalMode === "approve" ? "approve" : "auto";
   return {
     enabled: true,
     destructive_enabled: policy.allowDestructiveActions,
     open_world_enabled: true,
-    default_tools_approval_mode: "auto",
+    default_tools_approval_mode: defaultToolsApprovalMode,
     ...(policy.destructiveApprovalMode === "ask" ? { approvals_reviewer: "user" } : {}),
   };
 }
@@ -454,11 +454,13 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
   for (const [appId, policy] of Object.entries(policyContext.apps).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
+    const defaultToolsApprovalMode =
+      policy.destructiveApprovalMode === "approve" ? "approve" : "auto";
     apps[appId] = {
       enabled: true,
       destructive_enabled: policy.allowDestructiveActions,
       open_world_enabled: true,
-      default_tools_approval_mode: "auto",
+      default_tools_approval_mode: defaultToolsApprovalMode,
       ...(policy.destructiveApprovalMode === "ask" ? { approvals_reviewer: "user" } : {}),
     };
   }
@@ -649,9 +651,9 @@ async function readAccessibleAccountApps(
     };
   }
   return {
-    apps: snapshot.apps.filter((app) => app.isAccessible).toSorted((left, right) =>
-      left.id.localeCompare(right.id),
-    ),
+    apps: snapshot.apps
+      .filter((app) => app.isAccessible)
+      .toSorted((left, right) => left.id.localeCompare(right.id)),
   };
 }
 

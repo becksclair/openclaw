@@ -782,7 +782,7 @@ describe("Codex app-server binding store", () => {
     );
   });
 
-  it("preserves version 2 ask approval mode and drops invalid policy contexts", () => {
+  it("preserves version 2 ask and approve modes and drops invalid policy contexts", () => {
     const policyContext = {
       fingerprint: "policy-2",
       apps: {
@@ -792,6 +792,14 @@ describe("Codex app-server binding store", () => {
           pluginName: "plugin",
           allowDestructiveActions: true,
           destructiveApprovalMode: "ask",
+          mcpServerNames: [],
+        },
+        unattended: {
+          configKey: "unattended",
+          marketplaceName: "openai-curated",
+          pluginName: "unattended-plugin",
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "approve",
           mcpServerNames: [],
         },
       },
@@ -814,6 +822,9 @@ describe("Codex app-server binding store", () => {
     });
 
     expect(stored?.binding.pluginAppPolicyContext?.apps.app?.destructiveApprovalMode).toBe("ask");
+    expect(stored?.binding.pluginAppPolicyContext?.apps.unattended?.destructiveApprovalMode).toBe(
+      "approve",
+    );
     expect(invalid?.binding.pluginAppPolicyContext).toBeUndefined();
   });
 

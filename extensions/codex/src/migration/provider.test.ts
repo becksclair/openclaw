@@ -1964,7 +1964,7 @@ describe("buildCodexMigrationProvider", () => {
     });
   });
 
-  it("preserves existing destructive plugin policy when overwrite is explicit", async () => {
+  it("preserves existing per-plugin approve policy during migration", async () => {
     const fixture = await createCodexFixture();
     const configState: MigrationProviderContext["config"] = {
       plugins: {
@@ -1975,7 +1975,14 @@ describe("buildCodexMigrationProvider", () => {
               codexPlugins: {
                 enabled: true,
                 allow_destructive_actions: true,
-                plugins: {},
+                plugins: {
+                  "google-calendar": {
+                    enabled: true,
+                    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+                    pluginName: "google-calendar",
+                    allow_destructive_actions: "approve",
+                  },
+                },
               },
             },
           },
@@ -2017,10 +2024,11 @@ describe("buildCodexMigrationProvider", () => {
         stateDir: fixture.stateDir,
         workspaceDir: fixture.workspaceDir,
         config: configState,
+        overwrite: true,
       }),
     );
 
-    expectRecordFields(findItem(result.items, "config:codex-plugins"), { status: "migrated" });
+    expectRecordFields(findItem(result.items, "plugin:google-calendar"), { status: "migrated" });
     expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
       enabled: true,
       allow_destructive_actions: true,
@@ -2029,6 +2037,7 @@ describe("buildCodexMigrationProvider", () => {
           enabled: true,
           marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
           pluginName: "google-calendar",
+          allow_destructive_actions: "approve",
         },
       },
     });
@@ -2112,75 +2121,78 @@ describe("buildCodexMigrationProvider", () => {
     });
   });
 
-  it("preserves global ask destructive plugin policy during migration", async () => {
-    const fixture = await createCodexFixture();
-    const configState: MigrationProviderContext["config"] = {
-      plugins: {
-        entries: {
-          codex: {
-            enabled: true,
-            config: {
-              codexPlugins: {
-                enabled: true,
-                allow_destructive_actions: "ask",
-                plugins: {},
+  it.each(["ask", "approve"] as const)(
+    "preserves global %s destructive plugin policy during migration",
+    async (policy) => {
+      const fixture = await createCodexFixture();
+      const configState: MigrationProviderContext["config"] = {
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                codexPlugins: {
+                  enabled: true,
+                  allow_destructive_actions: policy,
+                  plugins: {},
+                },
               },
             },
           },
         },
-      },
-      agents: { defaults: { workspace: fixture.workspaceDir } },
-    } as MigrationProviderContext["config"];
-    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
-      if (method === "plugin/list") {
-        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
-      }
-      if (method === "plugin/read") {
-        return pluginRead("google-calendar");
-      }
-      if (method === "plugin/install") {
-        return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-      }
-      if (method === "skills/list") {
-        return { data: [] } satisfies v2.SkillsListResponse;
-      }
-      if (method === "hooks/list") {
-        return { data: [] } satisfies v2.HooksListResponse;
-      }
-      if (method === "config/mcpServer/reload") {
-        return {};
-      }
-      if (method === "app/list") {
-        return appsList([]);
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
-    const provider = buildCodexMigrationProvider({
-      runtime: createConfigRuntime(configState),
-    });
+        agents: { defaults: { workspace: fixture.workspaceDir } },
+      } as MigrationProviderContext["config"];
+      appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read") {
+          return pluginRead("google-calendar");
+        }
+        if (method === "plugin/install") {
+          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+        }
+        if (method === "skills/list") {
+          return { data: [] } satisfies v2.SkillsListResponse;
+        }
+        if (method === "hooks/list") {
+          return { data: [] } satisfies v2.HooksListResponse;
+        }
+        if (method === "config/mcpServer/reload") {
+          return {};
+        }
+        if (method === "app/list") {
+          return appsList([]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      });
+      const provider = buildCodexMigrationProvider({
+        runtime: createConfigRuntime(configState),
+      });
 
-    const result = await provider.apply(
-      makeContext({
-        source: fixture.codexHome,
-        stateDir: fixture.stateDir,
-        workspaceDir: fixture.workspaceDir,
-        config: configState,
-      }),
-    );
+      const result = await provider.apply(
+        makeContext({
+          source: fixture.codexHome,
+          stateDir: fixture.stateDir,
+          workspaceDir: fixture.workspaceDir,
+          config: configState,
+        }),
+      );
 
-    expectRecordFields(findItem(result.items, "config:codex-plugins"), { status: "migrated" });
-    expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
-      enabled: true,
-      allow_destructive_actions: "ask",
-      plugins: {
-        "google-calendar": {
-          enabled: true,
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-          pluginName: "google-calendar",
+      expectRecordFields(findItem(result.items, "config:codex-plugins"), { status: "migrated" });
+      expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
+        enabled: true,
+        allow_destructive_actions: policy,
+        plugins: {
+          "google-calendar": {
+            enabled: true,
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: "google-calendar",
+          },
         },
-      },
-    });
-  });
+      });
+    },
+  );
 
   it("records auth-required plugin installs as disabled explicit config entries", async () => {
     const fixture = await createCodexFixture();

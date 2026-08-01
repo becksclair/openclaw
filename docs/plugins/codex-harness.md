@@ -775,7 +775,7 @@ dynamic tools.
 It has no effect on built-in harness runs, normal OpenAI provider runs, ACP
 conversation bindings, or other harnesses.
 
-Minimal migrated config:
+Minimal migrated config, explicitly adjusted for unattended operation:
 
 ```json5
 {
@@ -786,7 +786,7 @@ Minimal migrated config:
         config: {
           codexPlugins: {
             enabled: true,
-            allow_destructive_actions: true,
+            allow_destructive_actions: "approve",
             plugins: {
               "google-calendar": {
                 enabled: true,
@@ -801,6 +801,13 @@ Minimal migrated config:
   },
 }
 ```
+
+Set `allow_destructive_actions: "approve"` only for an intentional unattended
+posture: OpenClaw projects Codex `default_tools_approval_mode: "approve"` for
+every enabled native app, so read, open-world, write, and destructive plugin
+tools run without a relay approval prompt. Boolean `true` keeps Codex's normal
+tool policy and can still prompt; `auto` asks when Codex requires approval, and
+`ask` prompts for every write or destructive action.
 
 Thread app config is computed when OpenClaw establishes a Codex harness
 session or replaces a stale Codex thread binding; it is not recomputed on

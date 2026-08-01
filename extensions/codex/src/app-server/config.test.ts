@@ -1259,6 +1259,28 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
+  it("parses explicit unconditional native Codex plugin approval", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        allow_all_plugins: true,
+        allow_destructive_actions: "approve",
+      },
+    });
+
+    expect(config.codexPlugins).toEqual({
+      enabled: true,
+      allow_all_plugins: true,
+      allow_destructive_actions: "approve",
+    });
+    expect(resolveCodexPluginsPolicy(config)).toMatchObject({
+      enabled: true,
+      allowAllPlugins: true,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "approve",
+    });
+  });
+
   it("parses ask native Codex plugin destructive policy", () => {
     const config = readCodexPluginConfig({
       appServer: { mode: "guardian" },

@@ -43,7 +43,7 @@ export type CodexPluginMigrationConfigEntry = {
   configKey: string;
   pluginName: string;
   enabled: boolean;
-  allowDestructiveActions?: "auto" | "ask";
+  allowDestructiveActions?: "auto" | "ask" | "approve";
 };
 
 type CodexPluginMigrationBlockSkipDetails = {
@@ -171,7 +171,7 @@ function isLegacyDestructivePolicyRepair(
 function readExistingPluginAllowDestructiveActions(
   existing: unknown,
   pluginName: string,
-): "auto" | "ask" | undefined {
+): "auto" | "ask" | "approve" | undefined {
   const existingEntry = isRecord(existing) ? existing : undefined;
   if (existingEntry?.pluginName !== pluginName) {
     return undefined;
@@ -179,7 +179,9 @@ function readExistingPluginAllowDestructiveActions(
   const normalized = normalizeExistingAllowDestructiveActions(
     existingEntry.allow_destructive_actions,
   );
-  return normalized === "auto" || normalized === "ask" ? normalized : undefined;
+  return normalized === "auto" || normalized === "ask" || normalized === "approve"
+    ? normalized
+    : undefined;
 }
 
 function buildPluginItems(
@@ -241,7 +243,8 @@ function buildPluginItems(
             sourceInstalled: plugin.installed === true,
             sourceEnabled: plugin.enabled === true,
             ...(plannedEntry.allow_destructive_actions === "auto" ||
-            plannedEntry.allow_destructive_actions === "ask"
+            plannedEntry.allow_destructive_actions === "ask" ||
+            plannedEntry.allow_destructive_actions === "approve"
               ? { allowDestructiveActions: plannedEntry.allow_destructive_actions }
               : {}),
             ...(plugin.apps && plugin.apps.length > 0 && !shouldVerifyPluginApps(ctx)
@@ -317,7 +320,9 @@ export function readCodexPluginMigrationConfigEntry(
     configKey,
     pluginName,
     enabled,
-    ...(allowDestructiveActions === "auto" || allowDestructiveActions === "ask"
+    ...(allowDestructiveActions === "auto" ||
+    allowDestructiveActions === "ask" ||
+    allowDestructiveActions === "approve"
       ? { allowDestructiveActions }
       : {}),
   };
@@ -325,7 +330,7 @@ export function readCodexPluginMigrationConfigEntry(
 
 function readExistingAllowDestructiveActions(
   config: MigrationProviderContext["config"],
-): boolean | "auto" | "ask" | undefined {
+): boolean | "auto" | "ask" | "approve" | undefined {
   const value = readMigrationConfigPath(config as Record<string, unknown>, [
     ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
     "allow_destructive_actions",
@@ -335,12 +340,15 @@ function readExistingAllowDestructiveActions(
 
 function normalizeExistingAllowDestructiveActions(
   value: unknown,
-): boolean | "auto" | "ask" | undefined {
+): boolean | "auto" | "ask" | "approve" | undefined {
   if (value === "auto" || value === "on-request") {
     return "auto";
   }
   if (value === "ask") {
     return "ask";
+  }
+  if (value === "approve") {
+    return "approve";
   }
   return asBoolean(value);
 }

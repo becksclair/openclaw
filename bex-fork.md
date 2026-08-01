@@ -509,7 +509,7 @@ Carry behavior: before any `thread/start`, every native Codex app-server client 
 
 OpenClaw retains the global standalone `node_repl` MCP for non-Codex consumers. Inside Codex, `computer-use@openai-bundled` solely owns the `computer-use` MCP and `browser@openai-bundled` solely owns `node_repl`. Both Codex CLI and app-server projections filter `node_repl` and any global `computer-use` entry. Codex config MCPs have higher precedence than plugin MCPs, so projecting either name would silently shadow the installed plugin. Threads whose caller disables MCP servers keep the installed plugin state but apply the per-thread disable overlay for both canonical owners.
 
-Concurrent first-thread starts share one process-global cache-install sequence per app-server client, including when source and dist module copies coexist. Successful installs remain cached for that client; install failures evict the client entry so the next attempt performs both installs again. Configured-owner validation is cached separately per client and exact cwd. A failed validation evicts only that cwd result, preserving the successful cache install while allowing the ownership check to retry. A replacement sky-cua installation is consumed by the next app-server client, which performs the same two native installs from the fixed path. Native plugin install remains the only Computer/Browser MCP setup inside the Codex harness. The managed `node_repl` tools remain excluded from generic PreToolUse, PostToolUse, and PermissionRequest native hook relay matchers so calls reach the plugin owner without an OpenClaw hook prompt. Do not restore release discovery, hashes, installed-cache inspection, collision inventories, readiness polling, marketplace fallback selection, standalone MCP injection, migration machinery, or status commands. Keep `codexPlugins` curated account-app policy separate. Browser transport and provenance remain producer-owned: external Chrome/Chromium through `extension_native_host`, with `isIab=false`.
+Concurrent first-thread starts share one process-global cache-install sequence per app-server client, including when source and dist module copies coexist. Successful installs remain cached for that client; install failures evict the client entry so the next attempt performs both installs again. Configured-owner validation is cached separately per client and exact cwd. A failed validation evicts only that cwd result, preserving the successful cache install while allowing the ownership check to retry. A replacement sky-cua installation is consumed by the next app-server client, which performs the same two native installs from the fixed path. Native plugin install remains the only Computer/Browser MCP setup inside the Codex harness. The managed `node_repl` tools remain excluded from generic PreToolUse, PostToolUse, and PermissionRequest native hook relay matchers so calls reach the plugin owner without an OpenClaw hook prompt. The additive `codexPlugins.allow_destructive_actions: "approve"` policy projects `default_tools_approval_mode: "approve"` into each enabled native app; Sky CUA selects it for an explicitly unattended install, while existing boolean, `auto`, and `ask` behavior remains unchanged. Do not restore release discovery, hashes, installed-cache inspection, collision inventories, readiness polling, marketplace fallback selection, standalone MCP injection, migration machinery, or status commands. Keep `codexPlugins` curated account-app policy separate. Browser transport and provenance remain producer-owned: external Chrome/Chromium through `extension_native_host`, with `isIab=false`.
 
 After the two fixed installs, OpenClaw reads Codex's effective configured-plugin map for the exact thread cwd—the same project-layer owner source used by runtime loading—and fails the first thread explicitly if another enabled `computer-use@*` or `browser@*` entry could shadow the managed `openai-bundled` owner. Cache installation is single-flight per app-server client; configured-owner validation is single-flight per client and cwd so a successful check for one project cannot suppress validation for another. Both canonical owners must appear enabled after installation; missing or malformed configured state fails closed. OpenClaw does not call Codex's production-unsupported `plugin/uninstall`; operators must disable a conflicting legacy plugin deliberately. The retired `/codex computer-use` config, environment, status, install, and menu surfaces must not return, because arbitrary marketplace installation recreates the duplicate-owner state. `openclaw doctor --fix` removes shipped `plugins.entries.codex.config.computerUse` values while preserving sibling Codex config.
 
@@ -522,6 +522,11 @@ Primary seam files:
 - `extensions/codex/src/app-server/managed-native-plugins.ts`
 - `extensions/codex/src/app-server/attempt-startup.ts`
 - `extensions/codex/src/app-server/run-attempt.ts`
+- `extensions/codex/src/app-server/plugin-thread-config.ts`
+- `extensions/codex/src/app-server/config.ts`
+- `extensions/codex/src/app-server/elicitation-bridge.ts`
+- `extensions/codex/src/app-server/session-binding.ts`
+- `extensions/codex/src/migration/plan.ts`
 - `extensions/codex/src/conversation-binding.ts`
 - `extensions/codex/doctor-contract-api.ts`
 - `extensions/codex/openclaw.plugin.json`
@@ -529,12 +534,19 @@ Primary seam files:
 - `src/agents/cli-runner/bundle-mcp-codex.ts`
 - `docs/plugins/codex-computer-use.md`
 - `docs/plugins/codex-harness.md`
+- `docs/plugins/codex-native-plugins.md`
+- `docs/gateway/configuration-reference.md`
 
 Primary seam tests:
 
 - `extensions/codex/src/app-server/managed-native-plugins.test.ts`
 - `extensions/codex/src/app-server/attempt-startup.test.ts`
 - `extensions/codex/src/app-server/run-attempt.test.ts`
+- `extensions/codex/src/app-server/plugin-thread-config.test.ts`
+- `extensions/codex/src/app-server/config.test.ts`
+- `extensions/codex/src/app-server/elicitation-bridge.test.ts`
+- `extensions/codex/src/app-server/session-binding.test.ts`
+- `extensions/codex/src/migration/provider.test.ts`
 - `extensions/codex/doctor-contract-api.test.ts`
 - `extensions/codex/src/commands.test.ts`
 - `src/agents/cli-runner/bundle-mcp-codex.user-config.test.ts`

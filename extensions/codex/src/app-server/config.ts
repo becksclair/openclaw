@@ -71,8 +71,8 @@ export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "dange
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
-export type CodexPluginDestructivePolicy = boolean | "auto" | "ask";
-export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto" | "ask";
+export type CodexPluginDestructivePolicy = boolean | "auto" | "ask" | "approve";
+export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto" | "ask" | "approve";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
 
@@ -283,6 +283,7 @@ const codexPluginDestructivePolicySchema = z.union([
   z.boolean(),
   z.literal("auto"),
   z.literal("ask"),
+  z.literal("approve"),
 ]);
 const codexAppServerServiceTierSchema = z
   .preprocess(
@@ -457,7 +458,7 @@ function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolic
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
 } {
-  if (policy === "auto" || policy === "ask") {
+  if (policy === "auto" || policy === "ask" || policy === "approve") {
     return { allowDestructiveActions: true, destructiveApprovalMode: policy };
   }
   return {
